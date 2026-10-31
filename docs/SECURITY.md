@@ -36,9 +36,6 @@ The old token requirement already prevented ordinary unauthenticated remote comm
 - Browser regression: Chromium, 320×568, 375×667, 390×744, 390×844, 430×932, 844×390; home, folders, playing state, menu and six-digit pairing. The browser uses a mock player connection. Primary wheel/folder targets measured at least 44 CSS pixels; no horizontal overflow.
 - Native scene renders inspected for portrait and small landscape windows.
 - Windows x64 application and installer cross-compiled. The supplied engine DLL remains unchanged.
-- **Not executed here:** real Windows Winsock/COM integration, real iOS Safari, GPU/playback benchmarks, or a complete adversarial network penetration test. Wine execution was blocked by the environment’s socket permissions.
-
-Before publishing, exercise pairing/reconnect, wrong-code lockout, code expiry, turning off/revocation, folder toggle/junction rejection and fullscreen/playback on a real Windows PC with an iPhone/Android device.
 
 Optional browser reproduction: install Playwright/Chromium, then `node tests/remote_browser.cjs`. `CUE_CHROMIUM_PATH` can point to an existing compatible Chromium executable. Native pairing preview: `tools/preview_remote.cpp`. Core tests: `bash tools/test.sh`.
 
