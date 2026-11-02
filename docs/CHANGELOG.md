@@ -1,5 +1,187 @@
 # Changelog
 
+## 1.2 — 2026-11-02
+
+- Give Up next a permanent control-bar button beside repeat, in wide and narrow
+  layouts; repeat no longer disappears while a queue exists. Remove the duplicate
+  entry from the … menu (right-click and Q still open it).
+- Anchor the Up next panel to its button: the panel's list icon sits over the
+  control bar's icon, about ten rows in wide windows and a compact scale in
+  smaller ones, always clear of the controls.
+- Add a previous-file button beside Play while a queue is active
+  (previous · −15 · play · +15 · next) and the **P** shortcut. Previous and next
+  stay in place and are dimmed at the ends of the queue.
+- Rework the Up next panel: title and count on top, **+ files · + folder · clear
+  queue** in a footer under the list, names without extensions, a **next** caption
+  on the following entry, dimmed played entries, and an empty state that invites
+  dropping files.
+- Make queue motion follow Cue's motion primitives: eased hover on every control,
+  a lifted drag row with a pixel shadow and a spring-driven landing outline,
+  removals that slide toward their × button, highlighted additions that scroll
+  into view, and thumbnails that appear in pixel steps.
+- Space the control bar on one rhythm: 22 art px between icons of a group and
+  32 between groups, centre to centre; playback controls share the beat.
+- Replace the audio waveform with a mirrored pixel spectrum visualization: bass in
+  the middle, fast rise and slow fall, on the interface's dot grid. It only draws
+  the sound; the audible branch is untouched and no equalizer is applied.
+- Redraw the application icon: the tile fills the icon box with a visible rim and
+  a larger pixel play mark, so it holds its size on dark taskbars.
+  `tools/gen_icon.py` regenerates `res/cue.ico`.
+- Rebuild the what's-new screen around three items: Up next as the headline card
+  with an animated queue icon, three new languages (a bubble whose letter changes
+  script), and fixes and improvements, with a single **continue** button.
+- Show contacts in About as one row of three pixel icons (LinkedIn, GitHub,
+  e-mail) over a caption that reads *contact* and names the icon in use; when no mail app answers the e-mail
+  link, the address is copied to the clipboard. **licenses** becomes **credits &
+  licenses** and its reader opens with the acknowledgments (`docs/THANKS.md`).
+- Tint the Up next button with the film's colour while the queue has entries,
+  like **CC** with subtitles on (the separate marker pixel is gone).
+- Recompose the control bar in three zones on one rhythm: volume and speed,
+  playback centred on the bar, and one even row of secondary buttons. Lighter
+  previous/next glyphs that match the 15-second ones, and a new Up next icon (a
+  play mark over two lines).
+- Home: a living Recent list. Each entry has the title and what is left, a quiet
+  line with the episode (*S18E15 · 3 episodes*) or the kind of file, and a progress
+  rule; episodes of one show become one entry that opens the latest. The home's
+  composition is about 8% larger.
+- Home: the ··· menu gains icons and a rule before **clear recent**, unfolds and
+  folds with a short fade, eases its hover, and closes on any click outside it.
+- Size the interface by the window's area as well as its width, so 4:3 and square
+  video get the controls of a comparable 16:9 window.
+- Phone: music never shows the end-of-file card over the face, and the time-mode
+  card shows only the time (no frame or picture request) while the face steps back.
+- Context menu: a rule above **up next**, like the other entries. A right click on
+  the control bar no longer opens it.
+- With a menu open, another button of the bar closes the menu and acts in the same
+  click; entering or leaving full screen takes an open menu along on the first frame.
+- … menu: section names carry icons on the icon column (interface size, control
+  background), with even spacing around the segmented tracks.
+- Phone: time steps on the wheel follow the file's length, so songs are no longer
+  crossed in a few detents.
+- Phone: a picked queue item without a picture (audio, or video outside the shared
+  folders) shows its icon instead of an empty frame.
+- Regroup the … menu in four parts (file, light, appearance, places) with
+  language beside remote control and About; segmented choices sit in a quiet
+  track aligned with the labels. In the subtitle style panel, values get their
+  own column, **make default** sits under a rule on the labels' column, and the
+  font names have more room.
+- Light the corners of the ambient glow under Windows 11's rounded window
+  corners, which left a dark wedge at each corner.
+- In short, wide windows, open menus beside the control bar when there is no
+  room above it, and lift About above the bar instead of covering it.
+- Incorporate a community review of the Russian translation (pull request #3),
+  keeping the wording of features added in this version.
+- Render the queue panel about three times faster while scrolling (scaled
+  thumbnails and the panel background are cached instead of redrawn per pixel).
+- Starting a queue from a folder that contains the playing file no longer lists
+  that file twice.
+- Phone: one **+ add** entry point with +/✓ badges on files, a count of what was
+  added, **+ add this folder**, and **done** back to the queue at its end.
+- Phone: rows have a drag zone on the left and a × on the right; the secondary
+  menu is gone. **clear queue** animates at once, top to bottom.
+- Phone: the wheel gains an **up next** mode (previous/next file on the side
+  buttons, the ring walks the queue and plays on release), shown by mode dots
+  under the center icon. The off-center next-file button is removed.
+- Music with a cover plays as a scene: the cover on the left with the spectrum as two
+  wings tinted by the cover, the title and artist to its right, and a soft light in the
+  cover's colours that swells with the music. The window frames that one picture with
+  the engine's zoom and pan, live while an edge is dragged and without touching the
+  sound: all of it in wide windows, the cover with the words under it in portrait
+  windows, the cover and its wings alone in small ones; an album's next song keeps the
+  window's size. Missing
+  metadata falls back to the file name. The spectrum runs at 60 fps and ends cleanly
+  (no solid wings when a song finishes). The cover leans away from the pointer (a GPU
+  pass, idle when nothing moves). Right-click to choose **cover + spectrum** or
+  **spectrum only**; the choice is kept.
+- Music: *up next* drops in at the top in a song's last 12 seconds instead of sitting
+  under the cover; the film's end-of-file card and its thumbnail are not used for music.
+- Music: the control bar shows previous track · play · next track (no 15-second steps)
+  and the subtitles button only when the song has lyrics, on a narrower bar that eases
+  back to a film's width when a video follows. A song opened on its own brings its
+  folder: the album becomes the queue, in name order, so previous, next and auto-advance
+  follow the tracks.
+- Music: "N tracks" under the artist opens the album's list beside the cover (square
+  covers, a Cue tile for songs without one); its last line adds songs, by a click or by
+  dragging them in (the list opens by itself while songs are dragged over the window,
+  invites the drop and adds them to its end). Portrait and small windows open it as the
+  usual popover.
+- Music: songs without a cover wear Cue's music tile in **cover + spectrum**;
+  **spectrum only** stands where the cover stands, with title, artist and album beside it
+  and the same list. The album opens even when the path the song was opened with is
+  spelled differently from the folder's listing, and one unreadable file no longer stops
+  the folder scan.
+- Music: switching between **cover + spectrum** and **spectrum only** opens the song again at the same moment behind the pixel
+  transition, instead of rebuilding the engine's graph mid-song. Fixes the look switch
+  skipping to the next song, or leaving the song silent with an empty cover frame.
+- Music: a new song comes in through the pixels (big blocks resolving to its picture)
+  and its title slides in; the wings' dot grid is drawn once instead of on every
+  picture (about a quarter less work per frame).
+- Repeat has two modes when there is a list: the whole list (the plain lit icon) and
+  just this one (a small 1 beside the icon). Without a list it is on and off as before.
+- The picture's menu never offers to save a frame of a song, even between two songs.
+- While another app's full-screen window covers Cue (a game) or Cue is on another
+  virtual desktop, the interface stops drawing, the cover's shader pass rests and a
+  film is presented once per frame instead of at the display's rate; all of it returns
+  as soon as Cue is in view. Playback never changes.
+- Phone: with music, the song's cover is the face (its colour becomes the glow), the
+  side buttons go to the previous and next song instead of ±15 s, and the time row shows
+  the song's length instead of when it ends.
+- The taskbar buttons' words are looked up once per language instead of on every poll.
+- Music never resumes from where it stopped; it starts from the beginning. No timeline
+  previews are decoded for music. Full screen uses the same transition as video.
+- Previous, play/pause and next buttons under Cue's preview in the Windows taskbar;
+  the media key for the previous track goes to the previous file of a queue.
+- Music files get their own icon in Explorer (the Cue tile with a note) and type name;
+  video files keep Cue's icon. Cue registers under **Settings → Default apps**, where
+  each type is listed with its own icon.
+- Phone: follow the computer's interface language; an open page reloads once
+  when it changes, staying paired.
+- Phone: sheets crossfade with the remote when opening and closing; closing now
+  animates. Hide the end-of-episode card and its check in up next mode and until
+  the new file reports its duration.
+- Phone: fix a tile that blinked when another one was selected; retune motion
+  (lighter press scale, one gentle spring, shorter distances and staggers, a
+  stepped trail on the wheel's position dot).
+- Save frames directly in `Pictures\Cue`. Existing `Pictures\Cue\Frames`
+  folders are left untouched.
+- Separate the compact dock's speed and More hit areas, which overlapped by
+  two pixels. Remove six translation strings no longer used.
+
+- Redesign the phone queue with authenticated on-demand thumbnails, drag reorder
+  and short reduced-motion-aware transitions.
+  Retain keyed rows and bound preview/exit resources for large queues.
+- Use a dedicated phone browser sheet when adding media, with folder busy/result
+  feedback, cancellation on clear and an explanation for folders with no direct media.
+- Refine queue add/remove/clear feedback, bounded staggered exits, animated panel
+  contraction and interrupted reopening; hide zero/single title counts and use
+  a subtle dock marker without a numeral.
+- Constrain the subtitle menu to the window, with a virtualized scroll area,
+  pinned controls, selected-track reveal, ellipsis and full keyboard navigation.
+  Preserve fractional native wheel input and improve region/title/forced/SDH
+  naming without discarding long metadata.
+
+- Redesign Up next as a complete scrollable list with on-demand video thumbnails,
+  a now-playing row, drag reorder, edge scrolling and animated insertion gaps.
+  Add keyboard toolbar navigation and append drops while the queue is open.
+  Thumbnail memory stays bounded to 32 small images; no disk cache is created.
+
+- Keep subtitle reading size consistent between 16:9 and wider windows at the
+  same width. Preserve saved sizes, portrait behavior, original ASS and bitmap
+  tracks; align drag/clearance geometry with the compensated text.
+
+- Add a session Up next queue for audio/video, folders, reordering and removal,
+  integrated with existing next-episode behavior and the phone remote.
+- Use one reversible trajectory for control-bar entrance/exit; resolve subtitle
+  clearance from actual layout with cached measurements and faster settling.
+- Add Russian, German and Japanese across the application, installer and remote,
+  including Russian plural rules and translated About labels.
+- Keep timeline thumbnails on demand in the existing 12 MiB / 256-entry RAM LRU;
+  no persistent thumbnail cache or speculative scan.
+- Check for updates every three days, at most once automatically per session.
+- Clean public documentation; explain original attribution, derivative branding
+  and build identity without modifying the GPL or adding license restrictions.
+- Remove failed downloads immediately, clean stale Cue update folders after seven days, and rotate the normal log at about 1 MiB with one backup.
+
 ## 1.1.1
 
 ### Final 1.1 polish

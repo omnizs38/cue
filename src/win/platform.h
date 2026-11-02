@@ -39,6 +39,7 @@ class DropTarget : public IDropTarget {
   std::function<void(POINT client)> on_over;
   std::function<void()> on_leave;
   std::function<void(const std::vector<std::string>&)> on_drop;
+  bool dropping = false;  // true while on_leave runs as part of a drop (files are about to arrive)
   explicit DropTarget(HWND h) : hwnd_(h) {}
   virtual ~DropTarget() = default;
 

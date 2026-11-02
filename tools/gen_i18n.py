@@ -16,8 +16,8 @@ Keys are stable: code refers to them as str::<key with dots replaced by undersco
 import json, os, re, sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LANGS = ["pt-BR", "en", "es", "fr", "zh-Hans"]   # same order as i18n::Lang
-HAS_ONE = {"pt-BR": True, "en": True, "es": True, "fr": True, "zh-Hans": False}
+LANGS = ["pt-BR", "en", "es", "fr", "zh-Hans", "ru", "de", "ja"]   # same order as i18n::Lang
+HAS_ONE = {"pt-BR": True, "en": True, "es": True, "fr": True, "zh-Hans": False,"ru":True,"de":True,"ja":False}
 PH = re.compile(r"\{([a-z_]+)\}")
 
 
@@ -56,6 +56,9 @@ def main():
                     problems.append(f"{tag}: {k} needs an 'other' form")
                 if HAS_ONE[tag] and "one" not in val:
                     problems.append(f"{tag}: {k} needs a 'one' form")
+            if tag=="ru" and isinstance(en[k],dict):
+                for form in ("few","many"):
+                    if form not in val:problems.append(f"{tag}: {k} needs '{form}'")
             for name, text in val.items():
                 if not isinstance(text, str) or not text:
                     problems.append(f"{tag}: {k}.{name} is empty")
@@ -110,7 +113,7 @@ def main():
     c.append("static const bool kPluralKey[str::kCount] = {")
     c.append("  " + ", ".join("true" if isinstance(en[k], dict) else "false" for k in keys))
     c.append("};")
-    for table, form in (("kOther", "other"), ("kOne", "one")):
+    for table, form in (("kOther", "other"), ("kOne", "one"), ("kFew","few"), ("kMany","many")):
         c.append(f"static const char* const {table}[{len(LANGS)}][str::kCount] = {{")
         for tag in LANGS:
             c.append(f"  {{  // {tag}")

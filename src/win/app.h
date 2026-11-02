@@ -16,6 +16,7 @@
 #include "../core/overlay_buffers.h"
 #include "../core/frame_cache.h"
 #include "../core/episode_advance.h"
+#include "../core/queue.h"
 #include "../core/media_geometry.h"
 #include "../ui/home.h"
 #include "../ui/onboarding.h"
@@ -30,6 +31,7 @@
 #include "remote_server.h"
 #include "file_thumbnail.h"
 #include "remote_scene.h"
+#include "taskbar_buttons.h"
 #include "overlay.h"
 #include "../ui/news_view.h"
 
@@ -40,8 +42,8 @@ class App {
 
  private:
   enum class Mode { Home, Play };
-  enum : UINT { WM_APP_MPV = WM_APP + 1, WM_APP_ENGINE = WM_APP + 2, WM_APP_RECENTS = WM_APP + 3, WM_APP_THUMB = WM_APP + 4, WM_APP_MOUSE = WM_APP + 5, WM_APP_OPEN_FILES = WM_APP + 6, WM_APP_LEFT_DOWN = WM_APP + 7, WM_APP_LEFT_UP = WM_APP + 8, WM_APP_RIGHT_UP = WM_APP + 9, WM_APP_VSYNC = WM_APP + 10, WM_APP_UPDATE = WM_APP + 11, WM_APP_REMOTE = WM_APP + 12 };
-  enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREFETCH = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14 };
+  enum : UINT { WM_APP_MPV = WM_APP + 1, WM_APP_ENGINE = WM_APP + 2, WM_APP_RECENTS = WM_APP + 3, WM_APP_THUMB = WM_APP + 4, WM_APP_MOUSE = WM_APP + 5, WM_APP_OPEN_FILES = WM_APP + 6, WM_APP_LEFT_DOWN = WM_APP + 7, WM_APP_LEFT_UP = WM_APP + 8, WM_APP_RIGHT_UP = WM_APP + 9, WM_APP_VSYNC = WM_APP + 10, WM_APP_UPDATE = WM_APP + 11, WM_APP_REMOTE = WM_APP + 12, WM_APP_QUEUE_CANCEL = WM_APP + 13, WM_APP_WHEEL = WM_APP + 14 };
+  enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREFETCH = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14, T_FOLDER = 15, T_QUEUE = 16 };
 
   HINSTANCE inst_ = nullptr;
   HWND hwnd_ = nullptr, video_ = nullptr;
@@ -144,10 +146,65 @@ class App {
   void refresh_file_info();
   void configure_audio_mode();
   bool audio_only_ = false, waveform_active_ = false, waveform_fallback_ = false;
+  // music with a cover: the engine's cover track, whether the cover look is on screen, whether
+  // it failed once for this file (then the spectrum alone), and whether the shader still has it
+  int64_t cover_vid_ = 0;
+  MusicScene music_scene_;  // the cover look's composition for this song (wide or tall)
+  void music_album_queue();
+  void music_fit_window();
+  const MediaQueue::Item* queue_following() const;
+  bool hidden_ = false;   // covered by another app's full-screen window (or on another desktop)
+  int hidden_poll_ = 0;
+  bool covered() const;
+  void set_hidden(bool h);
+  bool hidden_now() const { return hidden_ || IsIconic(hwnd_); }
+  void reopen_music();
+  MusicFrame music_frame_ = MusicFrame::Scene;
+  MusicView view_from_;
+  double view_t0_ = -1;           // a glide between two framings, when it began
+  MpvFraming framing_sent_{1e9, 0, 0};
+  MusicView music_view_target() const;
+  bool step_music_view(double t);          // a new look or composition for the playing song
+  bool music_reopening_ = false;  // the load in progress is that same song, opened again
+  bool music_intro_ = false;
+  bool last_was_music_ = false;   // the file before this one was a song (a song that follows keeps the UI)      // the next playback start reveals a new song through the pixels
+  TaskbarButtons taskbar_;
+  UINT taskbar_created_ = RegisterWindowMessageW(L"TaskbarButtonCreated");
+  void taskbar_sync();
+  void taskbar_command(UINT id);
+  // cover_scene_: the music scene is on (either look: the words, the list, the framing);
+  // cover_art_: it shows a cover (the file's, or Cue's tile), which the shader lifts and tilts
+  bool cover_scene_ = false, cover_art_ = false, cover_fallback_ = false, cov_sent_ = false;
+  int music_look_on_ = 0;  // the look the playing song was built with
+  int64_t visual_cover() const { return cover_art_ ? cover_vid_ : 0; }
+  void set_music_look(int look);
   void on_end_file(const mpv_event_end_file* e);
 
   void open(std::string path, std::vector<std::string> subs = {});
   void handle_files(const std::vector<std::string>& files);
+  MediaQueue queue_;
+  void queue_refresh();
+  void queue_clear();
+  void queue_notice(const std::string& text,int result=0);
+  std::string queue_notice_;
+  uint64_t queue_notice_id_=0;
+  int queue_result_=0;
+  void queue_thumbnail_tick();
+  std::shared_ptr<FileThumbnailJob> queue_thumb_job_;
+  uint32_t queue_thumb_id_=0;
+  bool queue_thumb_timer_=false;
+  size_t queue_add(const std::vector<std::string>& paths, bool replace = false);
+  void queue_play(uint32_t id);
+  struct FolderScan {
+    std::atomic<bool> cancelled{false}, done{false};
+    std::string path;
+    bool replace=false, remote=false, limited=false, failed=false;
+    std::vector<std::string> files;
+  };
+  std::shared_ptr<FolderScan> folder_scan_;
+  static DWORD WINAPI scan_folder(void*);
+  void queue_folder(const std::string& path, bool replace, bool remote = false);
+  void finish_folder();
   void go_home();
   void refresh_recents(bool check = true);
   void resolve_props();
@@ -185,10 +242,11 @@ class App {
   void set_ui_scale(int v);
   void apply_language(bool relayout);  // resolve and apply the interface language
   void set_language_pref(int lang);    // -1 automatic (follow Windows), else i18n::Lang
-  // updates from GitHub Releases: checked every 15 days in the background, or when asked
+  // updates from GitHub Releases: checked every 3 days in the background, or when asked
   enum class Upd { Idle, Checking, Available, Downloading, Launching };
   Upd upd_ = Upd::Idle;
   ReleaseInfo upd_rel_;           // empty url: only the version is known (from a previous run)
+  bool update_auto_attempted_=false, update_check_pending_=false;
   bool upd_manual_ = false, upd_install_after_check_ = false;
   int upd_pct_ = -1;
   void check_updates(bool manual);
@@ -297,6 +355,7 @@ class App {
   void apply_theme_frame();
   void apply_window_corners(bool force = false);
   void key(const std::string& k, bool shift, bool ctrl);
+  void mouse_wheel(WPARAM keys,LPARAM screen_point);
   // the phone remote (src/win/remote_server, src/ui/remote_view)
   RemoteServer remote_;
   RemoteScene scene_;
@@ -324,7 +383,8 @@ class App {
   void remote_publish();
   void remote_events();
   void remote_command(const remote::Command& c);
-  bool remote_path_ok(const std::string& path) const;
+  uint64_t remote_queue_revision_=~uint64_t(0),remote_queue_epoch_=0;
+  bool remote_path_ok(const std::string& path,bool directory=false) const;
   void remote_boot();
   void remote_roots();
   void remote_progress();
@@ -341,6 +401,7 @@ class App {
     int stage = 0, retries = 0;
     double at = 0, position = 0;
     bool paused = false, dirty = false;
+    bool reopen = false;  // music: the song is opened again at the same moment, not rebuilt
     std::string graph;
     int64_t track = 0;
   } audio_switch_;

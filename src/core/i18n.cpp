@@ -14,9 +14,9 @@ namespace {
 std::atomic<int> g_lang{(int)kFallback};
 std::atomic<uint32_t> g_revision{1};
 
-const char* const kTags[kLangCount] = {"pt-BR", "en", "es", "fr", "zh-Hans"};
+const char* const kTags[kLangCount] = {"pt-BR", "en", "es", "fr", "zh-Hans", "ru", "de", "ja"};
 const char* const kNative[kLangCount] = {"Português (Brasil)", "English", "Español", "Français",
-                                         "\xe7\xae\x80\xe4\xbd\x93\xe4\xb8\xad\xe6\x96\x87"};  // 简体中文
+                                         "\xe7\xae\x80\xe4\xbd\x93\xe4\xb8\xad\xe6\x96\x87", "Русский", "Deutsch", "日本語"};  // native language names
 
 std::string lower(std::string_view s) {
   std::string o(s);
@@ -36,11 +36,12 @@ std::vector<std::string> subtags(std::string_view bcp47) {
 }
 
 // CLDR cardinal rules, integers only (that is all the interface counts).
-bool is_one(Lang l, long long n) {
+bool is_one(Lang l, uint64_t n) {
   switch (l) {
     case Lang::PtBR: case Lang::Fr: return n == 0 || n == 1;
-    case Lang::En: case Lang::Es: return n == 1;
-    case Lang::ZhHans: return false;
+    case Lang::En: case Lang::Es: case Lang::De: return n == 1;
+    case Lang::ZhHans: case Lang::Ja: return false;
+    case Lang::Ru: return n%10==1&&n%100!=11;
   }
   return n == 1;
 }
@@ -109,6 +110,9 @@ bool match_ui_language(std::string_view bcp47, Lang& out) {
   if (p == "pt") { out = Lang::PtBR; return true; }   // pt-PT and others: the Brazilian text
   if (p == "en") { out = Lang::En; return true; }
   if (p == "es") { out = Lang::Es; return true; }
+  if (p == "ru") {out=Lang::Ru;return true;}
+  if (p == "de") {out=Lang::De;return true;}
+  if (p == "ja") {out=Lang::Ja;return true;}
   if (p == "fr") { out = Lang::Fr; return true; }
   if (p == "zh") {
     // the script decides when it is given; otherwise the region
@@ -146,7 +150,16 @@ std::string format(str::Id id, Args args) { return fill(tr(id), args); }
 std::string plural(str::Id id, long long n, Args args) {
   Lang l = language();
   std::string num = std::to_string(n);
-  std::string t = fill(lookup(l, id, kPluralKey[id] && is_one(l, n)), args);
+  if(id>=str::kCount)return {};
+  // Magnitude without signed overflow, including LLONG_MIN.
+  uint64_t count=n<0?uint64_t(-(n+1))+1:uint64_t(n);
+  const char* text=lookup(l,id,kPluralKey[id]&&is_one(l,count));
+  if(l==Lang::Ru&&kPluralKey[id]&&!is_one(l,(long long)(count%100))) {
+    uint64_t a=count%10,b=count%100;
+    const char* own=(a>=2&&a<=4&&!(b>=12&&b<=14))?kFew[(int)l][id]:kMany[(int)l][id];
+    text=pick(own,lookup(l,id,false),kKeyNames[id]);
+  }
+  std::string t = fill(text,args);
   return fill(t, {{"n", num}});
 }
 
@@ -181,7 +194,9 @@ std::vector<Issue> audit() {
       auto want = placeholders(kOther[(int)kFallback][i]);
       if (placeholders(t) != want) out.push_back({l, id, "placeholders differ from English"});
       if (kPluralKey[i]) {
-        bool needs_one = l != Lang::ZhHans;
+        bool needs_one = l != Lang::ZhHans && l != Lang::Ja;
+        if(l==Lang::Ru)for(const char* form:{kFew[li][i],kMany[li][i]})
+          if(!form||placeholders(form)!=want)out.push_back({l,id,"missing or invalid Russian plural"});
         if (needs_one && !kOne[li][i]) out.push_back({l, id, "missing plural form 'one'"});
         if (kOne[li][i] && placeholders(kOne[li][i]) != want) out.push_back({l, id, "plural 'one' placeholders differ"});
       }

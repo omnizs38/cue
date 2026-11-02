@@ -16,6 +16,8 @@ inline int next_ui_size(int choice, int direction) { return ui_size_choice(ui_si
 //     window without taking over the picture (for every choice);
 //   - width leads (the dock is a row): a 2.39:1 window is as wide as its 16:9 neighbour and
 //     gets the same controls; the height only holds it back when it is under 520 DIPs per 1280 of width (wider than 2.46:1);
+//   - a squarer window is measured by its area (as a 16:9 window of the same area), within
+//     what its width holds (1000 DIPs per reference step), so 4:3 and 1:1 video keep their size;
 //   - the four choices are proportions of that (0.5, 0.75, 1, 1.25: steps of a quarter, so at
 //     the reference window they land exactly on 1, 1.5, 2 and 2.5 px per art px), on whole or
 //     half art px so the pixel font stays as even as it can be;
@@ -36,7 +38,11 @@ inline double ui_base_scale(unsigned dpi, int choice) { return ui_scale_at(dpi, 
 inline double ui_scale(unsigned dpi, int cw, int ch, int choice) {
   if (dpi < 48) dpi = 96;
   double dw = cw * 96.0 / dpi, dh = ch * 96.0 / dpi;  // the window in DIPs
-  double k = std::clamp(std::min(dw / 1280.0, dh / 520.0), 1.0, 6.0);
+  double k = std::min(dw / 1280.0, dh / 520.0);
+  // a squarer window (4:3, 1:1 video) is not a smaller one: at the same area as a 16:9 window it
+  // gets the same controls, as long as its width still holds the bar comfortably
+  k = std::max(k, std::min(std::sqrt(dw * dh / (1280.0 * 720.0)), dw / 1000.0));
+  k = std::clamp(k, 1.0, 6.0);
   // past the size of a roomy window (1.4x the reference) the controls grow at half the rate:
   // in full screen they get bigger than in the window, but less than the picture does
   if (k > 1.4) k = 1.4 + 0.5 * (k - 1.4);

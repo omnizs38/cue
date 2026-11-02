@@ -49,6 +49,10 @@ class Ambient {
   double light_[kZones]{};
   RECT rect_{};          // the player's visible edge the shape was built for
   int M_ = 0;
+  // How far the halo reaches under each corner: Windows 11 rounds windows by 8 px at 96 dpi,
+  // which left a dark wedge between the square halo and the round corner.
+  int C_ = 0;
+  static int corner_tuck(int dpi) { return MulDiv(8, dpi, 96) + 1; }
   bool built_ = false;
   static constexpr int kLut = 512;
   uint8_t lr_[kLut]{}, lg_[kLut]{}, lb_[kLut]{}, la_[kLut]{};

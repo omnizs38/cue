@@ -14,7 +14,7 @@ int main(){
  for(int width:{240,640})for(int scale:{1,2,3}){
   PlayView p;p.in.dur=300;p.in.time=30;double t=1;p.resize(width*scale,540*scale,scale);p.reset(t);p.mouse_move(100,100,t);settle(p,t);p.take_actions();
   p.key("c",false,false,t);settle(p,t);assert(p.panel_open()&&p.take_actions().empty());p.key("esc",false,false,t);settle(p,t);
-  auto& l=p.layers[PlayView::L_DOCK];assert(l.visible&&l.c.w<=340*scale);assert(l.y+l.c.h<540*scale-40*scale);
+  auto& l=p.layers[PlayView::L_DOCK];assert(l.visible&&l.c.w<=394*scale);  // the bar's rhythm (22/32 art px) sets its minimumassert(l.y+l.c.h<540*scale-40*scale);
   int y=width==240?51:28;assert(l.c.h==(width==240?62:38)*scale);
   auto before=clock(l,scale,y);
   for(int i=0;i<2;++i){int x=l.x+20*scale,yy=l.y+y*scale;p.mouse_move(x,yy,t);p.mouse_down(x,yy,t);p.mouse_up(x,yy,t);p.mouse_move(width*scale/2,100,t);settle(p,t);assert(p.take_actions().empty());assert(!p.in.paused&&p.in.time==30);assert((clock(l,scale,y)==before)==(i==1));}

@@ -74,7 +74,9 @@ bool SettingsStore::parse(const std::string& text) {
   if (schema < 4 && ui_scale == 0) ui_scale = -1; // migrate the former default once
   if (schema < 5 && ui_scale == -1) ui_scale = 2; // 1.0: médio became the default, small is a choice
   controls_free = pf["controls_free"].boolean(false);
+  music_look = std::clamp(pf["music_look"].integer(0), 0, 1);
   loop = pf["loop"].boolean(false);
+  loop_all = pf["loop_all"].boolean(false) && !loop;
   ambient = pf["ambient"].boolean(true);
   // v3 made the light softer by default: older files start again from the new default
   ambient_strength = schema >= 3 ? std::clamp(pf["ambient_strength"].num(0.15), 0.05, 1.0) : 0.15;
@@ -162,7 +164,9 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
   std::snprintf(b, sizeof b, "    \"ambient_strength\": %.2f,\n", ambient_strength);
   o += b;
   o += std::string("    \"controls_free\": ") + (controls_free ? "true" : "false") + ",\n";
+  o += "    \"music_look\": " + std::to_string(music_look) + ",\n";
   o += std::string("    \"loop\": ") + (loop ? "true" : "false") + ",\n";
+  o += std::string("    \"loop_all\": ") + (loop_all ? "true" : "false") + ",\n";
   o += std::string("    \"onboarded\": ") + (onboarded ? "true" : "false") + ",\n";
   o += "    \"news_seen\": " + json_quote(news_seen) + ", \"news_closed\": " + json_quote(news_closed) + ",\n";
   o += "    \"language\": " + json_quote(i18n::normalize_pref(language)) + ",\n";

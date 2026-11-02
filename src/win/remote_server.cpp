@@ -3,6 +3,7 @@
 #include <iphlpapi.h>
 
 #include "remote_server.h"
+#include <charconv>
 
 #include <bcrypt.h>
 #include <shlobj.h>
@@ -85,13 +86,15 @@ std::string bmp24(const std::vector<uint32_t>& px, int w, int h) {
   return d;
 }
 
-std::string make_thumb(const std::string& path) {
+// What Explorer shows for a file, shrunk to W x H. The picture covers a centred tile `tw` wide
+// (W for a film's frame; a square for music, whose covers are square).
+static std::string make_image(const std::string& path, int W, int H, int tw) {
   std::string out;
   HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   IShellItemImageFactory* f = nullptr;
   if (SUCCEEDED(SHCreateItemFromParsingName(widen(path).c_str(), nullptr, IID_PPV_ARGS(&f)))) {
     HBITMAP hb = nullptr;
-    if (SUCCEEDED(f->GetImage(SIZE{kThumbW * 4, kThumbH * 4}, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hb)) && hb) {
+    if (SUCCEEDED(f->GetImage(SIZE{W * 4, H * 4}, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hb)) && hb) {
       BITMAP bm{};
       GetObjectW(hb, sizeof bm, &bm);
       int w = bm.bmWidth, h = std::abs(bm.bmHeight);
@@ -107,15 +110,17 @@ std::string make_thumb(const std::string& path) {
         bool ok = GetDIBits(dc, hb, 0, (UINT)h, src.data(), &bi, DIB_RGB_COLORS) == h;
         ReleaseDC(nullptr, dc);
         if (ok) {
-          // cover the 16:9 tile: crop the middle, then average each target pixel's box
-          double ar = (double)kThumbW / kThumbH;
+          // cover the 16:9 tile: crop the middle, then average each target pixel's box.
+          // Music keeps its square cover whole, centred in the tile on black.
+          const int ox = (W - tw) / 2;
+          double ar = (double)tw / H;
           double cw = w, ch = h, cx = 0, cy = 0;
           if (w / (double)h > ar) { cw = h * ar; cx = (w - cw) / 2; } else { ch = w / ar; cy = (h - ch) / 2; }
-          std::vector<uint32_t> dst((size_t)kThumbW * kThumbH);
-          for (int y = 0; y < kThumbH; ++y)
-            for (int x = 0; x < kThumbW; ++x) {
-              int x0 = (int)(cx + x * cw / kThumbW), x1 = std::max(x0 + 1, (int)(cx + (x + 1) * cw / kThumbW));
-              int y0 = (int)(cy + y * ch / kThumbH), y1 = std::max(y0 + 1, (int)(cy + (y + 1) * ch / kThumbH));
+          std::vector<uint32_t> dst((size_t)W * H);
+          for (int y = 0; y < H; ++y)
+            for (int x = 0; x < tw; ++x) {
+              int x0 = (int)(cx + x * cw / tw), x1 = std::max(x0 + 1, (int)(cx + (x + 1) * cw / tw));
+              int y0 = (int)(cy + y * ch / H), y1 = std::max(y0 + 1, (int)(cy + (y + 1) * ch / H));
               uint64_t r = 0, g = 0, b = 0, n = 0;
               for (int yy = y0; yy < std::min(y1, h); ++yy)
                 for (int xx = x0; xx < std::min(x1, w); ++xx) {
@@ -123,7 +128,7 @@ std::string make_thumb(const std::string& path) {
                   b += v & 0xFF; g += (v >> 8) & 0xFF; r += (v >> 16) & 0xFF; ++n;
                 }
               if (!n) n = 1;
-              dst[(size_t)y * kThumbW + x] = (uint32_t)(r / n) << 16 | (uint32_t)(g / n) << 8 | (uint32_t)(b / n);
+              dst[(size_t)y * W + ox + x] = (uint32_t)(r / n) << 16 | (uint32_t)(g / n) << 8 | (uint32_t)(b / n);
             }
           // a blank answer (an all-black first frame, a shell with nothing to show) is no
           // picture: the phone draws its own pixel landscape instead
@@ -133,7 +138,7 @@ std::string make_thumb(const std::string& path) {
             lo = std::min(lo, l);
             hi = std::max(hi, l);
           }
-          if (hi - lo > 3) out = bmp24(dst, kThumbW, kThumbH);
+          if (hi - lo > 3) out = bmp24(dst, W, H);
         }
       }
       DeleteObject(hb);
@@ -143,6 +148,14 @@ std::string make_thumb(const std::string& path) {
   if (SUCCEEDED(co)) CoUninitialize();
   return out;
 }
+
+std::string make_thumb(const std::string& path, bool square) {
+  return make_image(path, kThumbW, kThumbH, square ? kThumbH : kThumbW);
+}
+
+// The phone's face for a song: its cover, small enough to read as pixels at double size.
+std::string make_cover(const std::string& path, int n) { return make_image(path, n, n, n); }
+constexpr int kCoverPx = 72;  // shown at 2x: big, honest pixels, like the eyes it replaces
 
 struct Gate {
   std::mutex mu;
@@ -285,7 +298,8 @@ struct RemoteServer::Impl {
   std::string font;
 
   std::mutex mu;  // everything below
-  std::string state, boot, page;
+  std::vector<RemoteServer::QueueFile> queue_files;
+  std::string state, boot, page, queue_json="{\"items\":[]}";
   uint64_t state_rev = 0;
   bool page_dirty = true;
   Roots roots;
@@ -302,6 +316,7 @@ struct RemoteServer::Impl {
   std::shared_ptr<Gate> gate = std::make_shared<Gate>();
   std::string pc;           // the computer's name, for the phone's "connected" moment
   std::string peek;         // the latest timeline preview asked by a phone (BMP)
+  std::string cover_path;   // the song playing, whose cover the phone wears as its face
   uint64_t peek_rev = 0;
   double peek_at = 0;
 
@@ -412,13 +427,30 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
     if (img.empty()) return reply(404, "text/plain", "");
     return reply(200, "image/bmp", img);
   }
-  if (r.path == "/list" || r.path == "/thumb") {
+  if(r.path=="/queue") {
+    std::string body;
+    {std::lock_guard<std::mutex> l(mu);if(!tokens.count(bearer()))return reply(403,"text/plain","");body=queue_json;}
+    return reply(200,"application/json; charset=utf-8",body);
+  }
+  if (r.path == "/list" || r.path == "/thumb" || r.path == "/queue-thumb" || r.path == "/cover") {
     Roots roots_copy;
+    std::string queue_path;
     ProgressMap progress_copy;
     {
       std::lock_guard<std::mutex> l(mu);
       if (!tokens.count(bearer())) return reply(403, "text/plain", "");
       roots_copy = roots;
+      if (r.path == "/cover") {
+        queue_path = cover_path;  // only the song playing now, never a path the phone names
+        if (queue_path.empty()) return reply(404, "text/plain", "");
+      }
+      if(r.path=="/queue-thumb") {
+        const auto value=q("id");uint32_t id=0;
+        auto parsed=std::from_chars(value.data(),value.data()+value.size(),id);
+        if(value.empty()||parsed.ec!=std::errc{}||parsed.ptr!=value.data()+value.size()||!id)return reply(400,"text/plain","");
+        for(const auto& file:queue_files)if(file.id==id) {queue_path=file.path;break;}
+        if(queue_path.empty())return reply(404,"text/plain","");
+      }
       if (r.path == "/list") progress_copy = progress;
     }
     // lists are quick; thumbnails queue up behind a gate (a grid asks for a dozen at once)
@@ -431,8 +463,8 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
     ioctlsocket(s, FIONBIO, &blocking);
     DWORD timeout = 8000;
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
-    std::string path = q("p");
-    bool list = r.path == "/list";
+    std::string path = r.path=="/queue-thumb"||r.path=="/cover"?queue_path:q("p");
+    bool list = r.path == "/list", cover = r.path == "/cover";
     auto workers_ref = workers;
     auto thumbs_ref = thumbs;
     auto gate_ref = gate;
@@ -443,7 +475,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
     WSADATA wd{};
     if (WSAStartup(MAKEWORD(2, 2), &wd) != 0) { closesocket(s); return; }
     ++*workers_ref;
-    try { std::thread([s, path, list, roots_copy, progress_copy, workers_ref, thumbs_ref, gate_ref, generation_ref, epoch] {
+    try { std::thread([s, path, list, cover, roots_copy, progress_copy, workers_ref, thumbs_ref, gate_ref, generation_ref, epoch] {
       struct Cleanup {
         SOCKET socket;
         std::shared_ptr<std::atomic<int>> workers;
@@ -456,6 +488,17 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
         std::string body;
         int st = list_json(path, roots_copy, progress_copy, body);
         resp = remote::http_response(st, st == 200 ? "application/json; charset=utf-8" : "text/plain", st == 200 ? body : "");
+      } else if (cover) {
+        std::string img, k = lower_path(path) + "#cover";
+        if (!thumbs_ref->get(k, img)) {
+          gate_ref->enter(3);
+          struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
+          if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
+            img = make_cover(path, kCoverPx);
+            if (*generation_ref == epoch) thumbs_ref->put(k, img);
+          }
+        }
+        resp = img.empty() ? remote::http_response(404, "text/plain", "") : remote::http_response(200, "image/bmp", img);
       } else if (!root_of(roots_copy, path) || !remote_path_allowed(root_of(roots_copy, path)->path, path) || !remote::is_video_name(path)) {
         resp = remote::http_response(403, "text/plain", "");
       } else {
@@ -464,7 +507,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
           gate_ref->enter(3);
           struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
           if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
-            img = make_thumb(path);
+            img = make_thumb(path, false);
             if (*generation_ref == epoch) thumbs_ref->put(k, img);
           }
         }
@@ -661,8 +704,8 @@ void RemoteServer::Impl::loop() {
   while (!clients.empty()) drop(clients.size() - 1);
 }
 
-std::vector<uint32_t> file_thumbnail_pixels(const std::string& path) {
-  auto bmp=make_thumb(path); if(bmp.size()!=54+84*48*3) return {};
+std::vector<uint32_t> file_thumbnail_pixels(const std::string& path, bool square) {
+  auto bmp=make_thumb(path, square); if(bmp.size()!=54+84*48*3) return {};
   std::vector<uint32_t> px(84*48);
   for(int y=0;y<48;++y) for(int x=0;x<84;++x) {
     auto at=54+(47-y)*84*3+x*3;
@@ -761,11 +804,20 @@ bool RemoteServer::running() const { return d_->running; }
 int RemoteServer::port() const { return d_->port; }
 int RemoteServer::clients() const { return d_->nclients; }
 
+void RemoteServer::set_queue(const std::string& json,std::vector<QueueFile> files) {
+  std::lock_guard<std::mutex> l(d_->mu);
+  if(json.size()<=256*1024&&files.size()<=512) {d_->queue_json=json;d_->queue_files=std::move(files);}
+}
 void RemoteServer::set_state(const std::string& json) {
   std::lock_guard<std::mutex> l(d_->mu);
   if (json == d_->state) return;
   d_->state = json;
   ++d_->state_rev;
+}
+
+void RemoteServer::set_cover(const std::string& path) {
+  std::lock_guard<std::mutex> l(d_->mu);
+  d_->cover_path = path;
 }
 
 void RemoteServer::set_peek(double at, const std::vector<uint32_t>& px, int w, int h) {

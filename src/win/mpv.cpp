@@ -158,6 +158,10 @@ std::vector<Track> Mpv::parse_tracks(const mpv_node* n) {
     tr.forced = node_flag(node_get(t, "forced"));
     tr.is_default = node_flag(node_get(t, "default"));
     tr.albumart = node_flag(node_get(t, "albumart"));
+    tr.hearing_impaired = node_flag(node_get(t, "hearing-impaired"));
+    const auto* metadata=node_get(t,"metadata");
+    if(tr.title.empty()) {tr.title=node_str(node_get(metadata,"TITLE"));if(tr.title.empty())tr.title=node_str(node_get(metadata,"title"));}
+    if(tr.lang.empty()) {tr.lang=node_str(node_get(metadata,"LANGUAGE"));if(tr.lang.empty())tr.lang=node_str(node_get(metadata,"language"));}
     out.push_back(tr);
   }
   return out;

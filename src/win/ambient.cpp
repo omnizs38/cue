@@ -78,6 +78,7 @@ void Ambient::build_shape(const RECT& r, int dpi) {
   dpi_ = dpi;
   int reach = (int)std::lround(std::min(ww, wh) * 0.14);
   M_ = std::clamp(reach, MulDiv(48, dpi, 96), MulDiv(120, dpi, 96));
+  C_ = corner_tuck(dpi);
   RECT sr[4];
   layout_strips(r, M_, sr);
   for (int k = 0; k < 4; ++k) {
@@ -116,6 +117,18 @@ void Ambient::build_shape(const RECT& r, int dpi) {
         double dx = x - qx, dy = y - qy;
         double u = std::sqrt(dx * dx + dy * dy) / M_;
         if (u >= 1) continue;
+        // Under the window: only the wedges its rounded corners leave open are lit, at full
+        // edge strength and with their corner's colour; everything else is covered.
+        double corner_p = -1;
+        if (x == qx && y == qy) {
+          bool left = x < M_ + C_, right = x >= M_ + ww - C_, top = y < M_ + C_, bottom = y >= M_ + wh - C_;
+          if (!((left || right) && (top || bottom))) continue;
+          double cx = left ? M_ + C_ : M_ + ww - C_, cy = top ? M_ + C_ : M_ + wh - C_;
+          double ox = x + 0.5 - cx, oy = y + 0.5 - cy;
+          if (ox * ox + oy * oy <= (double)C_ * C_) continue;  // inside the arc: the window's own pixels
+          corner_p = top ? (left ? 0.0 : ww - 1.0) : (right ? ww + wh - 1.0 : 2.0 * ww + wh - 1.0);
+          u = 0;
+        }
         // a soft light: strong at the edge, fading like a lamp on a wall, ending at zero
         double f = std::exp(-2.8 * u * u) * (1 - u);
         int a = (int)std::lround(f * 235);
@@ -123,7 +136,8 @@ void Ambient::build_shape(const RECT& r, int dpi) {
         // which point of the window's edge this pixel faces, clockwise from the top-left corner
         double p;
         int ex = qx - M_, ey = qy - M_;
-        if (y < M_) p = ex;
+        if (corner_p >= 0) p = corner_p;
+        else if (y < M_) p = ex;
         else if (x >= M_ + ww) p = ww + ey;
         else if (y >= M_ + wh) p = ww + wh + (ww - 1 - ex);
         else p = 2.0 * ww + wh + (wh - 1 - ey);
@@ -136,10 +150,11 @@ void Ambient::build_shape(const RECT& r, int dpi) {
 }
 
 // Strip rects in halo coordinates (origin = player's top-left minus the reach), cut to the
-// monitor the player is on. top/bottom carry the corners, left/right sit between them.
+// monitor the player is on. top/bottom carry the corners and reach C_ px under the window, where
+// Windows 11 rounds its corners; left/right sit between them, so no pixel is lit twice.
 void Ambient::layout_strips(const RECT& r, int M, RECT out[4]) const {
-  int ww = r.right - r.left, wh = r.bottom - r.top, W = ww + 2 * M;
-  RECT full[4] = {{0, 0, W, M}, {0, M + wh, W, M + wh + M}, {0, M, M, M + wh}, {M + ww, M, M + ww + M, M + wh}};
+  int ww = r.right - r.left, wh = r.bottom - r.top, W = ww + 2 * M, C = std::min({C_, ww / 2, wh / 2});
+  RECT full[4] = {{0, 0, W, M + C}, {0, M + wh - C, W, M + wh + M}, {0, M + C, M, M + wh - C}, {M + ww, M + C, M + ww + M, M + wh - C}};
   MONITORINFO mi{sizeof(mi)};
   GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi);
   RECT mon = mi.rcMonitor;

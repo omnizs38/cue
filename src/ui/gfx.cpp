@@ -33,6 +33,18 @@ const BitmapDef* bmp(std::string_view name) {
     for (auto& b : kActionIcons) m[b.name] = &b;
     // icons drawn for Cue's own menus, on the same 1-art-px grid as "check" and "clock"
     static const BitmapDef extra[] = {
+        {"next-file",5,5,"#...#" "##..#" "###.#" "##..#" "#...#"},  // the weight of "forward": one triangle, one bar
+        {"prev-file",5,5,"#...#" "#..##" "#.###" "#..##" "#...#"},
+        {"loop-one",3,5,".#." "##." ".#." ".#." "###"},  // repeat just this one: a 1 at the icon's shoulder
+        // the note of Cue's music icon: a song without a cover of its own
+        {"cue-note",8,10,"...###.." "...#.##." "...#..##" "...#...#" "...#...." "...#...." ".###...." "####...." "####...." ".##....."},
+        // the interface size: a small and a large window; the controls' background: a bar
+        {"ui-size",9,6,"....#####" "....#...#" "....#...#" "###.#...#" "#.#.#...#" "###.#####"},
+        {"dock-bg",9,5,".#######." "#########" "#.#.#.#.#" "#########" ".#######."},
+        // music looks: the cover with its note, and the spectrum's bars
+        {"look-cover",7,7,"#######" "#.....#" "#..##.#" "#..#..#" "#.##..#" "#.....#" "#######"},
+        {"look-bars",9,6,"....#...." "....#...." "..#.#.#.." "..#.#.#.." "#.#.#.#.#" "#.#.#.#.#"},
+        {"queue",9,7,"#........" "##.######" "#........" "........." "...######" "........." "...######"},  // now playing, then what follows
         {"text-style", 9, 7, ".##......" "#..#....." "#..#.###." "####....#" "#..#.####" "#..#.#..#" "#..#..###"},
         // the interface language: a small globe, meridian and equator
         {"globe", 7, 7, "..###.." ".#.#.#." "#..#..#" "#######" "#..#..#" ".#.#.#." "..###.."},

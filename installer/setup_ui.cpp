@@ -1,3 +1,4 @@
+#include "../src/core/build_identity.h"
 #include "setup_ui.h"
 
 #include <algorithm>
@@ -293,7 +294,7 @@ void SetupView::render(Canvas& c, double now) {
     x += X(10);
     text(c, "v" + version, x, y, s, p.fg, intro);
   } else {
-    text(c, "v" + version + " · .tinypeep", X(kX0), X(kVersionY), s, p.dim, intro);
+    text(c, fit_end("v" + version + " · " + std::string(CUE_OFFICIAL_BUILD?CUE_DISTRIBUTOR:tr(str::about_unofficial)),X(kCW),s), X(kX0), X(kVersionY), s, p.dim, intro);
   }
 
   auto line = [&](const std::string& txt, double ay, Rgb col) {

@@ -6,7 +6,8 @@
 #include "../core/i18n.h"
 
 namespace {
-constexpr int kRowPitch = 16;  // art px
+constexpr int kRowPitch = 30;  // art px: a title, its quiet line and a progress rule
+constexpr int kRowH = 28;
 constexpr int kMaxRows = 6;
 constexpr double kEggDur[5] = {0, 4.2, 3.4, 4.4, 3.6};
 }  // namespace
@@ -21,8 +22,7 @@ void HomeView::set_size(int w_, int h_, double s_) {
 
 void HomeView::set_rows(std::vector<HomeRow> r) {
   if ((int)r.size() > kMaxRows) r.resize(kMaxRows);
-  rows = std::move(r);
-  if (focus_ >= (int)rows.size() && focus_ < kOpen) focus_ = -1;
+  all_rows_ = std::move(r);
   layout();
 }
 
@@ -30,9 +30,10 @@ void HomeView::layout() {
   const int W = w / s, H = h / s;
   // the composition keeps its proportions on wide or huge windows: it never spreads past
   // 700 px of art and stays centred (ultrawide, 1440p, 4K at 100% look like a poster, not a sparse grid)
-  const int CW = std::min(W, 700), ox = (W - CW) / 2;
+  // (756 = 700 + 8%: the home holds its own beside the player's full-window picture)
+  const int CW = std::min(W, 756), ox = (W - CW) / 2;
   const int split = (int)std::lround(CW * 0.42);
-  double scale = std::clamp(std::min(CW, H * 16 / 9) / 180.0, 1.34, 3.34);
+  double scale = std::clamp(std::min(CW, H * 16 / 9) / 180.0 * 1.08, 1.34, 3.6);
   face.layout((ox + split * 0.56) * s, (H * 0.47) * s, s, std::round(scale * 3) / 3.0);
   face.max_look = 3.0 * face.scale / 1.5;
 
@@ -45,6 +46,10 @@ void HomeView::layout() {
   // Recentes column
   int x0 = ox + (int)std::lround(CW * 0.49);
   int x1 = ox + CW - (int)std::lround(CW * 0.09);
+  // as many entries as the window holds (two lines each); the rest wait for a larger window
+  const int fit = std::clamp((H - 64) / kRowPitch, 1, kMaxRows);
+  rows.assign(all_rows_.begin(), all_rows_.begin() + std::min((int)all_rows_.size(), fit));
+  if (focus_ >= (int)rows.size() && focus_ < kOpen) focus_ = -1;
   int n = std::max(1, (int)rows.size());
   int block = 12 + 9 + n * kRowPitch;
   int y0 = (int)std::lround(H * 0.47 - block / 2.0 - 3);
@@ -52,13 +57,14 @@ void HomeView::layout() {
   r_dots_ = {(x1 - 9) * s, (y0 + 1) * s, 11 * s, 10 * s};
   r_rows_.clear();
   for (int i = 0; i < (int)rows.size(); ++i)
-    r_rows_.push_back({(x0 - 5) * s, (y0 + 21 + i * kRowPitch) * s, (x1 - x0 + 10) * s, 14 * s});
+    r_rows_.push_back({(x0 - 5) * s, (y0 + 19 + i * kRowPitch) * s, (x1 - x0 + 10) * s, kRowH * s});
   r_list_ = {(x0 - 8) * s, y0 * s - 6 * s, (x1 - x0 + 16) * s, (block + 12) * s};
   layout_menu();
   layout_update();
 }
 
 std::string HomeView::menu_label(int id) const {
+  if(id==kMenuFolder)return tr(str::queue_folder);
   if (id == kMenuLang) return tr(str::more_language);
   if (id == kMenuClear) return tr(str::home_clear_recents);
   if (id == kMenuRemote) return tr(str::remote_title);
@@ -74,18 +80,23 @@ void HomeView::layout_menu() {
   if (menu_lang_) {
     for (int i = 0; i <= i18n::kLangCount; ++i) menu_ids_.push_back(kLangOpt + i);
   } else {
+    menu_ids_.push_back(kMenuFolder);
     menu_ids_.push_back(kMenuLang);
-    menu_ids_.push_back(kMenuRemote);
+    if (remote_available) menu_ids_.push_back(kMenuRemote);
     if (!rows.empty()) menu_ids_.push_back(kMenuClear);
   }
   int words = 0;
   for (int id : menu_ids_) words = std::max(words, text_w(menu_label(id), 1));
-  const int lead = menu_lang_ ? 14 : 4, trail = menu_lang_ ? 6 : 14;  // check column / chevron
-  const int W = std::max(84, 2 + lead + words + trail + 2), H = 4 + 13 * (int)menu_ids_.size();
+  // like the player's menus: an icon column, 14 px rows, and the destructive entry set apart
+  const int lead = menu_lang_ ? 14 : 19, trail = menu_lang_ ? 6 : 14;  // check / icon column, chevron
+  const int rule = !menu_lang_ && !menu_ids_.empty() && menu_ids_.back() == kMenuClear ? 5 : 0;
+  const int W = std::max(96, 2 + lead + words + trail + 2), H = 4 + 14 * (int)menu_ids_.size() + rule;
   const int x1 = r_title_.r() / s, y0 = r_title_.y / s;
-  r_menu_ = {(x1 + 2 - W) * s, (y0 + 12) * s, W * s, H * s};
-  for (size_t i = 0; i < menu_ids_.size(); ++i)
-    r_menu_items_.push_back({r_menu_.x + 2 * s, r_menu_.y + (2 + 13 * (int)i) * s, (W - 4) * s, 13 * s});
+  r_menu_ = {(x1 + 2 - W) * s, (y0 + 13) * s, W * s, H * s};
+  for (size_t i = 0; i < menu_ids_.size(); ++i) {
+    int extra = rule && menu_ids_[i] == kMenuClear ? rule : 0;
+    r_menu_items_.push_back({r_menu_.x + 2 * s, r_menu_.y + (2 + 14 * (int)i + extra) * s, (W - 4) * s, 14 * s});
+  }
 }
 
 void HomeView::open_menu(bool lang) {
@@ -168,6 +179,7 @@ void HomeView::update_face_target(double now) {
 }
 
 bool HomeView::is_background(int x, int y) const {
+  if (menu_) return false;  // a click outside the open menu closes it (it is not a window drag)
   if (hit(x, y) != -1 || chrome.area(w).contains(x, y)) return false;
   if (face.bounds().contains(x, y)) return false;  // the eyes take clicks (and keep a secret)
   return true;
@@ -207,9 +219,10 @@ HomeAction HomeView::mouse_down(int x, int y, double now) {
     default: break;
   }
   int hh = hit(x, y);
-  bool in_menu = hh == kMenuPad || hh == kMenuClear || hh == kMenuLang || hh == kMenuRemote || (hh >= kLangOpt && hh <= kLangOpt + i18n::kLangCount);
+  bool in_menu = hh == kMenuFolder || hh == kMenuPad || hh == kMenuClear || hh == kMenuLang || hh == kMenuRemote || (hh >= kLangOpt && hh <= kLangOpt + i18n::kLangCount);
   if (menu_ && !in_menu && hh != kDots) { menu_ = false; return {}; }
   if (hh == kMenuPad) return {};
+  if(hh==kMenuFolder) {menu_=false;return {HomeAct::OpenFolder,-1};}
   if (hh == kMenuClear) { menu_ = false; return {HomeAct::ClearRecents, -1}; }
   if (hh == kMenuRemote) { menu_ = false; return {HomeAct::Remote, -1}; }
   if (hh == kMenuLang) { open_menu(true); return {}; }
@@ -260,6 +273,7 @@ HomeAction HomeView::key(const std::string& k, bool shift, double now) {
     if (focus_ == kNews) return {HomeAct::News, -1};
     if (focus_ == kNewsClose) { focus_ = -1; return {HomeAct::NewsClose, -1}; }
     if (focus_ == kDots) { if (menu_) menu_ = false; else open_menu(false); }
+    else if(focus_==kMenuFolder) {menu_=false;focus_=-1;return {HomeAct::OpenFolder,-1};}
     else if (focus_ == kMenuClear) { menu_ = false; focus_ = -1; return {HomeAct::ClearRecents, -1}; }
     else if (focus_ == kMenuRemote) { menu_ = false; focus_ = -1; return {HomeAct::Remote, -1}; }
     else if (focus_ == kMenuLang) open_menu(true);
@@ -413,6 +427,8 @@ bool HomeView::tick(double now, double dt) {
     }
   }
   if (!notice.empty() && now > notice_until) { notice.clear(); moving = true; }
+  menu_fade_.target = menu_ ? 1.0 : 0.0;
+  moving |= menu_fade_.step(dt);
   moving |= face.tick(now, dt);
   moving |= chrome.tick(dt);
   if (leave_t0_ > 0 && now - leave_t0_ < leave_dur() + 0.05) moving = true;
@@ -428,7 +444,7 @@ bool HomeView::tick(double now, double dt) {
 }
 
 double HomeView::next_event(double now) const {
-  if (egg_ || chrome.vis.v != chrome.vis.target || leave_t0_ > 0 || now - enter_t0_ < 0.45) return 0;
+  if (egg_ || chrome.vis.v != chrome.vis.target || leave_t0_ > 0 || now - enter_t0_ < 0.45 || menu_fade_.v != menu_fade_.target || menu_fade_.v != (menu_ ? 1.0 : 0.0)) return 0;
   double t = face.next_event(now);
   if (!notice.empty()) t = std::min(t, notice_until - now);
   return std::max(0.0, t);
@@ -565,34 +581,45 @@ void HomeView::render(Canvas& c, double now) {
     double ha = hov(i);
     bool on = ha > 0.5;
     if (ha > 0) c.cornered(r, s, p.hover, ha);
+    // a living entry: the title and what is left on one line, a quiet line under it (the
+    // episode, or the kind of file), and the progress as a rule across the whole entry
     int x0 = r.x + 5 * s, x1 = r.r() - 5 * s;
-    c.bitmap(bmp("k-video"), x0, r.y + 2 * s, s, mix(p.dim, p.fg, ha));
     const HomeRow& row = rows[i];
+    int ty = r.y + 3 * s, sy = r.y + 14 * s;
+    c.bitmap(bmp(row.audio ? "k-audio" : "k-video"), x0, ty + 2 * s, s, mix(p.dim, p.fg, ha));
     int rw = text_w(row.right, s);
     bool resumable = row.progress >= 0;
-    text(c, row.right, x1 - rw, r.y, s, resumable ? mix(p.dim, p.fg, ha) : p.faint);
+    text(c, row.right, x1 - rw, ty, s, resumable ? mix(p.dim, p.fg, ha) : p.faint);
     int nx = x0 + 13 * s;
-    std::string nm = fit_middle(row.name, x1 - rw - 10 * s - nx, s);
-    text(c, nm, nx, r.y, s, mix(p.dim, p.fg, ha));
+    std::string nm = fit_end(row.name, x1 - rw - 10 * s - nx, s);
+    text(c, nm, nx, ty, s, mix(mix(p.dim, p.fg, 0.35), p.fg, ha));
+    if (!row.sub.empty()) text(c, fit_end(row.sub, x1 - nx, s), nx, sy, s, mix(p.faint, p.dim, ha));
     if (resumable) {
-      // a 1 px whisper of progress under the name; the track only shows on hover
-      int lw = x1 - nx, ly = r.y + 12 * s;
+      int lw = x1 - nx, ly = r.y + 25 * s;
       int pw = std::max(s, (int)std::lround(lw * std::clamp(row.progress, 0.0, 1.0) / s) * s);
-      if (on) c.fill(nx, ly, lw, s, p.edge);
-      c.fill(nx, ly, pw, s, on ? p.dim : p.faint);
+      c.fill(nx, ly, lw, s, p.edge);
+      c.fill(nx, ly, pw, s, on ? p.fg : p.dim);
     }
   }
-  if (menu_) {
-    draw_panel(c, r_menu_.x, r_menu_.y, r_menu_.w / s, r_menu_.h / s, s, {1}, p.sheet, 1.0, p.edge, 1.0);
+  if (menu_fade_.v > 0) {
+    // it unfolds from the ···: a short fade and a 3 px drop, and leaves the same way
+    double k = ease_out(menu_fade_.v);
+    int dy = (int)std::lround((1 - k) * 3) * (int)s;
+    draw_panel(c, r_menu_.x, r_menu_.y - dy, r_menu_.w / s, r_menu_.h / s, s, {1}, p.sheet, k, p.edge, k);
     for (size_t i = 0; i < menu_ids_.size(); ++i) {
       int id = menu_ids_[i];
-      const Rect& ir = r_menu_items_[i];
-      bool on = active() == id;
-      if (on) c.cornered(ir, s, p.hover);
+      Rect ir = r_menu_items_[i];
+      ir.y -= dy;
+      double ha = menu_ ? hov(id) : 0.0;
+      if (ha > 0) c.cornered(ir, s, p.hover, ha * k);
+      if (id == kMenuClear && i > 0) c.fill(ir.x + 2 * s, ir.y - 3 * s, ir.w - 4 * s, s, p.edge, k);
       bool chosen = id >= kLangOpt && id - kLangOpt - 1 == language;
-      if (chosen) c.bitmap(bmp("check"), ir.x + 3 * s, ir.y + 4 * s, s, p.fg);
-      text(c, menu_label(id), ir.x + (menu_lang_ ? 14 : 4) * s, ir.y + 1 * s, s, on || chosen ? p.fg : p.dim);
-      if (id == kMenuLang) c.bitmap(bmp("chev-right5"), ir.r() - 8 * s, ir.y + 4 * s, s, on ? p.fg : p.dim);
+      if (chosen) c.bitmap(bmp("check"), ir.x + 3 * s, ir.y + 4 * s, s, p.fg, k);
+      const char* ic = id == kMenuFolder ? "folder" : id == kMenuLang ? "globe" : id == kMenuRemote ? "phone" : id == kMenuClear ? "cross" : nullptr;
+      if (ic) action_icon(c, ic, {ir.x + 3 * s, ir.y, 12 * s, ir.h}, s, mix(p.dim, p.fg, ha), k);
+      int ty = ir.y + (ir.h - 12 * s) / 2 + s;
+      text(c, menu_label(id), ir.x + (menu_lang_ ? 14 : 19) * s, ty, s, chosen ? p.fg : mix(p.dim, p.fg, ha), k);
+      if (id == kMenuLang) c.bitmap(bmp("chev-right5"), ir.r() - 8 * s, ir.y + (ir.h - 5 * s) / 2 / s * s, s, mix(p.dim, p.fg, ha), k);
     }
   }
 

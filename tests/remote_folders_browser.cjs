@@ -29,7 +29,7 @@ const server=http.createServer((req,res)=> {
 });
 (async()=>{
   await new Promise(r=>server.listen(8124,'127.0.0.1',r));
-  const browser=await chromium.launch({headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
+  const browser=await chromium.launch({headless:true,executablePath:process.env.CUE_CHROMIUM_PATH||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
   const errors=[];
   for (const multi of [false,true]) {
     roots = multi ? [{dir:true,name:'Vídeos',path:'C:\\Videos'},{dir:true,name:'Downloads',path:'C:\\Downloads'}]

@@ -33,6 +33,7 @@ bool App::remote_start() {
   }
   log("remote on port " + std::to_string(remote_.port()));
   remote_.set_tokens(store_.remote_tokens);
+  remote_queue_revision_=~uint64_t(0);
   remote_boot();
   remote_roots();
   remote_progress();
@@ -56,7 +57,7 @@ void App::remote_boot() {
   bool first = true;
   for (int i = 0; i < str::kCount; ++i) {
     std::string key = i18n::key_name((str::Id)i);
-    if (key.rfind("remote.", 0) != 0 && key != "number.decimal") continue;
+    if (key.rfind("remote.", 0) != 0 && key.rfind("queue.",0)!=0 && key != "number.decimal") continue;
     o += (first ? "" : ",") + json_quote(key) + ":" + json_quote(tr((str::Id)i));
     first = false;
   }
@@ -81,7 +82,7 @@ void App::remote_roots() {
   for (auto& f : store_.remote_folders)
     if (f.on && GetFileAttributesW(widen(f.path).c_str()) != INVALID_FILE_ATTRIBUTES)
       roots.push_back({folder_display_name(f.path), f.path});
-  remote_.set_roots(std::move(roots));
+  remote_.set_roots(std::move(roots));remote_queue_revision_=~uint64_t(0);
 }
 
 std::vector<RemoteChip> App::remote_chips() const {
@@ -103,14 +104,14 @@ void App::remote_progress() {
   remote_.set_progress(std::move(items));
 }
 
-bool App::remote_path_ok(const std::string& path) const {
-  if (path.empty() || !remote::is_playable_name(path)) return false;
+bool App::remote_path_ok(const std::string& path,bool directory) const {
+  if (path.empty() || (!directory&&!remote::is_playable_name(path))) return false;
   bool inside = false;
   for (auto& f : store_.remote_folders)
     if (f.on && remote_path_allowed(f.path, path)) inside = true;
   if (!inside) return false;  // never touch an untrusted UNC/device path, even to ask for attributes
   DWORD a = GetFileAttributesW(widen(path).c_str());
-  return inside && a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+  return inside && a != INVALID_FILE_ATTRIBUTES && (directory?!!(a & FILE_ATTRIBUTE_DIRECTORY):!(a & FILE_ATTRIBUTE_DIRECTORY));
 }
 
 void App::remote_publish() {
@@ -118,6 +119,26 @@ void App::remote_publish() {
   remote::State st;
   const PlayInput& in = play_.in;
   st.playing_view = mode_ == Mode::Play && loaded_;
+  st.queue_revision=queue_.revision();st.queue_active=queue_.active();
+  st.queue_busy=!!folder_scan_;st.queue_notice=queue_notice_;st.queue_notice_id=queue_notice_id_;st.queue_result=queue_result_;
+  if(remote_queue_revision_!=queue_.revision()) {
+    std::vector<RemoteServer::QueueFile> queue_files;
+    std::string json="{\"items\":[";
+    bool first=true;
+    for(const auto& item:queue_.items()) {
+      std::string name=file_name(item.path);
+      if(name.size()>240) {size_t end=240;while(end>0&&((unsigned char)name[end]&0xc0)==0x80)--end;name.resize(end);name+="…";}
+      bool preview=false;
+      if(remote::is_video_name(item.path))for(const auto& root:store_.remote_folders)
+        if(root.on&&remote::path_within(root.path,item.path))preview=true;
+      queue_files.push_back({item.id,item.path});
+      json+=(first?"":",")+std::string("{\"id\":")+std::to_string(item.id)+",\"name\":"+json_quote(name)+",\"current\":"+(item.id==queue_.current()?"true":"false")+",\"audio\":"+(remote::is_audio_name(item.path)?"true":"false")+",\"preview\":"+(preview?"true":"false")+"}";
+      first=false;
+    }
+    json+="]}";remote_.set_queue(json,std::move(queue_files));remote_queue_revision_=queue_.revision();++remote_queue_epoch_;
+  }
+  st.queue_revision=remote_queue_epoch_;
+  st.lang = i18n::tag(i18n::language());
   st.volume = in.volume;
   st.muted = in.muted;
   if (st.playing_view) {
@@ -128,6 +149,12 @@ void App::remote_publish() {
     st.paused = in.paused || eof_;
     st.ended = eof_;
     st.audio_only = audio_only_;
+    if (audio_only_ && play_.in.has_cover) {
+      // the cover is the phone's face: a number that changes with the song tells it to fetch
+      uint32_t h = 2166136261u;
+      for (unsigned char ch : path_) h = (h ^ ch) * 16777619u;
+      st.cover = h ? h : 1;
+    }
     st.has_subs = !in.subs.empty();
     st.subs_on = in.sid != 0 && in.sub_visible;
     st.sub_delay = in.sub_delay;
@@ -145,6 +172,7 @@ void App::remote_publish() {
   st.timer = remote_timer_;
   st.timer_left = remote_timer_ > 0 ? std::max(0.0, remote_timer_end_ - now()) : 0;
   st.color = hex_color(in.accent_k > 0.2 && st.playing_view && !audio_only_ ? in.accent : kCueGlow);
+  remote_.set_cover(st.cover ? path_ : std::string());
   remote_.set_state(remote::state_json(st));
 }
 
@@ -207,6 +235,15 @@ void App::remote_command(const remote::Command& c) {
   double t = now();
   PlayInput& in = play_.in;
   const std::string& k = c.c;
+  if(k=="queue-add") {if(remote_path_ok(c.path)) {size_t added=queue_add({c.path});queue_notice(tr(added?str::queue_added:str::queue_limit),added?1:3);}else queue_notice(tr(str::notice_open_failed),3);return;}
+  if(k=="queue-folder") {if(remote_path_ok(c.path,true))queue_folder(c.path,false,true);else queue_notice(tr(str::notice_open_failed),3);return;}
+  if(k=="queue-clear") {queue_clear();return;}
+  if(k=="queue-play"||k=="queue-remove"||k=="queue-up"||k=="queue-down"||k=="queue-move") {
+    auto id=(uint32_t)c.v;
+    if(k=="queue-play") {auto* i=queue_.get(id);if(i&&remote_path_ok(i->path)) {if(id==queue_.current()) {play_.remote_toggle_pause(t);run_actions();}else queue_play(id);}else queue_notice(tr(str::notice_open_failed),3);}
+    else {bool changed=k=="queue-remove"?queue_.remove(id):k=="queue-move"?queue_.move_to(id,c.to):queue_.move(id,k=="queue-up"?-1:1);if(changed)queue_refresh();}
+    return;
+  }
   if (k == "open") {
     if (remote_path_ok(c.path)) open(c.path);
     return;
@@ -273,7 +310,8 @@ void App::remote_command(const remote::Command& c) {
     if (i == -1 && in.audios.size() >= 2) play_.remote_act(PA::AudioMix, 1, 0);  // all of them
     else if (i >= 0 && i < (int)in.audios.size()) play_.remote_act(PA::SelectAudio, 0, in.audios[i].id);
   } else if (k == "next") {
-    if (!next_ep_.empty()) open(next_ep_);
+    if(queue_.active()) {if(auto* i=queue_following();i&&remote_path_ok(i->path))queue_play(i->id);}
+    else if (!next_ep_.empty()&&remote_path_ok(next_ep_)) open(next_ep_);
     return;
   } else {
     return;
@@ -293,10 +331,28 @@ void App::end_what(bool restore) {
   if (what_sid_ == 0) mpv_.set_async("sid", "no");
 }
 
+// The queue's next item; with "repeat the list" the last one leads back to the first.
+const MediaQueue::Item* App::queue_following() const {
+  const auto* next = queue_.next();
+  if (!next && store_.loop_all && queue_.items().size() > 1 && queue_.current()) next = &queue_.items().front();
+  return next;
+}
+
 // Which file plays after this one: the next episode, by its number, else by name.
 void App::find_next_episode() {
   next_ep_.clear();
   next_auto_ = false; play_.in.has_next = false;
+  if (queue_.active()) {
+    if (auto* next=queue_following()) { next_ep_=next->path; next_auto_=true; }
+    play_.set_next_details(file_name(next_ep_));
+    next_thumb_job_.reset(); next_thumb_requested_=false;
+    play_.in.has_next=!next_ep_.empty();
+    play_.in.has_prev=queue_.previous()!=nullptr;
+    play_.in.next_title=audio_only_&&next_auto_&&!store_.loop?file_stem(next_ep_):"";  // repeating this one: nothing follows
+    return;
+  }
+  play_.in.has_prev = false;
+  play_.in.next_title.clear();
   if (path_.empty() || path_.find("://") != std::string::npos) return;
   std::error_code ec;
   std::filesystem::path p(widen(path_));

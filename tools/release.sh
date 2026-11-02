@@ -13,8 +13,8 @@ ENGINE_SRC=${ENGINE_SRC:-sources/Cue-Engine-Source.zip}
 echo "Cue $VERSION -> github.com/$REPO"
 
 bash tools/test.sh
-make -j"$(nproc)"
-make setup
+make OFFICIAL=1 -j"$(nproc)"
+make OFFICIAL=1 setup
 mkdir -p dist
 NOTES=$(awk "/^## $VERSION/{f=1;next}/^## /{f=0}f" docs/CHANGELOG.md)
 ASSETS=("dist/Cue-$VERSION-Setup.exe")

@@ -24,3 +24,6 @@ void update_download_async(HWND hwnd, UINT msg, const ReleaseInfo& rel);
 // Starts the installer in update mode: it waits for this process to exit, installs over
 // `install_dir` and opens Cue again. False when it could not be started.
 bool update_launch_installer(const std::wstring& installer, const std::wstring& install_dir);
+
+// Bounded, nonrecursive cleanup of Cue-owned update folders older than seven days.
+void update_cleanup_async();

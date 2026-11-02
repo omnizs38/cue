@@ -36,6 +36,7 @@ struct Track {
   std::string lang, title, codec;
   bool selected = false, external = false, forced = false, is_default = false;
   bool albumart = false;
+  bool hearing_impaired = false;
 };
 
 enum class SubKind { None, Text, Ass, Bitmap };

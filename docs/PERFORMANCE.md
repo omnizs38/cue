@@ -12,22 +12,15 @@ Cue keeps playback independent from interface work. Hidden/idle UI avoids redraw
 - Delay color sampling by 1.5 seconds and thumbnails by 3 seconds after the first frame. During window dragging, reuse lighting images and defer preview work.
 - Reduce hover-thumbnail transfer/cache pixel count without reducing scene-color sampling resolution.
 - Use two separable Gaussian passes for the frameless control cloud, with half-resolution intermediate textures; disable them when hidden. Visible blur still has a GPU cost.
+- Treat a window covered by another app's full-screen window on the same monitor (or cloaked on another virtual desktop) like a minimised one: no UI frames, no shader-parameter updates, the cover pass off, and a film presented per frame (`video-sync=audio`, file-local) instead of per display refresh. Checked twice a second; activation wakes it at once.
+- Music's cover scene: spectrum at 60 fps on tiny pictures (24x20 cells, 32x18 light); the wings' dot grid is a single frame multiplied into their alpha. Measured with FFmpeg on 30 s of audio, single-threaded: 6.9 s → 5.1 s for the whole scene.
 
-## Recorded measurements
+## Up next panel
 
-These are **historical local measurements**, retained from the supplied development notes. They were not rerun for this documentation edit and are not Windows startup, playback FPS, or total-process memory measurements.
-
-| Measurement | Before | After | Context |
-|---|---:|---:|---|
-| 1,000 dock redraw updates | 232.95 ms | 52.62 ms | GCC `-O2`, Linux, 1280×720, median of 3 |
-| 200,000 dock-state updates | 140.3 ms | 3.7 ms | Portable logic, median of 3 |
-| Temporary allocations in those state updates | 400,000 | 0 | Same benchmark |
-| Two 3840×2160 opening buffers retained after removal acknowledgement | 63.28 MiB | 0 MiB | Returned to allocator; not measured physical RAM |
-| Windows x64 executable size | 1,888,256 bytes | 1,753,088 bytes | Earlier optimization revision |
-| Opaque 900×140 layer on 1280×720 | 1.02 ms | 0.71 ms | GCC `-O2`, Linux, best of 15 |
-| Same layer while fading | 1.62 ms | 1.36 ms | Same setup |
-
-An earlier visual comparison found 36 matching UI states. OpenGL/Linux checks covered shader alignment at 0/90/180/270-degree rotation; they do not establish D3D11 performance on Windows.
+Scrolling a 512-entry queue with 32 loaded previews (Linux, GCC 13, `-O2`, panel
+300×520 art px): 3.5 → 1.2 ms per frame at 2× scale and 7.9 → 2.4 ms at 3× after
+caching row-sized previews and the panel background. Previews scaled for rows that
+leave the viewport are released; at most one copy per visible row exists.
 
 ## Reproduce and validate
 

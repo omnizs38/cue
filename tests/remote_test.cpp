@@ -134,6 +134,9 @@ static void json_checks() {
   assert(json_parse(state_json(s), j));
   assert(j["t"].str() == "state" && j["view"].str() == "play" && j["file"].str() == "Fala \"aí\".mkv");
   assert(j["pos"].num() == 12.5 && j["sub"]["posDefault"].num() == 93 && j["next"].str() == "S01E04");
+  assert(j["lang"].t == JVal::Null);  // unset: omitted
+  s.lang = "ru";
+  assert(json_parse(state_json(s), j) && j["lang"].str() == "ru");  // the page reloads its words when this changes
   Command c;
   assert(parse_command("{\"c\":\"seek\",\"v\":61.5}", c) && c.c == "seek" && c.has_v && c.v == 61.5);
   assert(parse_command("{\"c\":\"open\",\"path\":\"C:\\\\a.mkv\"}", c) && c.path == "C:\\a.mkv" && !c.has_v);

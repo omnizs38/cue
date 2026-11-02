@@ -23,7 +23,7 @@ int main(){
   p.in.audios.push_back({2,"audio","por"});p.in.aid=1;p.changed(t);settle(p,t);
   auto& d=p.layers[PlayView::L_DOCK];assert(empty!=d.c.px);
   double dw=d.c.w/scale;
-  int x=d.x+(width<300?33.5:dw-58.5)*scale,y=d.y+(width<300?34:13)*scale;
+  int x=d.x+(width<300?33.5:dw-57.5)*scale,y=d.y+(width<300?34:13)*scale;
   p.take_actions();p.mouse_move(x,y,t);p.mouse_down(x,y,t);p.mouse_up(x,y,t);
   assert(p.panel_open());
   for(int i=0;i<2;++i)p.key("down",false,false,t);

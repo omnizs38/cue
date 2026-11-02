@@ -1,6 +1,13 @@
 #include "../src/core/ui_scale.h"
 #include "../src/core/store.h"
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <string>
+#include <vector>
+#define private public
 #include "../src/ui/play.h"
+#undef private
 #include <cassert>
 #include <cmath>
 #include <cstdio>
@@ -65,8 +72,10 @@ int main() {
     p.take_actions();
     const auto& panel=p.layers[PlayView::L_PANEL];
     assert(panel.visible && panel.x>=0 && panel.x+panel.c.w<=2560);
-    int x=panel.x+(int)(4*scale+(chip+.5)*(panel.c.w-8*scale)/kUiSizes);
-    int y=panel.y+(int)((audio?80:120)*scale);  // the size selector: after open, close and (with video) the light rows
+    auto row=std::find_if(p.rows_.begin(),p.rows_.end(),[](const auto& r){return r.id==PlayView::R_UISCALE;});
+    assert(row!=p.rows_.end()&&row->parts.size()==kUiSizes);
+    Rect target=row->parts[chip];
+    int x=panel.x+target.cx(),y=panel.y+target.cy();
     p.mouse_move(x,y,2);p.mouse_down(x,y,2);p.mouse_up(x,y,2.01);
     bool found=false;
     for (auto& a:p.take_actions()) if(a.a==PA::UiScale) {assert((int)a.v==ui_size_choice(chip));found=true;}

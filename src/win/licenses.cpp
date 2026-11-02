@@ -78,6 +78,7 @@ LRESULT CALLBACK proc(HWND w,UINT message,WPARAM wp,LPARAM lp) {
       lstrcpyW(cf.szFaceName,L"Segoe UI");SendMessageW(v->text,EM_SETCHARFORMAT,0,(LPARAM)&cf);
       auto add=[&](std::wstring name,std::filesystem::path path,str::Id key=str::kCount){v->docs.push_back({std::move(name),std::move(path),key});};
       add(L"",v->base/L"third_party/libmpv/README.txt",str::lic_summary);
+      add(L"",v->base/L"docs/THANKS.md",str::lic_thanks);  // people who helped, right after the credits
       add(L"",v->base/L"COPYRIGHT.md",str::lic_copyright);
       add(L"",v->base/L"LICENSES.md",str::lic_components);
       add(L"Cue · GPLv3",v->base/L"LICENSE");

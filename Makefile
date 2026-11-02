@@ -4,7 +4,8 @@ CROSS ?= x86_64-w64-mingw32-
 CXX := $(CROSS)g++
 CC := $(CROSS)gcc
 WINDRES := $(CROSS)windres
-CXXFLAGS = -MMD -MP -std=c++20 -O2 -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wno-missing-field-initializers -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0A00 -DNOMINMAX
+OFFICIAL ?= 0
+CXXFLAGS = -DCUE_OFFICIAL_BUILD=$(OFFICIAL)  -MMD -MP -std=c++20 -O2 -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wno-missing-field-initializers -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0A00 -DNOMINMAX
 LDFLAGS = -flto=2 -Wl,--gc-sections -municode -mwindows -static -static-libgcc -static-libstdc++ -s
 LIBS = -ldwmapi -lole32 -lshell32 -luuid -lshcore -lcomdlg32 -lwinmm -lwindowscodecs -lwinhttp -lbcrypt -lws2_32 -liphlpapi
 SRC = $(wildcard src/core/*.cpp) $(wildcard src/ui/*.cpp) $(wildcard src/win/*.cpp)
@@ -14,13 +15,20 @@ VERSION := $(shell sed -n 's/^\#define CUE_VERSION "\(.*\)"/\1/p' src/core/versi
 
 all: build/Cue/Cue.exe
 
+.PHONY: FORCE
+build/identity: FORCE
+	@mkdir -p build
+	@echo $(OFFICIAL) | cmp -s - $@ || echo $(OFFICIAL) > $@
+
+$(OBJ) $(SETUP_OBJ): build/identity src/core/build_identity.h
+
 build/obj/%.o: src/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-build/obj/res.o: res/cue.rc res/cue.ico res/cue.manifest src/core/version.h
+build/obj/res.o: res/cue.rc res/cue.ico res/cue-audio.ico res/cue.manifest src/core/version.h
 	@mkdir -p $(dir $@)
-	$(WINDRES) -I res res/cue.rc -O coff -o $@.tmp
+	$(WINDRES) -DCUE_OFFICIAL_BUILD=$(OFFICIAL) -I res res/cue.rc -O coff -o $@.tmp
 	mv $@.tmp $@
 
 build/Cue/Cue.exe: $(OBJ)
@@ -33,7 +41,8 @@ build/Cue/Cue.exe: $(OBJ)
 	cp docs/ASSETS.md build/Cue/ASSETS.md
 	cp docs/SECURITY.md build/Cue/SECURITY.md
 	mkdir -p build/Cue/sources && cp res/sources-README.txt build/Cue/sources/README.txt
-	cp LICENSE COPYRIGHT.md build/Cue/
+	cp LICENSE COPYRIGHT.md NOTICE.md docs/BRANDING.md docs/VALIDATION.md build/Cue/
+	mkdir -p build/Cue/docs && cp docs/*.md build/Cue/docs/
 	mkdir -p build/Cue/third_party && cp -r third_party/libmpv build/Cue/third_party/
 
 # ── installer ──────────────────────────────────────────────────────
@@ -41,6 +50,7 @@ build/Cue/Cue.exe: $(OBJ)
 SETUP_SRC = installer/setup.cpp installer/setup_ui.cpp src/ui/gfx.cpp src/ui/face.cpp src/core/release.cpp src/core/json.cpp \
             src/core/i18n.cpp src/win/ui_language.cpp
 SETUP_OBJ = $(patsubst %.cpp,build/setup/obj/%.o,$(SETUP_SRC)) build/setup/obj/LzmaDec.o build/setup/obj/setup_res.o
+$(SETUP_OBJ): build/identity src/core/build_identity.h
 SETUP_LIBS = -ldwmapi -lole32 -lshell32 -luuid -lshcore -lgdi32 -luser32 -ladvapi32
 
 build/setup/obj/%.o: %.cpp
@@ -53,7 +63,7 @@ build/setup/obj/LzmaDec.o: installer/lzma/LzmaDec.c
 
 build/setup/obj/setup_res.o: installer/setup.rc installer/setup.manifest res/cue.ico src/core/version.h
 	@mkdir -p $(dir $@)
-	$(WINDRES) -I installer installer/setup.rc -O coff -o $@
+	$(WINDRES) -DCUE_OFFICIAL_BUILD=$(OFFICIAL) -I installer installer/setup.rc -O coff -o $@
 
 build/setup/stub.exe: $(SETUP_OBJ)
 	$(CXX) $(SETUP_OBJ) -o $@ $(LDFLAGS) $(SETUP_LIBS)

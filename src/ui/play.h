@@ -5,9 +5,11 @@
 #include <string>
 #include <vector>
 
+#include "../core/audio_mode.h"
 #include "../core/model.h"
 #include "../core/media_info.h"
 #include "anim.h"
+#include "queue_view.h"
 #include "chrome.h"
 #include "gfx.h"
 #include "scene_contrast.h"
@@ -21,6 +23,7 @@ struct PlayInput {
   double time = 0, dur = 0, volume = 100;
   bool muted = false;
   std::vector<Track> subs, audios;
+  uint64_t tracks_revision=0;  // metadata/track list changes, not playback ticks
   int64_t sid = 0, aid = 0;  // 0 = none
   bool amix = false;          // several audio tracks at once (aid is then the last single one)
   std::vector<int64_t> amix_ids;  // the tracks playing together (2 or more while amix)
@@ -46,20 +49,40 @@ struct PlayInput {
   std::string update_label;    // "check for updates", "update to 1.2", "downloading 42%"
   bool update_ready = false;   // a newer version is known: the More menu shows it too
   bool loop = false;           // repeat the file forever (music videos, loops)
+  bool loop_all = false;       // repeat the queue: after its last item, the first again
   int language = -1;           // interface language as saved: -1 automatic (follow Windows), else i18n::Lang
+  using QueueItem = QueueEntry;
+  std::vector<QueueItem> queue;
+  uint64_t queue_revision=0;
+  bool queue_active=false;
   bool has_next = false;
+  bool has_prev = false;  // an explicit queue has an entry before the playing one
   bool ended = false;          // stopped on the last frame (the controls stay in view)
+  // what this platform offers (the macOS and Linux ports have no ambient light or phone remote yet)
+  bool ambient_available = true;
+  bool remote_available = true;
+  std::string open_shortcut = "ctrl+o";  // as the platform writes it ("cmd+o" on macOS)
   uint64_t file_info_revision = 0;
+  // music: the file has a cover (the right-click menu offers both looks); the cover look is on
+  // screen (the cover can be tilted); which look the person chose; the captions under the cover
+  bool has_cover = false, cover_scene = false;
+  int music_look = 0;  // 0 cover and spectrum, 1 spectrum only
+  std::string music_title, music_artist;
+  MusicScene music_scene;  // the cover look's composition (the engine's picture)
+  bool cover_art = false;  // the scene shows a cover (the file's or Cue's tile): it tilts under the pointer
+  MusicView music_view;    // how the window frames it (all of it, tall, the cover alone); f = 0: fit
+  std::string next_title;  // music: what plays next, as it will be named (shown as the song ends)
 };
 
 enum class PA {
   TogglePause, SeekRel, SeekAbs, SeekAbsExact, Volume, ToggleMute, Fullscreen, SelectSub, SelectAudio, AudioMix,
   AddSubFile, OpenFile, CloseVideo, Style, StyleLive, StyleDefault, SubDelay, SubVisible, Placement, SubLift,
   WinMin, WinMax, WinClose, WinPin, WinDragBegin, WinDragEnd, Preview, Speed, SaveFrame, UiScale, Ambient, AmbientStrength,
-  OpenFrameFolder, OpenLinkedIn, OpenGitHub, OpenLicenses, FileInfo, ControlsFree, Update, Loop, SubEdit,
+  OpenFrameFolder, OpenLinkedIn, OpenGitHub, OpenEmail, OpenLicenses, FileInfo, ControlsFree, Update, Loop, SubEdit,
   Language,  // v: -1 automatic, else i18n::Lang
-  NextEpisode, CancelNext,
-  Remote     // the phone remote's pairing scene
+  NextEpisode, PreviousInQueue, CancelNext, QueueAdd, QueueFolder, QueuePlay, QueueRemove, QueueMove, QueueReorder, QueueClear,
+  Remote,    // the phone remote's pairing scene
+  MusicLook  // v: 0 cover and spectrum, 1 spectrum only
 };
 struct PlayAction { PA a; double v = 0; int64_t id = 0; };
 
@@ -76,7 +99,7 @@ struct Layer {
 
 class PlayView {
  public:
-  enum { L_DOCK, L_PANEL, L_TOAST, L_TIP, L_G0, L_G1, L_G2, L_HINT, L_WIN, L_FLASH, L_BACK, L_IRIS, L_COUNT };
+  enum { L_MUSIC, L_NEXT, L_DOCK, L_PANEL, L_TOAST, L_TIP, L_G0, L_G1, L_G2, L_HINT, L_WIN, L_FLASH, L_BACK, L_IRIS, L_COUNT };
   PlayInput in;
   DockPlace place;
   std::array<Layer, L_COUNT> layers;
@@ -93,10 +116,16 @@ class PlayView {
   std::vector<PlayAction> take_actions() { auto a = std::move(acts_); acts_.clear(); return a; }
 
   void mouse_move(int x, int y, double now);
+  void pointer_left();  // the pointer left the window: a tilted cover settles back
+  // music: the cover's turn (degrees) and how much of its light shows, for the shader
+  struct CoverTilt { double rx = 0, ry = 0, k = 0; };
+  CoverTilt cover_tilt() const { return {cov_rx_.x, cov_ry_.x, cov_k_}; }
+  // where the music scene's cover is on screen (the scene fills the window like a 16:9 picture)
+  Rect cover_screen_rect() const;
   void mouse_down(int x, int y, double now);
   void mouse_up(int x, int y, double now);
   void right_click(int x, int y, double now);
-  void wheel(int dir, double now);
+  void wheel(double dir, double now);
   void key(const std::string& k, bool shift, bool ctrl, double now);
   void toast(const std::string& text, const char* icon, double now, bool icon_after = false);
   // "frame saved ✓ | folder": stays a little longer, and its folder button opens where the frame went
@@ -139,11 +168,24 @@ class PlayView {
   bool win_dragging() const { return win_drag_; }  // UI must stay (scrubbing, panel, dragging...)
   void handoff_window_drag(double now); // clear gesture before Windows takes over its move loop
   void set_double_click_time(double seconds) { double_click_time_ = std::clamp(seconds, 0.1, 5.0); }
+  void cancel_queue_gesture() { cc_drag_=false;if(queue_open())queue_view_.cancel();panel_dirty_=true; }
+  bool queue_open() const { return panel_ == Panel::Queue; }
+  // Files dragged over the window while music plays: the list opens and invites the drop (and
+  // closes again if they leave without being dropped). Films keep their own drop behaviour.
+  void drag_files(bool over, double now);
+  void drag_dropped() { drop_opened_ = false; queue_view_.set_dropping(false); panel_dirty_ = true; }
+  // An action from outside the window (the taskbar's buttons), handled like the dock's own.
+  void request(PA a, double v = 0) { act(a, v); }
+  uint32_t queue_thumbnail_request() const { return queue_open()?queue_view_.thumbnail_request():0; }
+  void queue_thumbnail(uint32_t id,const std::vector<uint32_t>& pixels) { queue_view_.thumbnail(id,pixels);panel_dirty_=true; }
   bool panel_open() const { return panel_ != Panel::None; }
   bool dock_visible() const { return vis_.v > 0; }
   BlurCloud blur_cloud() const { return {dock_rect(), style_mix_ * ease_out(vis_.v) * ease_out(viewport_vis_.v) * (1 - ease_out(edit_.x))}; }
   // something of the UI is on screen or about to change (otherwise playback updates draw nothing)
   bool needs_frame() const {
+    if (!cov_rx_.settled() || !cov_ry_.settled() || (cov_k_ > 0 && !cov_hot_) || music_vis_.v != music_vis_.target) return true;
+    if (!list_k_.settled() || !music_w_motion_.settled()) return true;
+    if (next_vis_.v != (next_wanted() ? 1.0 : 0.0) || !next_drop_.settled()) return true;
     if (vis_.v > 0 || vis_.target > 0 || pvis_.v > 0 || edit_.x > 0 || edit_.target > 0 || iris_ != 0 || sub_settling_ || dragging() || pending_click_ != P_NONE) return true;
     for (auto& L : layers) if (L.dirty) return true;
     return !toast_text_.empty() || last_now_ - flash_t0_ < 0.9;
@@ -155,16 +197,16 @@ class PlayView {
   void begin_sub_drag_for_preview(double now);
 
  private:
-  enum Btn { B_NONE = 0, B_VOL, B_VOLBAR, B_REW, B_PLAY, B_FWD, B_CC, B_AUDIO, B_FS, B_MORE, B_TIMELINE, B_DOCKBG, B_SPEED, B_TIME, B_LOOP, B_COUNT };
-  enum class Panel { None, CC, Style, Audio, AudioMix, More, Speed, Context, About, FileInfo, Language };
+  enum Btn { B_NONE = 0, B_VOL, B_VOLBAR, B_REW, B_PLAY, B_FWD, B_CC, B_AUDIO, B_FS, B_MORE, B_TIMELINE, B_DOCKBG, B_SPEED, B_TIME, B_LOOP, B_QUEUE, B_NEXT, B_PREV, B_COUNT };
+  enum class Panel { None, CC, Style, Audio, AudioMix, More, Speed, Context, About, FileInfo, Language, Queue };
   enum class RK { Header, Option, Action, Submenu, Slider, Fonts, Stepper, Segmented, Hint, Separator, Links, Toggle,
-                  SpeedBar, Chips, Brand, Credit, Profile, Info, CloseHeader };
+                  SpeedBar, Chips, Brand, Credit, Profile, Info, CloseHeader, Contacts };
   enum RowId {
     R_NONE, R_SUB_TOGGLE, R_SUB_TRACK, R_ADD_SUB, R_STYLE, R_DELAY, R_BACK, R_FONTS, R_SIZE, R_TEXT, R_BG, R_OUTLINE, R_LINEGAP, R_TRACK,
     R_ASS, R_LINKS, R_AUDIO_TRACK, R_AUDIO_MIX, R_AUDIO_MIX_TRACK, R_AUDIO_MIX_ALL, R_BACK_AUDIO, R_STYLE_RESET, R_OPEN, R_CLOSE, R_SPEED, R_SPEED_OPT, R_BACK_MORE, R_UISCALE, R_AMBIENT,
     R_FRAME, R_FRAME_CLEAN, R_FS_ROW, R_AUDIO_ROW, R_AMBIENT_STR, R_SPEED_VALUE, R_SPEED_BAR, R_SPEED_CHIPS,
-    R_ABOUT, R_LINKEDIN, R_GITHUB, R_LICENSES, R_FILE_INFO, R_DISMISS, R_CONTROLS_FREE, R_UPDATE,
-    R_LANGUAGE, R_LANG_OPT, R_REMOTE
+    R_ABOUT, R_LINKEDIN, R_GITHUB, R_EMAIL, R_CONTACTS, R_LICENSES, R_FILE_INFO, R_DISMISS, R_CONTROLS_FREE, R_UPDATE,
+    R_LANGUAGE, R_LANG_OPT, R_REMOTE, R_QUEUE, R_MUSIC_LOOK
   };
   struct Row {
     RK k;
@@ -177,12 +219,20 @@ class PlayView {
     int seg = 0;
     double opt = 0;  // value carried by an option (speed)
     std::vector<std::string> segs;
+    std::vector<const char*> seg_icons;  // a small icon before each segment's words (optional)
     const char* icon = nullptr;
     // layout (panel-local physical px)
     Rect r;
+    std::string display_label;
     std::vector<Rect> parts;  // slider bar, stepper -/+, segments, links
   };
 
+  QueueView queue_view_;
+  void queue_event(QueueView::Event event,double now);
+  bool layout_queue_=false,layout_next_=false,layout_music_=false,layout_cc_=true;
+  int layout_ends_=0;  // has_prev | has_next << 1, as last drawn
+  size_t queue_count_seen_=0;
+  Fade queue_mark_{0,0,.12,.14};
   int w_ = 0, h_ = 0; double s_ = 2;
   std::vector<PlayAction> acts_;
   void act(PA a, double v = 0, int64_t id = 0) { acts_.push_back({a, v, id}); }
@@ -213,7 +263,7 @@ class PlayView {
   // moving the subtitle: the video pauses and turns grey, the controls step aside (0..1)
   Spring edit_ = Spring::rd(0.26, 1.0, 0.004);
   bool edit_resume_dock_ = false;
-  Spring rise_ = Spring::rd(0.42, 0.78, 0.02);  // dock entrance, art px (soft overshoot)
+  Spring rise_{34, 1.0, 0.01};  // dock entrance, art px (soft overshoot)
   double last_vis_target_ = 0;
   std::array<double, B_COUNT> hov_{};  // hover fade per dock button
   // magnetic hover: each icon leans (physical px) toward the cursor inside its hitbox
@@ -228,6 +278,8 @@ class PlayView {
   bool swallow_up_ = false;        // the press closed a panel: its release does nothing
   int ctx_x_ = 0, ctx_y_ = 0;      // context menu anchor
   Rect closing_rect_;              // a closing panel fades where it was
+  int contact_k_ = 0;              // About's contact icons: the one the keyboard is on
+  double queue_s_ = 2;  // the up-next panel's own scale (compacted in small windows)
   std::string flash_text_;
   int flash_icon_ = -1;            // -1 text, 0 play, 1 pause
   double flash_t0_ = -10;
@@ -284,8 +336,59 @@ class PlayView {
   int slider_row_ = -1;
   Fade pvis_{0, 0, 0.12, 0.10};
   Spring prise_ = Spring::rd(0.36, 0.8, 0.03);  // panel entrance, art px
+  // the music cover under the pointer: its turn in degrees (a soft spring, a touch of overshoot)
+  // and its light; the captions under it (title, artist, what comes next) fade with the look
+  Spring cov_rx_ = Spring::rd(0.42, 0.74, 0.02), cov_ry_ = Spring::rd(0.42, 0.74, 0.02);
+  double cov_k_ = 0;
+  bool cov_hot_ = false;
+  void cover_hover(int x, int y);
+  bool next_wanted() const {
+    return in.audio_only && !in.next_title.empty() && in.dur > 20 && in.dur - in.time <= 12 && !in.ended && !viewport_transition_;
+  }
+  Fade music_vis_{0, 0, 0.22, 0.18};
+  double music_dock_ = 0;    // the captions step back while the bar covers them
+  // music: "up next" at the top as the song ends: it drops in on a spring and fades
+  Fade next_vis_{0, 0, 0.20, 0.24};
+  Spring next_drop_ = Spring::rd(0.42, 0.78, 0.05);
+  Canvas next_base_;
+  uint64_t next_gen_ = 0;
+  std::string next_key_;
+  Canvas music_base_;
+  uint64_t music_gen_ = 0;
+  std::string music_key_;
+  std::string music_song_;  // title and artist last drawn: a new song's words come in afresh
+  void render_music();
+  // music: "12 tracks" under the artist opens the album's list beside the cover; the captions
+  // rise to the cover's top to make room (list_k_: 0 centred on the cover, 1 at its top)
+  Rect music_link_, music_link_local_;
+  bool link_hot_ = false;
+  Spring list_k_ = Spring::rd(0.34, 0.9, 0.004);
+  bool music_list_ok() const;
+  MusicView view() const;  // the framing, or the plain fit when none was given
+  Rect scene_list_rect() const;
+  bool scene_list() const;
+  double scene_list_scale() const;
+  // music's bar is narrower than a film's; the width eases between the two
+  PolishedMotion music_w_motion_;
+  double music_w_ = 0;
+  bool music_w_init_ = false;
+  bool drop_opened_ = false;  // the list was opened by files being dragged in
   bool panel_dirty_ = true;
   Canvas panel_base_;
+
+  // Only track rows scroll; their original labels and stable IDs are retained.
+  double cc_scale_=2;
+  int cc_first_=1,cc_count_=0,cc_row_h_=36;
+  Rect cc_viewport_,cc_bar_,cc_thumb_;
+  Canvas cc_list_;
+  Spring cc_scroll_{40,1,.05};
+  bool cc_drag_=false;
+  double cc_grab_=0;
+  void layout_sub_list();
+  void render_sub_list();
+  void sub_scrollbar();
+  double cc_scroll_max() const;
+  void sub_ensure_visible(int row,bool instant=false);
 
   // subtitle drag
   bool sub_drag_ = false, sub_hover_ = false;
@@ -355,6 +458,9 @@ class PlayView {
   bool switch_on() const { return panel_ == Panel::More ? in.ambient : (in.sid != 0 && in.sub_visible); }
   void layout_rows();
   int slider_label_w() const;
+  int slider_value_w() const;
+  int seg_inset() const;
+  bool seg_inset_on_ = false;
   bool icon_grid() const;
   Rect panel_rect() const;
   int hit_panel(int x, int y, int* part) const;
@@ -376,6 +482,12 @@ class PlayView {
   double last_lift_ = -1;
   PolishedMotion subtitle_lift_;
   double wanted_subtitle_lift() const;
+  mutable bool lift_cache_valid_=false;
+  mutable SubStyle lift_style_;
+  mutable Rect lift_dock_;
+  mutable int lift_w_=0,lift_h_=0,lift_lines_=0,lift_chars_=0;
+  mutable double lift_scale_=0,lift_value_=0;
+  mutable std::vector<std::string> lift_text_;
 
   int iris_ = 0;  // 0 none, 1 covered (waiting for the picture), 2 opening
   double iris_t0_ = 0, iris_drawn_ = -1;

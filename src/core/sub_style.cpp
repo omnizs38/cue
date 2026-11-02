@@ -1,6 +1,8 @@
 #include "sub_style.h"
 
 #include <cstdio>
+#include <algorithm>
+#include <cmath>
 
 const char* const kSubFontFamily[3] = {"Cue Omni", "Cue Clean", "Cue Readable"};
 const char* const kSubFontLabel[3] = {"Omni", "Clean", "Readable"};
@@ -23,7 +25,10 @@ StyleCaps style_caps(const SubStyle& st, SubKind kind) {
   return c;
 }
 
-std::vector<PropSet> sub_style_props(const SubStyle& st, SubKind kind) {
+std::vector<PropSet> sub_style_props(const SubStyle& st, SubKind kind, double typography_scale) {
+  // Original ASS typesetting and bitmap subtitles remain authored by the file.
+  const double scale=style_caps(st,kind).size&&std::isfinite(typography_scale)
+      ?std::clamp(typography_scale,1.0,2.0):1.0;
   std::vector<PropSet> v;
   auto add = [&](std::initializer_list<const char*> names, std::string val) {
     PropSet p;
@@ -36,13 +41,16 @@ std::vector<PropSet> sub_style_props(const SubStyle& st, SubKind kind) {
   auto f = [&](double x) { std::snprintf(num, sizeof num, "%.2f", x); return std::string(num); };
   add({"sub-ass-override"}, (kind == SubKind::Ass && st.ass_mode == 0) ? "no" : "force");
   add({"sub-font"}, kSubFontFamily[st.font < 0 || st.font > 2 ? 1 : st.font]);
-  add({"sub-font-size"}, std::to_string(st.size));
+  add({"sub-font-size"}, scale==1.0?std::to_string(st.size):f(st.size*scale));
+  add({"sub-scale-by-window"},"yes");
+  add({"sub-scale-with-window"},"yes");
   add({"sub-bold"}, "no");
   add({"sub-blur"}, "0");
   // spacing follows the text size (like em-based tracking and leading): the same setting looks
   // the same at 28 or 72, and a tight negative leading never makes small lines collide
   double em = st.size / 44.0;
-  add({"sub-spacing"}, f(st.tracking * em));
+  add({"sub-spacing"}, f(st.tracking * em * scale));
+  // libass line spacing is already in physical frame pixels, unlike font metrics.
   add({"sub-line-spacing", "sub-ass-line-spacing", "ass-line-spacing"}, f(st.line_gap * em));
   add({"sub-color"}, rgba(1, 1, 1, st.text_op / 100.0));
   add({"sub-pos"}, std::to_string((int)(st.pos + 0.5)));
@@ -57,14 +65,14 @@ std::vector<PropSet> sub_style_props(const SubStyle& st, SubKind kind) {
     add({"sub-outline-size", "sub-border-size"}, "0");
     add({"sub-outline-color", "sub-border-color"}, rgba(0, 0, 0, 0));
     add({"sub-shadow-color"}, rgba(0, 0, 0, bg));
-    add({"sub-shadow-offset"}, "4");
+    add({"sub-shadow-offset"},scale==1.0?"4":f(4*scale));
   } else {
     // Transparent background: the outline is the user's call, from none to thick.
     add({"sub-border-style"}, "outline-and-shadow");
     add({"sub-back-color"}, rgba(0, 0, 0, 0));  // older mpv draws its box from this: clear it
     add({"sub-outline-color", "sub-border-color"}, rgba(0, 0, 0, 0.9 * st.text_op / 100.0));
-    add({"sub-outline-size", "sub-border-size"}, f(st.outline * 0.9));
-    add({"sub-shadow-offset"}, st.outline > 0 ? "1" : "0");
+    add({"sub-outline-size", "sub-border-size"}, f(st.outline * 0.9 * scale));
+    add({"sub-shadow-offset"}, st.outline > 0 ? f(scale) : "0");
     add({"sub-shadow-color"}, rgba(0, 0, 0, 0.45 * st.text_op / 100.0));
   }
   return v;

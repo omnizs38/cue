@@ -32,15 +32,28 @@ int main() {
   for (auto t : {"zh-Hans", "zh-CN", "zh-SG", "zh-Hans-CN", "zh-Hans-SG", "zh-Hans-HK", "ZH-cn", "zh"}) CHECK(maps(t, Lang::ZhHans));
   // Traditional Chinese is never shown Simplified
   for (auto t : {"zh-Hant", "zh-TW", "zh-HK", "zh-MO", "zh-Hant-TW", "zh-Hant-HK", "zh-Hant-CN"}) CHECK(unmapped(t));
-  for (auto t : {"de-DE", "ja-JP", "ko-KR", "it-IT", "qps-ploc", "", "-"}) CHECK(unmapped(t));
+  for (auto t : {"ko-KR", "it-IT", "qps-ploc", "", "-"}) CHECK(unmapped(t));
 
+  for(auto tag:{"ru","ru-RU","ru-BY"})CHECK(maps(tag,Lang::Ru));
+  for(auto tag:{"de","de-DE","de-AT","de-CH"})CHECK(maps(tag,Lang::De));
+  for(auto tag:{"ja","ja-JP"})CHECK(maps(tag,Lang::Ja));
+  i18n::set_language(Lang::Ru);
+  CHECK(i18n::plural(str::info_channels_n,1)=="1 канал");
+  CHECK(i18n::plural(str::info_channels_n,2)=="2 канала");
+  CHECK(i18n::plural(str::info_channels_n,5)=="5 каналов");
+  CHECK(i18n::plural(str::info_channels_n,11)=="11 каналов");
+  CHECK(i18n::plural(str::info_channels_n,21)=="21 канал");
+  CHECK(i18n::plural(str::info_channels_n,24)=="24 канала");
+  CHECK(i18n::plural(str::info_channels_n,114)=="114 каналов");
+  CHECK(i18n::plural(str::info_channels_n,1000000)=="1000000 каналов");
+  i18n::set_language(Lang::Ja);CHECK(i18n::plural(str::info_channels_n,2)=="2 チャンネル");
   // ── priority: manual > first supported Windows language (in order) > English ──
-  CHECK(i18n::resolve("auto", {"de-DE", "zh-TW", "es-AR", "en-US"}) == Lang::Es);
+  CHECK(i18n::resolve("auto", {"it-IT", "zh-TW", "es-AR", "en-US"}) == Lang::Es);
   CHECK(i18n::resolve("auto", {"fr-CA", "pt-BR"}) == Lang::Fr);
   CHECK(i18n::resolve("auto", {"pt-BR", "fr-CA"}) == Lang::PtBR);
   CHECK(i18n::resolve("auto", {"zh-TW", "zh-HK"}) == Lang::En);           // nothing supported: English
   CHECK(i18n::resolve("auto", {"zh-HK", "zh-CN"}) == Lang::ZhHans);       // keeps looking past Traditional
-  CHECK(i18n::resolve("auto", {"de-DE", "ja-JP"}) == Lang::En);
+  CHECK(i18n::resolve("auto", {"de-DE", "ja-JP"}) == Lang::De);
   CHECK(i18n::resolve("auto", {}) == Lang::En);
   CHECK(i18n::resolve("fr", {"pt-BR", "en-US"}) == Lang::Fr);             // a manual choice wins
   CHECK(i18n::resolve("zh-Hans", {"zh-TW"}) == Lang::ZhHans);
@@ -52,12 +65,12 @@ int main() {
 
   // ── the choice is saved, survives a restart and an update ──────
   auto path = std::filesystem::temp_directory_path() / "cue-i18n-test.json";
-  for (std::string pref : {"auto", "pt-BR", "en", "es", "fr", "zh-Hans"}) {
+  for (std::string pref : {"auto", "pt-BR", "en", "es", "fr", "zh-Hans", "ru", "de", "ja"}) {
     Store a; a.language = pref; a.ui_scale = 3; CHECK(a.save(path));
     Store b; CHECK(b.load(path)); CHECK(b.language == pref); CHECK(b.ui_scale == 3);
     // the next start resolves from it before Windows is consulted
     Lang want; bool manual = i18n::parse_tag(pref, want);
-    CHECK(i18n::resolve(b.language, {"de-DE", "zh-TW"}) == (manual ? want : Lang::En));
+    CHECK(i18n::resolve(b.language, {"ko-KR", "zh-TW"}) == (manual ? want : Lang::En));
   }
   {
     // a 1.0 state file (no "language"): automatic, everything else intact
@@ -189,7 +202,7 @@ int main() {
   }
 
   std::printf(failures ? "%d failures\n" : "i18n: Windows UI language order, Simplified/Traditional Chinese, manual priority, "
-              "English fallback, persistence across restart/update, 5 complete catalogs (%d keys), placeholders, plurals, "
+              "English fallback, persistence across restart/update, 8 complete catalogs (%d keys), placeholders, plurals, "
               "decimals and full glyph coverage passed\n", failures ? failures : (int)str::kCount);
   return failures ? 1 : 0;
 }

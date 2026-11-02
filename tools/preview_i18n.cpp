@@ -84,6 +84,7 @@ int main(int argc, char** argv) {
       // open the menu, then its language list (keyboard, like a person would)
       for (int i = 0; i < 1 + (int)hv.rows.size() + 1; ++i) hm.key("tab", false, now);
       hm.key("enter", false, now);
+      hm.key("tab", false, now);
       hm.key("enter", false, now);
       for (int i = 0; i < 30; ++i) { now += 1 / 60.0; hm.tick(now, 1 / 60.0); }
       hm.render(c, now); save(c, p + "home-language.png");
@@ -143,6 +144,11 @@ int main(int argc, char** argv) {
         pv.key("esc", false, false, now);
         pv.key("esc", false, false, now);
       }
+      pv.in.queue_active=true;
+      pv.in.queue={{1,"Morning light S01E02.mkv",true},{2,"Morning light S01E03.mkv",false},{3,"Evening piano.flac",false},{4,"A very long episode name - director's cut S01E04.mkv",false}};
+      pv.in.queue_revision=1;pv.changed(now);pv.key("q",false,false,now);
+      shot(pv,now,p+"play-queue.png");pv.key("esc",false,false,now);
+      pv.in.queue_active=false;pv.in.queue.clear();pv.changed(now);
       pv.toast(i18n::format(str::toast_sub_delay, {{"delay", fmt_delay(0.3)}}), nullptr, now);
       for (int i = 0; i < 10; ++i) { now += 1 / 60.0; pv.tick(now, 1 / 60.0); }
       shot(pv, now, p + "play-toast.png");

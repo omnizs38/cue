@@ -203,16 +203,30 @@ static bool reg_set(HKEY root, const std::wstring& key, const wchar_t* name, con
   return r == ERROR_SUCCESS;
 }
 
+// Two file types: video (Cue's own icon) and music (the same tile with a note, icon 2).
+// Files Windows already opens with Cue keep the type they were chosen with until chosen again.
+static const wchar_t* kVideoExts[] = {L".mkv", L".mp4", L".m4v", L".mov", L".avi", L".webm", L".wmv", L".ts", L".m2ts", L".mpg", L".mpeg", L".ogv"};
+static const wchar_t* kAudioExts[] = {L".ogg", L".oga", L".opus", L".mp3", L".m4a", L".aac", L".wav", L".flac", L".aif", L".aiff", L".wma", L".mka"};
+static const wchar_t* kVideoProg = L"Software\\Classes\\tinyoffice.Cue.video";
+static const wchar_t* kAudioProg = L"Software\\Classes\\tinyoffice.Cue.audio";
+// Settings → Default apps → Cue lists every type below with its own file type, so music
+// chosen there gets the music icon. "Open with" can only offer Cue; Windows keeps a choice made
+// earlier (on an older version) until it is made again.
+static const wchar_t* kCapabilities = L"Software\\tinyoffice\\Cue\\Capabilities";
+static const wchar_t* kMediaTypes = L"video-audio-3";  // bumped when the registration's shape changes
+
 bool register_open_with(std::string* err) {
   wchar_t exe[MAX_PATH * 4];
   GetModuleFileNameW(nullptr, exe, (DWORD)(sizeof exe / sizeof exe[0]));
   std::wstring cmd = L"\"" + std::wstring(exe) + L"\" \"%1\"";
-  const wchar_t* prog = L"Software\\Classes\\tinyoffice.Cue.video";
   // the file type's name in Explorer, in the interface language of the last registration
-  bool ok = reg_set(HKEY_CURRENT_USER, prog, nullptr, widen(tr(str::win_progid))) &&
-            reg_set(HKEY_CURRENT_USER, std::wstring(prog) + L"\\Application", L"ApplicationName", L"Cue") &&
-            reg_set(HKEY_CURRENT_USER, std::wstring(prog) + L"\\DefaultIcon", nullptr, std::wstring(exe) + L",0") &&
-            reg_set(HKEY_CURRENT_USER, std::wstring(prog) + L"\\shell\\open\\command", nullptr, cmd);
+  auto prog_set = [&](const wchar_t* prog, str::Id name, const wchar_t* icon) {
+    return reg_set(HKEY_CURRENT_USER, prog, nullptr, widen(tr(name))) &&
+           reg_set(HKEY_CURRENT_USER, std::wstring(prog) + L"\\Application", L"ApplicationName", L"Cue") &&
+           reg_set(HKEY_CURRENT_USER, std::wstring(prog) + L"\\DefaultIcon", nullptr, std::wstring(exe) + icon) &&
+           reg_set(HKEY_CURRENT_USER, std::wstring(prog) + L"\\shell\\open\\command", nullptr, cmd);
+  };
+  bool ok = prog_set(kVideoProg, str::win_progid, L",0") && prog_set(kAudioProg, str::win_progid_audio, L",-2");
   std::wstring app = L"Software\\Classes\\Applications\\Cue.exe";
   ok = ok && reg_set(HKEY_CURRENT_USER, app + L"\\shell\\open\\command", nullptr, cmd) &&
        reg_set(HKEY_CURRENT_USER, app, L"FriendlyAppName", L"Cue");
@@ -241,16 +255,24 @@ bool register_open_with(std::string* err) {
     reg_set(HKEY_CURRENT_USER, legacy + L"\\DefaultIcon", nullptr, std::wstring(exe) + L",0");
     reg_set(HKEY_CURRENT_USER, legacy + L"\\shell\\open\\command", nullptr, cmd);
   }
-  const wchar_t* exts[] = {L".mkv", L".mp4", L".m4v", L".mov", L".avi", L".webm", L".wmv", L".ts", L".m2ts", L".mpg", L".mpeg", L".ogv",
-                         L".ogg", L".oga", L".opus", L".mp3", L".m4a", L".aac", L".wav", L".flac", L".aif", L".aiff", L".wma", L".mka"};
   const std::wstring empty_value;
-  for (auto e : exts) {
+  auto offer = [&](const wchar_t* e, const wchar_t* mine, const wchar_t* other) {
     std::wstring owp = std::wstring(L"Software\\Classes\\") + e + L"\\OpenWithProgids";
     RegDeleteKeyValueW(HKEY_CURRENT_USER, owp.c_str(), L"tinyoffice.Player.video");
-    ok = ok && reg_set(HKEY_CURRENT_USER, owp, L"tinyoffice.Cue.video", empty_value);
+    RegDeleteKeyValueW(HKEY_CURRENT_USER, owp.c_str(), other);  // one Cue in "Open with", never two
+    ok = ok && reg_set(HKEY_CURRENT_USER, owp, mine, empty_value);
     ok = ok && reg_set(HKEY_CURRENT_USER, app + L"\\SupportedTypes", e, empty_value);
-  }
-  if (ok) ok = reg_set(HKEY_CURRENT_USER, app, L"CueMediaTypes", L"video-audio-1");
+  };
+  for (auto e : kVideoExts) offer(e, L"tinyoffice.Cue.video", L"tinyoffice.Cue.audio");
+  for (auto e : kAudioExts) offer(e, L"tinyoffice.Cue.audio", L"tinyoffice.Cue.video");
+  const std::wstring caps = kCapabilities;
+  ok = ok && reg_set(HKEY_CURRENT_USER, caps, L"ApplicationName", L"Cue") &&
+       reg_set(HKEY_CURRENT_USER, caps, L"ApplicationDescription", widen(tr(str::win_progid))) &&
+       reg_set(HKEY_CURRENT_USER, caps, L"ApplicationIcon", std::wstring(exe) + L",0");
+  for (auto e : kVideoExts) ok = ok && reg_set(HKEY_CURRENT_USER, caps + L"\\FileAssociations", e, L"tinyoffice.Cue.video");
+  for (auto e : kAudioExts) ok = ok && reg_set(HKEY_CURRENT_USER, caps + L"\\FileAssociations", e, L"tinyoffice.Cue.audio");
+  ok = ok && reg_set(HKEY_CURRENT_USER, L"Software\\RegisteredApplications", L"Cue", caps);
+  if (ok) ok = reg_set(HKEY_CURRENT_USER, app, L"CueMediaTypes", kMediaTypes);
   SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
   if (!ok && err) *err = "register failed";  // log only
   return ok;
@@ -260,7 +282,7 @@ void refresh_open_with() {
   // Portable updates can leave Explorer's old Player registration behind.
   // Only the main process calls this; thumbnail helpers must never register.
   const wchar_t* app = L"Software\\Classes\\Applications\\Cue.exe";
-  const wchar_t* prog = L"Software\\Classes\\tinyoffice.Cue.video";
+  const wchar_t* prog = kVideoProg;
   auto read = [](const std::wstring& key, const wchar_t* name) {
     wchar_t value[MAX_PATH * 4]{};
     DWORD bytes = sizeof value;
@@ -280,7 +302,10 @@ void refresh_open_with() {
   const std::wstring command = L"\"" + std::wstring(exe) + L"\" \"%1\"";
   if (read(app, L"FriendlyAppName") == L"Cue" &&
       read(prog, nullptr) == widen(tr(str::win_progid)) &&
-      read(app, L"CueMediaTypes") == L"video-audio-1" &&
+      read(app, L"CueMediaTypes") == kMediaTypes &&
+      read(L"Software\\RegisteredApplications", L"Cue") == kCapabilities &&
+      read(kAudioProg, nullptr) == widen(tr(str::win_progid_audio)) &&
+      read(std::wstring(kAudioProg) + L"\\shell\\open\\command", nullptr) == command &&
       read(std::wstring(app) + L"\\shell\\open\\command", nullptr) == command &&
       read(std::wstring(prog) + L"\\Application", L"ApplicationName") == L"Cue" &&
       read(std::wstring(prog) + L"\\shell\\open\\command", nullptr) == command &&
@@ -346,7 +371,9 @@ HRESULT DropTarget::DragLeave() {
 }
 HRESULT DropTarget::Drop(IDataObject* data, DWORD, POINTL, DWORD* effect) {
   *effect = DROPEFFECT_NONE;
+  dropping = true;
   if (on_leave) on_leave();
+  dropping = false;
   FORMATETC fe{CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL};
   STGMEDIUM st{};
   if (data && SUCCEEDED(data->GetData(&fe, &st))) {

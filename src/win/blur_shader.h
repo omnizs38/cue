@@ -59,6 +59,27 @@ inline constexpr const char* kBlurCloudShader = R"CUE(
 //!PARAM cue_br
 //!TYPE DYNAMIC float
 0
+//!PARAM cov_on
+//!TYPE DYNAMIC float
+0
+//!PARAM cov_x
+//!TYPE DYNAMIC float
+0.5
+//!PARAM cov_y
+//!TYPE DYNAMIC float
+0.3796
+//!PARAM cov_hw
+//!TYPE DYNAMIC float
+0.135
+//!PARAM cov_rx
+//!TYPE DYNAMIC float
+0
+//!PARAM cov_ry
+//!TYPE DYNAMIC float
+0
+//!PARAM cov_k
+//!TYPE DYNAMIC float
+0
 
 //!HOOK OUTPUT
 //!WHEN cloud_alpha 0 >
@@ -126,6 +147,47 @@ vec4 hook() {
     if(mask<.0001) return original;
     vec3 softened=CLOUD_V_tex(CLOUD_V_pos).rgb;
     return vec4(mix(original.rgb,softened*.95,mask),original.a);
+}
+
+//!HOOK OUTPUT
+//!WHEN cov_on 0 >
+//!BIND HOOKED
+//!DESC Cue music cover: a soft shadow, and the tilt and lit edge of the cover under the pointer
+// The cover is part of the picture (flat, at cov_x/cov_y, half side cov_hw of the width). Each pixel
+// looks through a camera at the cover turned by cov_rx/cov_ry about its centre; where the turned
+// cover no longer covers the flat one, the soft light around it is borrowed from just outside.
+float cov_box(vec2 q, float h, float r) {
+    vec2 d = abs(q) - vec2(h - r);
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+vec4 hook() {
+    vec2 sz = HOOKED_size;
+    vec2 c = vec2(cov_x, cov_y) * sz;
+    float h = cov_hw * sz.x;
+    vec2 q = HOOKED_pos * sz - c;
+    vec4 original = HOOKED_tex(HOOKED_pos);
+    if (max(abs(q.x), abs(q.y)) > h * 1.4) return original;
+    float k = clamp(cov_k, 0.0, 1.0);
+    float cx = cos(cov_rx), sx = sin(cov_rx), cy = cos(cov_ry), sy = sin(cov_ry);
+    vec3 e1 = vec3(cy, 0.0, -sy), e2 = vec3(sy * sx, cx, cy * sx), n = vec3(sy * cx, -sx, cy * cx);
+    float d = 4.0 * h;
+    float t = d * n.z / (n.x * q.x + n.y * q.y + n.z * d);
+    vec3 P = vec3(t * q.x, t * q.y, t * d - d);
+    vec2 uv = vec2(dot(P, e1), dot(P, e2)) / (1.0 + 0.025 * k);
+    // what lies under the cover: the light just outside the flat cover, and a soft shadow
+    float m = max(abs(q.x), abs(q.y));
+    vec2 bp = m < h + 2.0 ? c + q * ((h + 8.0) / max(m, 1.0)) : HOOKED_pos * sz;
+    vec3 bg = m < h + 2.0 ? HOOKED_tex(clamp(bp / sz, HOOKED_pt * .5, vec2(1.0) - HOOKED_pt * .5)).rgb : original.rgb;
+    vec2 so = vec2(-cov_ry * h * 0.35, h * 0.06 + cov_rx * h * 0.35);
+    float sd = cov_box(q - so, h, h * 0.02);
+    bg *= 1.0 - (0.42 + 0.12 * k) * exp(-max(sd, 0.0) / (h * 0.10));
+    float cover = clamp(0.5 - cov_box(uv, h, h * 0.02), 0.0, 1.0);
+    if (cover <= 0.0) return vec4(bg, original.a);
+    vec3 art = HOOKED_tex(clamp((c + uv) / sz, HOOKED_pt * .5, vec2(1.0) - HOOKED_pt * .5)).rgb;
+    // only the rim catches a little light while the cover is turned
+    float rim = clamp((max(abs(uv.x), abs(uv.y)) - (h - 3.0)) / 3.0, 0.0, 1.0) * 0.14 * k;
+    art = min(art + vec3(rim), vec3(1.0));
+    return vec4(mix(bg, art, cover), original.a);
 }
 
 //!HOOK OUTPUT

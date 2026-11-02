@@ -7,3 +7,5 @@ Cue's own code is licensed under the GNU General Public License, version 3 or (a
 Third-party components retain their licenses. Inter and Atkinson Hyperlegible, including renamed variants, remain under SIL OFL 1.1 with their original notices in `assets/fonts/` (`licenses/` in the Windows package). `libmpv-2.dll` and its dependencies retain their respective terms; see `third_party/libmpv/` and [component licenses](docs/LICENSES.md).
 
 According to Gabriel Benzoni, Cue Omni and the custom Omni SVGs, glyphs, and sprites were created with Claude for this project. Cue Omni uses SIL OFL 1.1; custom SVGs/glyphs/sprites use GPL-3.0-or-later. See [asset provenance](docs/ASSETS.md) for the declaration and review limits.
+
+Original-project attribution and modified distributions: [NOTICE.md](NOTICE.md) and [branding guidance](docs/BRANDING.md). These documents do not change the GPL.

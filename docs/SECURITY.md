@@ -1,6 +1,6 @@
 # Security review: 1.1.1
 
-Scope: first-party application code supplied with Cue 1.1, especially the LAN remote, file boundary, phone page and updater. This is a targeted review and hardening change, not an independent penetration test or a review of all vendored media libraries.
+Scope: first-party application code in Cue, especially the LAN remote, file boundary, phone page and updater. This is a targeted review and hardening change, not an independent penetration test or a review of all vendored media libraries.
 
 ## Threat model and changes
 
@@ -25,19 +25,13 @@ The old token requirement already prevented ordinary unauthenticated remote comm
 - Private IPv4 filtering is not proof that a device is on the same Wi-Fi: routed private/VPN networks can also reach a listening endpoint. Access still requires pairing/a remembered token.
 - Resolved-path and reparse checks restrict a remote-only attacker. A hostile local process with write access to shared directories can race path-based operations after validation. No claim of protection against a compromised Windows account is made.
 - Explorer thumbnail providers and filesystem calls can stall. Work is bounded and responses invalidated on stop/share/credential changes; blocked OS calls are not forcibly terminated.
-- The supplied libmpv/FFmpeg DLL was reused byte-for-byte. Codec vulnerabilities, native GPU performance and media-format coverage require their own review/testing.
+- The libmpv/FFmpeg DLL is unchanged. Codec vulnerabilities, native GPU performance and media-format coverage require their own review/testing.
 - The application/installer remains unsigned. SHA-256 verification is not an Authenticode publisher signature.
 
-## Validation
+## Verification
 
-- Portable test suite passed, including the existing 27,630 layout checks and the new remote security test.
-- AddressSanitizer/UndefinedBehaviorSanitizer passed for the parser/security test. LeakSanitizer was unavailable under the environment’s process restrictions.
-- 12,000 deterministic malformed HTTP/WebSocket/JSON inputs, path boundary cases, numeric ranges, token migration, rate budgets and pointer routes in portrait/landscape.
-- Browser regression: Chromium, 320×568, 375×667, 390×744, 390×844, 430×932, 844×390; home, folders, playing state, menu and six-digit pairing. The browser uses a mock player connection. Primary wheel/folder targets measured at least 44 CSS pixels; no horizontal overflow.
-- Native scene renders inspected for portrait and small landscape windows.
-- Windows x64 application and installer cross-compiled. The supplied engine DLL remains unchanged.
-
-Optional browser reproduction: install Playwright/Chromium, then `node tests/remote_browser.cjs`. `CUE_CHROMIUM_PATH` can point to an existing compatible Chromium executable. Native pairing preview: `tools/preview_remote.cpp`. Core tests: `bash tools/test.sh`.
+Current release validation is recorded in [VALIDATION.md](VALIDATION.md).
+Portable tests do not establish native GPU performance or whole-process leak freedom.
 
 ## References
 

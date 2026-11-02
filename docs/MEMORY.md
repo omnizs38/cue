@@ -1,6 +1,6 @@
 # Memory and resource lifecycle review: 1.1.1
 
-Scope: supplied Cue 1.1.1 first-party code, particularly repeated scene open/close/resize, font fallback lookups, phone browsing, and worker shutdown. This does not certify all native playback, GPU, OS shell or codec allocations.
+Scope: Cue first-party code, particularly repeated scene open/close/resize, font fallback lookups, phone browsing, and worker shutdown. This does not certify all native playback, GPU, OS shell or codec allocations.
 
 ## Findings and fixes
 
@@ -16,13 +16,9 @@ Scope: supplied Cue 1.1.1 first-party code, particularly repeated scene open/clo
 
 A 3840×2160 BGRA buffer is 31.64 MiB. The scene has both a DIB and a CPU canvas: approximately 63.28 MiB of pixel storage at that size. This is a size calculation, not a measured reduction in total process RSS. Windows/allocators may retain freed pages for reuse.
 
-## Evidence
+## Verification
 
-- **Unsupported glyph reproduction:** 65,533 distinct unsupported code points retained 65,533 additional allocations in the 1.1.1 object code. The corrected renderer retained **zero additional allocations** for the same sequence. Repeated supported CJK glyph lookups remain stable.
-- **DIB owner regression:** 5,000 resize operations keep at most one owned DIB/DC pair; allocation/DC/selection failures preserve the old valid surface; reset/destruction returns the simulated handle count to zero. The previous sequence leaves 50/50 bitmaps unfreed when the test enforces Microsoft's documented selected-object deletion contract. This test uses counted API doubles, not a measurement of the Windows GDI implementation.
-- **Chromium stress:** after 10 warm-up cycles, 100 file-browser open/load/close cycles plus 20 rapid close cycles finish with **0 blob URLs, 0 file images in the closed browser and 0 connected sound-node edges**. Forced-GC JavaScript heap: 2,380,236 -> 2,627,948 bytes (+247,712 bytes, about 242 KiB). Small browser/JIT/cache growth is not evidence of a leak; no claim of zero total retained heap is made.
-- **Layout and portable regressions:** existing tests pass, including security, frame-buffer acknowledgement, UI layouts and the added lifetime tests.
-- **Windows x64:** application and native GDI-counter test cross-compiled. The native test has not been executed here; real Windows GDI behavior, end-to-end playback memory, GPU allocations and libmpv/FFmpeg leaks remain unprofiled.
+Current release evidence: [VALIDATION.md](VALIDATION.md).
 
 ## Intentional bounded storage
 

@@ -1,4 +1,4 @@
-// Interface language: five complete catalogs compiled into the program, one stable key per text.
+// Interface language: eight complete catalogs compiled into the program, one stable key per text.
 //
 //   tr(str::home_open_file)                         "open a file" (localized)
 //   format(str::update_to, {{"version", "1.2"}})     placeholders by name, never concatenated pieces
@@ -20,8 +20,8 @@
 
 namespace i18n {
 
-enum class Lang : uint8_t { PtBR = 0, En, Es, Fr, ZhHans };
-constexpr int kLangCount = 5;
+enum class Lang : uint8_t { PtBR = 0, En, Es, Fr, ZhHans, Ru, De, Ja };
+constexpr int kLangCount = 8;
 constexpr Lang kFallback = Lang::En;
 constexpr const char* kAuto = "auto";  // the saved preference "follow Windows"
 

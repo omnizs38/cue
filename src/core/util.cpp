@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <unordered_map>
 
 std::string fmt_time(double sec, bool force_hours) {
   if (!std::isfinite(sec) || sec < 0) sec = 0;
@@ -31,6 +32,12 @@ std::string fmt_delay(double sec) {
 std::string file_name(std::string_view p) {
   size_t k = p.find_last_of("/\\");
   return std::string(k == std::string_view::npos ? p : p.substr(k + 1));
+}
+
+std::string file_stem(std::string_view p) {
+  std::string n = file_name(p);
+  size_t d = n.rfind('.');
+  return d == std::string::npos || d == 0 ? n : n.substr(0, d);
 }
 
 std::string ext_lower(std::string_view p) {
@@ -77,6 +84,10 @@ const LangName kLangs[] = {
     {"ar,ara", nullptr, str::lang_ar},                          {"he,heb", nullptr, str::lang_he},
     {"hi,hin", nullptr, str::lang_hi},                          {"el,gre,ell", nullptr, str::lang_el},
     {"th,tha", nullptr, str::lang_th},                          {"vi,vie", nullptr, str::lang_vi},
+    {"bg,bul", "Български", str::kCount}, {"hr,hrv", "Hrvatski", str::kCount},
+    {"et,est", "Eesti", str::kCount}, {"is,ice,isl", "Íslenska", str::kCount},
+    {"lt,lit", "Lietuvių", str::kCount}, {"lv,lav", "Latviešu", str::kCount},
+    {"sk,slo,slk", "Slovenčina", str::kCount}, {"sl,slv", "Slovenščina", str::kCount},
     {"id,ind", nullptr, str::lang_id},                          {"ms,may,msa", nullptr, str::lang_ms},
 };
 
@@ -113,7 +124,54 @@ bool technical(const std::string& t) {
 }
 }  // namespace
 
+namespace {
+std::string subtitle_label(const Track& t,size_t ordinal) {
+  std::string code=lower(t.lang);std::replace(code.begin(),code.end(),'_','-');
+  std::string name=lang_name(code);
+  size_t dash=code.find('-');
+  if(name.empty()&&dash!=std::string::npos)name=lang_name(code.substr(0,dash));
+  if(!name.empty()&&dash!=std::string::npos) {
+    std::string region=code.substr(dash+1);
+    for(auto& c:region)c=(char)std::toupper((unsigned char)c);
+    name+=" ("+region+")";
+  }
+  std::string title=t.title, normalized=lower(title);
+  bool useful=!title.empty()&&normalized.find("http")==std::string::npos&&normalized.find("www.")==std::string::npos;
+  for(const char* generic:{"srt","ass","ssa","pgs","sup","subrip","vobsub","hdmv_pgs_subtitle"})if(normalized==generic||normalized=="["+std::string(generic)+"]")useful=false;
+  if(normalized.starts_with("track ")||normalized.starts_with("faixa "))useful=false;
+  if(name.empty()) {
+    if(useful)name=title;
+    else if(!code.empty()&&code!="und")name=t.lang;
+    else name=i18n::format(str::track_n,{{"n",std::to_string(ordinal)}});
+  } else {
+    // Qualifiers precede long authored titles, so ellipsis cannot hide accessibility flags.
+    if(t.forced)name+=" · "+std::string(tr(str::track_forced));
+    if(t.hearing_impaired)name+=" · "+std::string(tr(str::track_sdh));
+    if(useful&&normalized!=lower(name)&&!(normalized=="sdh"&&t.hearing_impaired)&&!(normalized=="forced"&&t.forced))name+=" · "+title;
+    return name;
+  }
+  if(t.forced)name+=" · "+std::string(tr(str::track_forced));
+  if(t.hearing_impaired&&lower(name)!="sdh")name+=" · "+std::string(tr(str::track_sdh));
+  return name;
+}
+}
+std::vector<std::string> track_labels(const std::vector<Track>& tracks) {
+  std::vector<std::string> labels;labels.reserve(tracks.size());
+  std::unordered_map<std::string,size_t> counts,seen;
+  for(size_t i=0;i<tracks.size();++i) {
+    labels.push_back(tracks[i].type=="sub"?subtitle_label(tracks[i],i+1):track_label(tracks[i],tracks));
+    ++counts[labels.back()];
+  }
+  for(auto& label:labels)if(counts[label]>1) {auto original=label;label+=" "+std::to_string(++seen[original]);}
+  return labels;
+}
+
 std::string track_label(const Track& t, const std::vector<Track>& all) {
+  if(t.type=="sub") {
+    auto labels=track_labels(all);
+    for(size_t i=0;i<all.size();++i)if(all[i].id==t.id)return labels[i];
+    return subtitle_label(t,1);
+  }
   std::string name = lang_name(t.lang);
   bool title_ok = !t.title.empty() && !technical(t.title);
   if (name.empty()) name = title_ok ? t.title : "";

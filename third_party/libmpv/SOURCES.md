@@ -1,6 +1,6 @@
 # Corresponding playback engine sources · build 1.1.4
 
-The engine was built locally from the **16 source archives** identified in `sources.json`. Original archives, notices, licenses, and the actual build recipes are provided in **Cue-1.1-Engine-Source.zip**, named for the Cue release (the same engine build as 1.0). This is an archived source package, not a moving upstream “latest” link.
+The engine was built locally from the **16 source archives** identified in `sources.json`. Original archives, notices, licenses, and the actual build recipes are provided in **Cue-1.2-Engine-Source.zip**, named for the Cue release (the same engine build as 1.0). This is an archived source package, not a moving upstream “latest” link.
 
 | Item | Value |
 |---|---|
@@ -15,11 +15,11 @@ Components: mpv, FFmpeg, libplacebo, libass, HarfBuzz, FriBidi, FreeType, dav1d,
 
 Publish the Windows package, Cue source, and matching engine source ZIP together. Keep a clear source link beside the application download, preserve notices, and allow replacement of the DLL with API-compatible modified versions.
 
-For Cue 1.1, the installer links to these large archives rather than bundling them:
-[release v1.1](https://github.com/tinypeep/cue/releases/tag/v1.1) → GitHub's **Source code (zip)** and **Cue-1.1-Engine-Source.zip**. Installed `sources/README.txt` contains that address; the license reader can open the folder.
+For Cue 1.2, the installer links to these large archives rather than bundling them:
+[release v1.2](https://github.com/tinypeep/cue/releases/tag/v1.2) → GitHub's **Source code (zip)** and **Cue-1.2-Engine-Source.zip**. Installed `sources/README.txt` contains that address; the license reader can open the folder.
 
-## Recorded verification
+## Verification
 
-The supplied engine review checked SHA256 hashes, API exports, DLL imports, codec/filter configuration, compilation, and portable tests. Import tables showed no external runtime dependencies beyond Windows DLLs. The author confirmed build 1.1.4 working on Windows. That local engine review was static/portable; Wine was unavailable in that review environment. Later app-level Wine checks are recorded separately in the release notes.
-
-This record covers the engine, not the originality of Omni visual assets.
+`sources.json` identifies the corresponding engine inputs. Compare the packaged
+DLL and archive hashes with the manifest when reproducing a release. Engine
+sources and notices are separate from application and visual-asset authorship.

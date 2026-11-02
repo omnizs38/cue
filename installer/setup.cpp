@@ -410,7 +410,7 @@ void install(Job& job) {
   }
   reg_set(HKEY_CURRENT_USER, kUninstallKey, L"DisplayName", L"Cue");
   reg_set(HKEY_CURRENT_USER, kUninstallKey, L"DisplayVersion", widen(CUE_VERSION));
-  reg_set(HKEY_CURRENT_USER, kUninstallKey, L"Publisher", L".tinypeep");
+  reg_set(HKEY_CURRENT_USER, kUninstallKey, L"Publisher", widen(CUE_DISTRIBUTOR));
   reg_set(HKEY_CURRENT_USER, kUninstallKey, L"DisplayIcon", exe + L",0");
   reg_set(HKEY_CURRENT_USER, kUninstallKey, L"InstallLocation", job.dir);
   reg_set(HKEY_CURRENT_USER, kUninstallKey, L"UninstallString", un);
@@ -465,10 +465,13 @@ void uninstall(Job& job) {
   RegDeleteTreeW(HKEY_CURRENT_USER, kUninstallKey);
   RegDeleteTreeW(HKEY_CURRENT_USER, kAppPathKey);
   RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\tinyoffice.Cue.video");
+  RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\tinyoffice.Cue.audio");
   RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\Classes\\Applications\\Cue.exe");
+  RegDeleteTreeW(HKEY_CURRENT_USER, L"Software\\tinyoffice\\Cue");  // Default apps capabilities
+  RegDeleteKeyValueW(HKEY_CURRENT_USER, L"Software\\RegisteredApplications", L"Cue");
   for (auto e : kMediaExts)
-    RegDeleteKeyValueW(HKEY_CURRENT_USER, (std::wstring(L"Software\\Classes\\") + e + L"\\OpenWithProgids").c_str(),
-                       L"tinyoffice.Cue.video");
+    for (const wchar_t* prog : {L"tinyoffice.Cue.video", L"tinyoffice.Cue.audio"})
+      RegDeleteKeyValueW(HKEY_CURRENT_USER, (std::wstring(L"Software\\Classes\\") + e + L"\\OpenWithProgids").c_str(), prog);
   // the subtitle fonts Cue installed for this user
   std::wstring fonts = known_folder(FOLDERID_LocalAppData) + L"\\Microsoft\\Windows\\Fonts";
   const wchar_t* files_f[3] = {L"CueOmni.ttf", L"CueClean.ttf", L"CueReadable.ttf"};

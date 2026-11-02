@@ -1,3 +1,4 @@
+#include "../core/update_temp.h"
 #include "updater.h"
 
 #include <bcrypt.h>
@@ -153,6 +154,7 @@ DWORD WINAPI download_main(void* p) {
   HANDLE f = dir.empty() || rel.sha256.empty() ? INVALID_HANDLE_VALUE :
       CreateFileW(part.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
   auto fail = [&](const std::string& why) {
+    if(!dir.empty()) {DeleteFileW(part.c_str());RemoveDirectoryW(dir.c_str());}
     auto* m = new UpdateMsg;
     m->kind = UpdateMsg::Failed;
     m->manual = true;
@@ -238,4 +240,45 @@ bool update_launch_installer(const std::wstring& installer, const std::wstring& 
   CloseHandle(pi.hThread);
   CloseHandle(pi.hProcess);
   return true;
+}
+
+namespace {
+DWORD WINAPI cleanup_updates(void*) {
+  wchar_t temp[MAX_PATH+1]{};
+  DWORD length=GetTempPathW(MAX_PATH,temp);
+  if(!length||length>=MAX_PATH)return 0;
+  std::wstring root=temp;
+  FILETIME now{};GetSystemTimeAsFileTime(&now);
+  ULARGE_INTEGER current;current.LowPart=now.dwLowDateTime;current.HighPart=now.dwHighDateTime;
+  constexpr uint64_t age=7ull*24*3600*10000000;
+  WIN32_FIND_DATAW dir{};
+  HANDLE dirs=FindFirstFileW((root+L"Cue-update-*").c_str(),&dir);
+  if(dirs==INVALID_HANDLE_VALUE)return 0;
+  unsigned visited=0;
+  do {
+    if(++visited>64)break;
+    if(!(dir.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)||(dir.dwFileAttributes&FILE_ATTRIBUTE_REPARSE_POINT)||!update_temp_directory_name(dir.cFileName))continue;
+    ULARGE_INTEGER changed;changed.LowPart=dir.ftLastWriteTime.dwLowDateTime;changed.HighPart=dir.ftLastWriteTime.dwHighDateTime;
+    if(current.QuadPart<=changed.QuadPart||current.QuadPart-changed.QuadPart<age)continue;
+    const std::wstring folder=root+dir.cFileName;
+    WIN32_FIND_DATAW entry{};
+    HANDLE files=FindFirstFileW((folder+L"\\*").c_str(),&entry);
+    if(files!=INVALID_HANDLE_VALUE) {
+      unsigned seen=0;
+      do {
+        if(++seen>16)break;
+        if(entry.dwFileAttributes&(FILE_ATTRIBUTE_DIRECTORY|FILE_ATTRIBUTE_REPARSE_POINT))continue;
+        std::wstring name=entry.cFileName;
+        if(name.ends_with(L".exe")||name.ends_with(L".exe.part"))DeleteFileW((folder+L"\\"+name).c_str());
+      }while(FindNextFileW(files,&entry));
+      FindClose(files);
+    }
+    RemoveDirectoryW(folder.c_str()); // only succeeds if empty
+  }while(FindNextFileW(dirs,&dir));
+  FindClose(dirs);return 0;
+}
+}
+void update_cleanup_async() {
+  HANDLE worker=CreateThread(nullptr,0,cleanup_updates,nullptr,CREATE_SUSPENDED,nullptr);
+  if(worker){SetThreadPriority(worker,THREAD_PRIORITY_BELOW_NORMAL);ResumeThread(worker);CloseHandle(worker);}
 }

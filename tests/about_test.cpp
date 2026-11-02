@@ -1,4 +1,6 @@
+#define private public
 #include "../src/ui/play.h"
+#undef private
 #include <cassert>
 #include <cstdio>
 
@@ -24,19 +26,27 @@ int main() {
     assert(std::abs(panel.y * 2 + panel.c.h - h) <= 1);
     p.take_actions();
     // Static credits are skipped by keyboard navigation. The name opens LinkedIn.
-    for (PA expected : {PA::OpenLinkedIn, PA::OpenLinkedIn, PA::OpenGitHub}) {
-      p.key("down", false, false, t); p.key("enter", false, false, t);
+    // The name opens LinkedIn; the contact row is one stop whose icons the arrows walk.
+    p.key("down", false, false, t); p.key("enter", false, false, t);
+    auto first = p.take_actions(); assert(first.size() == 1 && first[0].a == PA::OpenLinkedIn);
+    p.key("down", false, false, t);
+    for (PA expected : {PA::OpenLinkedIn, PA::OpenGitHub, PA::OpenEmail}) {
+      p.key("enter", false, false, t);
       auto actions = p.take_actions();
       assert(actions.size() == 1 && actions[0].a == expected);
+      p.key("right", false, false, t);
     }
+    const PlayView::Row* contacts = nullptr;
+    for (auto& r : p.rows_) if (r.k == PlayView::RK::Contacts) contacts = &r;
+    assert(contacts && contacts->parts.size() == 3);
     for (int i = 0; i < 3; ++i) {
-      int x = panel.x + panel.c.w / 2;
-      int y = panel.y + (int)std::lround((i == 0 ? 89 : i == 1 ? 114 : 134) * scale);
+      const Rect& cell = contacts->parts[i];
+      int x = panel.x + cell.cx(), y = panel.y + cell.y + cell.h / 2;
       p.mouse_move(x, y, t);
       assert(p.cursor_kind() == 1);
       p.mouse_down(x, y, t); p.mouse_up(x, y, t);
       auto actions = p.take_actions();
-      assert(actions.size() == 1 && actions[0].a == (i == 2 ? PA::OpenGitHub : PA::OpenLinkedIn));
+      assert(actions.size() == 1 && actions[0].a == (i == 0 ? PA::OpenLinkedIn : i == 1 ? PA::OpenGitHub : PA::OpenEmail));
     }
     assert(!p.in.paused);
     for (int i = 0; i < 8; ++i) p.key("down", false, false, t);

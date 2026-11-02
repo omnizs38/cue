@@ -1,7 +1,7 @@
 // "Saiu do forno": shown once to people who updated, over the home, before anything else.
-// Cue's eyes with popcorn popping behind the heading, the version on a pill, then what arrived,
-// one animated pixel icon and two short lines each. "experimentar" goes straight to the new
-// thing; "continuar" (or Esc) to the home. Same pixel language as the welcome screens.
+// Cue's eyes with popcorn popping behind the heading, the version on a pill, then what arrived:
+// the headline on a card, then the rest, one animated pixel icon and a short text each.
+// One button, "continuar" (Enter or Esc too), goes to the home.
 #pragma once
 #include <string>
 #include <vector>
@@ -11,7 +11,7 @@
 #include "gfx.h"
 #include "scene_view.h"
 
-enum class NewsAct { None = 0, Continue = 1, Try = 2 };
+enum class NewsAct { None = 0, Continue = 1 };
 
 struct NewsView : SceneView {
   int w = 0, h = 0;
@@ -35,18 +35,18 @@ struct NewsView : SceneView {
   bool draggable(int x, int y) const override { return hit(x, y) < 0; }
 
  private:
-  enum : int { kContinue = 0, kTry = 1 };
+  enum : int { kContinue = 0 };
   Face face_;
   Rng rng_{11};
   double open_t0_ = -10, close_t0_ = -1, next_pop_ = 0;
   int hover_ = -1, focus_ = -1;
   bool kb_ = false;
-  double hov_[2] = {0, 0};
+  double hov_[1] = {0};
   bool overflow_ = false;
   int cols_ = 2;
   // layout, physical px
   int eye_y_ = 0, head_y_ = 0, line_y_ = 0;
-  Rect buttons_[2];
+  Rect buttons_[1];
   std::vector<Rect> items_;
   std::vector<std::vector<std::string>> lines_;  // each item's description, wrapped
   struct Kernel { double x, y, vx, vy, t0; int spin; };

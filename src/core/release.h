@@ -1,6 +1,6 @@
 // Updates from GitHub Releases: no server of our own.
 // The check reads https://api.github.com/repos/<owner>/<repo>/releases/latest at most every
-// 15 days (or when asked), compares versions and picks the installer asset. Portable: the
+// 3 days (or when asked), compares versions and picks the installer asset. Portable: the
 // network and file parts live in src/win/updater.cpp.
 #pragma once
 #include <cstdint>
@@ -16,7 +16,7 @@ struct ReleaseInfo {
   int64_t size = 0;
 };
 
-constexpr int64_t kUpdateEvery = 15 * 24 * 3600;  // seconds between automatic checks
+constexpr int64_t kUpdateEvery = 3 * 24 * 3600;  // seconds between automatic checks
 
 // -1, 0, 1. Numeric parts compare as numbers ("1.10" > "1.9"); a leading v is ignored;
 // a pre-release suffix ("1.2.0-beta") sorts before the release itself.

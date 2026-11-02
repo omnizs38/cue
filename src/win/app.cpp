@@ -1,4 +1,5 @@
 #include "app.h"
+#include "../core/subtitle_geometry.h"
 #include "../core/file_io.h"
 #include "single_instance.h"
 
@@ -23,6 +24,7 @@
 
 #include "../core/sub_style.h"
 #include "../core/util.h"
+#include "../core/recents_view.h"
 #include "../core/window_policy.h"
 #include "../core/resize_hit.h"
 #include "../core/blur_geometry.h"
@@ -65,6 +67,9 @@ constexpr uint64_t kHookLoad = 200, kHookPreloaded = 201, kHookUnload = 202;
 
 // Every key the player reacts to is routed back to us; nothing of mpv's own bindings remains.
 const char* kBindings[][2] = {
+    {"HOME","home"},{"END","end"},{"PGUP","pageup"},{"PGDWN","pagedown"},
+    {"q","q"},{"Q","q"},{"DEL","delete"},{"Ctrl+UP","c_up"},{"Ctrl+DOWN","c_down"},
+    {"Ctrl+Shift+o","cs_o"},{"Ctrl+Shift+O","cs_o"},
     {"SPACE", "space"},          {"LEFT", "left"},       {"RIGHT", "right"},           {"UP", "up"},
     {"DOWN", "down"},            {"Shift+LEFT", "s_left"}, {"Shift+RIGHT", "s_right"}, {"ENTER", "enter"},
     {"KP_ENTER", "enter"},       {"ESC", "esc"},         {"TAB", "tab"},               {"Shift+TAB", "s_tab"},
@@ -104,6 +109,12 @@ void App::log(const std::string& msg) {
   static std::ofstream f;
   std::lock_guard<std::mutex> lock(mu);
   if (!f.is_open()) f.open(data_dir_ / "cue.log", std::ios::app);
+  if(f.tellp()>1024*1024) {
+    f.close();std::error_code ec;
+    std::filesystem::remove(data_dir_/"cue.log.1",ec);
+    std::filesystem::rename(data_dir_/"cue.log",data_dir_/"cue.log.1",ec);
+    f.open(data_dir_/"cue.log",std::ios::trunc);
+  }
   std::time_t t = std::time(nullptr);
   char b[32];
   std::tm tmv{};
@@ -131,6 +142,7 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   apply_language(false);     // the saved choice, or Windows' display languages (read once)
   play_.in.controls_free = store_.controls_free;
   play_.in.loop = store_.loop;
+  play_.in.loop_all = store_.loop_all;
   play_.in.ui_scale = store_.ui_scale;
   play_.in.ambient = store_.ambient;
   play_.in.ambient_strength = store_.ambient_strength;
@@ -244,16 +256,21 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
 
   drop_ = new DropTarget(hwnd_);
   drop_->on_enter = [this](bool ok, POINT p) {
+    if (ok && mode_ == Mode::Play) { play_.drag_files(true, now()); ensure_anim(); return; }  // music: the list invites the drop
     if (!ok || mode_ != Mode::Home || onboarding_) return;
     home_.drag_over(p.x, p.y, now());
     set_edge_highlight(true);
     ensure_anim();
   };
   drop_->on_over = [this](POINT p) { if (mode_ == Mode::Home && !onboarding_) { home_.drag_over(p.x, p.y, now()); ensure_anim(); } };
-  drop_->on_leave = [this]() { home_.drag_leave(now()); set_edge_highlight(false); ensure_anim(); };
+  drop_->on_leave = [this]() {
+    if (mode_ == Mode::Play && !drop_->dropping) play_.drag_files(false, now());  // a drop keeps the list open
+    home_.drag_leave(now()); set_edge_highlight(false); ensure_anim();
+  };
   drop_->on_drop = [this](const std::vector<std::string>& f) {
     // a video dropped on the home gets eaten on its way in
     if (mode_ == Mode::Home) for (auto& x : f) if (!is_subtitle_path(x)) { swallow_next_ = true; break; }
+    if (mode_ == Mode::Play) play_.drag_dropped();  // the list stays open to show what came in
     handle_files(f);
     swallow_next_ = false;
   };
@@ -285,9 +302,8 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
     scene_paused_ = false;
   };
   news_host_.create(inst);
-  news_host_.on_action = [this](SceneAct a) {
+  news_host_.on_action = [this](SceneAct) {
     news_host_.close(news_host_.now());
-    if (a.a == (int)NewsAct::Try) open_remote_scene();
   };
   news_host_.on_closed = [this]() { ensure_anim(); };
 
@@ -569,8 +585,8 @@ void App::start_maintenance() {
     if (SUCCEEDED(com)) CoUninitialize();
     return 0;
   }, this, 0, nullptr);
-  if (th) { maintenance_started_ = true; CloseHandle(th); }
-  // after the start has settled: at most one quiet look at GitHub every 15 days
+  if (th) { maintenance_started_ = true; CloseHandle(th); update_cleanup_async(); }
+  // after the start has settled: at most one quiet look at GitHub every 3 days
   if (update_due((int64_t)std::time(nullptr), store_.update_checked)) check_updates(false);
 }
 
@@ -624,7 +640,11 @@ void App::show_update_state() {
 }
 
 void App::check_updates(bool manual) {
-  if (upd_ == Upd::Checking || upd_ == Upd::Downloading || upd_ == Upd::Launching) return;
+  if(!CUE_OFFICIAL_BUILD) {if(manual)say(tr(str::update_unofficial));return;}
+  if(!manual&&update_auto_attempted_)return;
+  if (update_check_pending_ || upd_ == Upd::Checking || upd_ == Upd::Downloading || upd_ == Upd::Launching) return;
+  update_check_pending_=true;
+  if(!manual)update_auto_attempted_=true;
   upd_manual_ = manual;
   Upd before = upd_;
   upd_ = Upd::Checking;
@@ -635,6 +655,8 @@ void App::check_updates(bool manual) {
 }
 
 void App::start_update() {
+  if(!CUE_OFFICIAL_BUILD) {say(tr(str::update_unofficial));return;}
+  if(update_check_pending_) {upd_install_after_check_=true;return;}
   if (upd_ == Upd::Downloading || upd_ == Upd::Launching) return;
   if (upd_rel_.asset_url.empty()) {  // only the version is known: ask GitHub for the file first
     upd_install_after_check_ = true;
@@ -650,6 +672,7 @@ void App::start_update() {
 }
 
 void App::on_update(UpdateMsg* m) {
+  if(m->kind==UpdateMsg::Checked||m->kind==UpdateMsg::Failed)update_check_pending_=false;
   switch (m->kind) {
     case UpdateMsg::Checked: {
       store_.update_checked = (int64_t)std::time(nullptr);
@@ -685,6 +708,8 @@ void App::on_update(UpdateMsg* m) {
         PostMessageW(hwnd_, WM_CLOSE, 0, 0);  // it waits for us to close, then installs and reopens Cue
       } else {
         upd_ = Upd::Available;
+        DeleteFileW(m->file.c_str());
+        RemoveDirectoryW(std::filesystem::path(m->file).parent_path().c_str());
         say(tr(str::update_launch_failed));
       }
       break;
@@ -748,7 +773,7 @@ void App::drain_mpv() {
       case MPV_EVENT_PROPERTY_CHANGE:
         on_property(e->reply_userdata, (mpv_event_property*)e->data);
         // Keep the clock current, but a hidden toolbar needs no text/layout work.
-        touched |= e->reply_userdata != O_TIME || (!IsIconic(hwnd_) && play_.needs_frame());
+        touched |= e->reply_userdata != O_TIME || (!hidden_now() && play_.needs_frame());
         break;
       case MPV_EVENT_CLIENT_MESSAGE: on_client_message((mpv_event_client_message*)e->data); break;
       case MPV_EVENT_FILE_LOADED: on_file_loaded(); break;
@@ -769,7 +794,8 @@ void App::drain_mpv() {
         }
         // resume naturally: the start position is set before the file even opens
         std::string p = mpv_.get_string("path");
-        double rp = store_.resume ? store_.resume_point(p) : -1;
+        // music starts from its beginning: a song is not a film to come back to halfway
+        double rp = store_.resume && !remote::is_audio_name(p) ? store_.resume_point(p) : -1;
         resume_toast_ = rp;
         if (rp > 0) mpv_.set("file-local-options/start", std::to_string(rp));
         // what the person chose for this file last time: subtitle delay and visibility
@@ -780,7 +806,12 @@ void App::drain_mpv() {
           mpv_.set("sub-visibility", "yes");
         }
         tracks_applied_ = false;
-        mpv_.set("pause", "no");  // a new file always plays, even if the last one ended paused
+        if (music_reopening_) {
+          // the same song again, for a new look: it continues where it was, and stays still
+          // until the transition lets it go
+          mpv_.set("file-local-options/start", std::to_string(std::max(0.0, audio_switch_.position)));
+          mpv_.set("pause", "yes");
+        } else mpv_.set("pause", "no");  // a new file always plays, even if the last one ended paused
         mpv_.set("loop-file", store_.loop ? "inf" : "no");
         eof_ = false;
         play_.in.ended = false;
@@ -817,6 +848,15 @@ void App::drain_mpv() {
         break;
       case MPV_EVENT_PLAYBACK_RESTART:
         audio_switch_restart();
+        if (music_intro_ && hidden_now()) { music_intro_ = false; end_snap(); }  // nobody to show it to
+        if (music_intro_ && !audio_switch_.stage) {
+          // the new song resolves from big pixels to its picture, the way a track change reads
+          music_intro_ = false;
+          audio_switch_ = {};
+          audio_switch_.stage = 5; audio_switch_.at = now();
+          audio_switch_.paused = pause_pending_ ? pause_target_ : play_.in.paused;
+          ensure_anim();
+        }
         if(!media_geometry_.shape().valid()) request_video_geometry();
         if (loaded_ && !first_frame_) {
           log("first video frame (open " + std::to_string((int)((now() - open_started_) * 1000)) + "ms)");
@@ -838,12 +878,12 @@ void App::drain_mpv() {
       for (auto& L : play_.layers) if (L.dirty) { ensure_anim(); break; }
   }
   // replies to our own async writes change nothing on screen: skip them
-  if (mode_ == Mode::Play && touched && !IsIconic(hwnd_)) {
+  if (mode_ == Mode::Play && touched && !hidden_now()) {
     if (!next_ep_.empty() && !next_cancelled_ && !store_.loop && remote_timer_ != -1 && !scene_.visible() && play_.in.dur > 10) {
       double left = play_.in.dur - play_.in.time;
       double wall_left = left / std::max(.1, play_.in.speed);
       int seconds = wall_left <= 10 ? std::max(0, (int)std::ceil(wall_left)) : -1;
-      if (seconds != next_count_) {
+      if (seconds != next_count_ && !audio_only_) {  // music says it at the top instead
         next_count_ = seconds;
         play_.next_notice(seconds < 0 ? "" : (next_auto_ ? std::string(tr(str::player_up_next)) + " " + std::to_string(seconds) + "s" : std::string(tr(str::player_up_next_manual))), now());
       }
@@ -952,6 +992,7 @@ void App::on_property(uint64_t id, const mpv_event_property* p) {
     case O_TRACKS: {
       if (p->format != MPV_FORMAT_NODE || !p->data) break;
       auto all = Mpv::parse_tracks((mpv_node*)p->data);
+      ++in.tracks_revision;
       in.subs.clear();
       in.audios.clear();
       int ext = 0;
@@ -1048,7 +1089,7 @@ void App::select_audio(int64_t id) {
   if (id <= 0) return;
   bool was_mix = amix_;
   if (was_mix || audio_switch_.stage || (audio_only_ && waveform_active_)) {
-    std::string graph = audio_only_ && waveform_active_ ? audio_waveform_graph(id) : "";
+    std::string graph = audio_only_ && waveform_active_ ? audio_waveform_graph(id, visual_cover(), music_scene_, music_look_on_) : "";
     if (!change_audio_graph(graph, id)) return;
     aid_reselect_ = id;
   } else {
@@ -1087,7 +1128,7 @@ bool App::change_audio_graph(const std::string& graph, int64_t single_track) {
     snap_subtitles(true);
   }
   a.graph = graph; a.track = single_track; a.dirty = true;
-  if (IsIconic(hwnd_)) {
+  if (hidden_now()) {
     a.dirty = false; a.stage = 3; a.at = now();
     mpv_.cmd_batch(audio_switch_commands(a.graph, a.track));
   }
@@ -1097,6 +1138,9 @@ bool App::change_audio_graph(const std::string& graph, int64_t single_track) {
 
 void App::cancel_audio_switch() {
   if (!audio_switch_.stage) return;
+  // a song being opened again is already on its way: a seek now would land on the old one
+  if (audio_switch_.reopen && (audio_switch_.stage == 3 || audio_switch_.stage == 4) && now() - audio_switch_.at < 8) return;
+  music_reopening_ = false;
   bool paused = audio_switch_.paused;
   audio_switch_ = {};
   end_snap();
@@ -1130,11 +1174,15 @@ bool App::step_audio_switch(double t) {
   } else if (a.stage == 2 && t - a.at >= .05) {
     // Give the shader's black picture a couple of presentation frames first.
     a.dirty = false; a.stage = 3; a.at = t;
-    if (!mpv_.cmd_batch(audio_switch_commands(a.graph, a.track))) {
+    if (a.reopen) {
+      music_reopening_ = true;
+      release_video_window();
+      mpv_.cmd({"loadfile", path_, "replace"});
+    } else if (!mpv_.cmd_batch(audio_switch_commands(a.graph, a.track))) {
       cancel_audio_switch();
       return false;
     }
-  } else if ((a.stage == 3 || a.stage == 4) && t - a.at > 4) {
+  } else if ((a.stage == 3 || a.stage == 4) && t - a.at > (a.reopen ? 8 : 4)) {
     // A failed decoder must not leave the picture scrambled indefinitely.
     cancel_audio_switch();
     return false;
@@ -1181,7 +1229,7 @@ void App::audio_switch_restart() {
   play_.in.time = last_time_ = pos;
   refresh_subtitles();
   mpv_.set("pause", a.paused ? "yes" : "no");
-  if (IsIconic(hwnd_)) { a.stage = 0; end_snap(); }
+  if (hidden_now()) { a.stage = 0; end_snap(); }
   ensure_anim();
 }
 
@@ -1198,7 +1246,7 @@ void App::set_audio_mix(std::vector<int64_t> ids, bool remember) {
   ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
   if (ids.size() < 2) return;
   if (!amix_ || ids != play_.in.amix_ids) {
-    std::string g = audio_mix_graph(ids, audio_only_ && waveform_active_);
+    std::string g = audio_mix_graph(ids, audio_only_ && waveform_active_, visual_cover(), music_scene_, music_look_on_);
     if (g.empty()) return;
     if (!change_audio_graph(g, 0)) return;
   }
@@ -1226,6 +1274,207 @@ void App::clear_audio_mix() {
   if (mpv_ok_) mpv_.set("lavfi-complex", "");
 }
 
+// A song opened on its own brings its album: the folder's music becomes the queue, in name
+// order, from this song. So previous and next are the album's tracks, the queue panel lists them
+// and the album plays on. A queue the person built is never replaced.
+void App::music_album_queue() {
+  if (!audio_only_ || queue_.active() || path_.empty() || path_.find("://") != std::string::npos) return;
+  std::error_code ec;
+  std::filesystem::path p = std::filesystem::absolute(std::filesystem::path(widen(path_)), ec);
+  if (ec) p = std::filesystem::path(widen(path_));
+  const std::filesystem::path dir = p.parent_path();
+  const std::string mine = narrow(p.filename().wstring());
+  std::vector<std::string> names;
+  ec.clear();
+  for (std::filesystem::directory_iterator it(dir, std::filesystem::directory_options::skip_permission_denied, ec), end;
+       !ec && it != end && names.size() < 4000; it.increment(ec)) {
+    std::error_code fe;  // one odd entry must not end the scan
+    if (!it->is_regular_file(fe) || fe) continue;
+    std::string n = narrow(it->path().filename().wstring());
+    if (remote::is_audio_name(n)) names.push_back(n);
+  }
+  if (names.size() < 2) { log("album: " + std::to_string(names.size()) + " song(s) in the folder"); return; }
+  std::sort(names.begin(), names.end(), [](const std::string& a, const std::string& b) { return remote::natural_less(a, b); });
+  std::vector<std::string> paths;
+  size_t here = SIZE_MAX;
+  for (auto& n : names) {
+    // this song is matched by its name in its folder (the path it was opened with may be
+    // spelled differently: case, slashes, a relative path), and keeps that exact path
+    bool is_mine = here == SIZE_MAX && MediaQueue::same_path(n, mine);
+    if (is_mine) here = paths.size();
+    paths.push_back(is_mine ? path_ : narrow((dir / widen(n)).wstring()));
+  }
+  if (here == SIZE_MAX) { log("album: the playing song was not found in its folder"); return; }
+  // A huge folder keeps the songs around this one.
+  size_t lim = MediaQueue::kLimit, first = paths.size() > lim ? std::min(here > lim / 2 ? here - lim / 2 : 0, paths.size() - lim) : 0;
+  std::vector<std::string> window(paths.begin() + first, paths.begin() + std::min(paths.size(), first + lim));
+  queue_.append(window);
+  if (!queue_.select_path(path_)) { queue_.clear(); return; }
+  queue_refresh();
+}
+
+// Cover and spectrum, or the spectrum alone: saved for all music, and applied to the file playing
+// now by rebuilding its picture (the sound's own branch is rebuilt with it, like a track change).
+void App::set_music_look(int look) {
+  look = std::clamp(look, 0, 1);
+  store_.music_look = look;
+  play_.in.music_look = look;
+  save_state();
+  // every song has both looks now (one without a cover wears Cue's tile)
+  if (audio_only_ && waveform_active_ && !cover_fallback_ && look != music_look_on_) reopen_music();
+  play_.changed(now());
+  ensure_anim();
+}
+
+// The cover look has two compositions: wide (cover left, words right) and tall (words under the
+// cover). When a resize ends on the other side of that line, the song is recomposed once; while
+// an edge is still held nothing changes, so a drag never touches the sound.
+// Another app's full-screen window over ours (a game, a full-screen video elsewhere) on the same
+// screen: nothing of Cue can be seen, so nothing of Cue is drawn. Minimised windows are handled
+// the same way where IsIconic is checked. Cue pinned on top stays awake.
+bool App::covered() const {
+  if (!hwnd_ || IsIconic(hwnd_)) return false;
+  BOOL cloaked = FALSE;  // another virtual desktop
+  if (SUCCEEDED(DwmGetWindowAttribute(hwnd_, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && cloaked) return true;
+  if (GetWindowLongPtrW(hwnd_, GWL_EXSTYLE) & WS_EX_TOPMOST) return false;
+  HWND fg = GetForegroundWindow();
+  if (!fg || fg == hwnd_ || GetAncestor(fg, GA_ROOTOWNER) == hwnd_) return false;
+  DWORD pid = 0;
+  GetWindowThreadProcessId(fg, &pid);
+  if (pid == GetCurrentProcessId()) return false;
+  wchar_t cls[64]{};
+  GetClassNameW(fg, cls, 63);
+  if (!wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW") || !wcscmp(cls, L"Shell_TrayWnd")) return false;
+  HMONITOR m = MonitorFromWindow(fg, MONITOR_DEFAULTTONULL);
+  if (!m || m != MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST)) return false;
+  MONITORINFO mi{sizeof mi};
+  RECT r{};
+  if (!GetMonitorInfoW(m, &mi) || !GetWindowRect(fg, &r)) return false;
+  return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top && r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+}
+
+// While hidden, the interface stops drawing, the cover's shader pass rests, and a film is
+// presented once per frame instead of at the display's rate. Playback itself never changes.
+void App::set_hidden(bool h) {
+  if (h == hidden_) return;
+  hidden_ = h;
+  log(h ? "covered by a full-screen window: drawing paused" : "in view again");
+  if (mpv_ok_ && loaded_ && !audio_only_) mpv_.set_async("file-local-options/video-sync", h ? "audio" : "display-resample");
+  update_blur_cloud();
+  if (!h) { play_.changed(now()); ensure_anim(); }
+}
+
+// The taskbar preview's buttons: previous, play/pause, next. They do what the dock's do.
+void App::taskbar_sync() {
+  // called with every poll: the words are looked up only when the language changes
+  static TaskbarButtons::State s;
+  static std::string lang;
+  s.shown = mode_ == Mode::Play && loaded_;
+  s.playing = s.shown && !play_.in.paused && !eof_;
+  s.has_prev = s.shown && play_.in.queue_active && play_.in.has_prev;
+  s.has_next = s.shown && play_.in.has_next;
+  if (std::string l = i18n::tag(i18n::language()); l != lang) {
+    lang = l;
+    s.previous = widen(tr(str::queue_previous));
+    s.next = widen(tr(str::queue_next));
+    s.play = widen(tr(str::tip_play));
+    s.pause = widen(tr(str::tip_pause));
+  }
+  taskbar_.sync(s);
+}
+
+void App::taskbar_command(UINT id) {
+  if (mode_ != Mode::Play || !loaded_) return;
+  if (id == TaskbarButtons::kPlayPause) play_.request(PA::TogglePause, play_.in.paused || eof_ ? 0 : 1);
+  else if (id == TaskbarButtons::kNext && play_.in.has_next) play_.request(PA::NextEpisode);
+  else if (id == TaskbarButtons::kPrevious && play_.in.queue_active && play_.in.has_prev) play_.request(PA::PreviousInQueue);
+  run_actions();
+  taskbar_sync();
+  ensure_anim();
+}
+
+// The window frames the scene (see MusicFrame): all of it, the cover with the words under it, or
+// the cover alone. Called on every size change, also while an edge is being dragged: the engine's
+// zoom and pan follow at once, nothing is rebuilt and the song never stops. Crossing from one
+// framing to another glides for a third of a second.
+void App::music_fit_window() {
+  if (!audio_only_ || !cover_scene_ || cw_ <= 0 || ch_ <= 0) return;
+  MusicFrame f = music_frame_for(cw_, ch_, s_);
+  if (f != music_frame_) {
+    view_from_ = play_.in.music_view.f > 0 ? play_.in.music_view : music_view_target();
+    music_frame_ = f;
+    view_t0_ = reduce_motion() ? -1 : now();
+  }
+  step_music_view(now());
+  play_.changed(now());
+  ensure_anim();
+}
+
+MusicView App::music_view_target() const {
+  int top = ch_;
+  Rect d = play_.blur_cloud().controls;
+  if (d.h > 0 && d.cy() > ch_ / 2) top = d.y;  // the bar at the bottom: the cover stays above it
+  return music_view(music_scene_, music_frame_, cw_, ch_, top);
+}
+
+bool App::step_music_view(double t) {
+  if (!audio_only_ || !cover_scene_ || cw_ <= 0 || ch_ <= 0) return false;
+  MusicView v = music_view_target();
+  bool moving = false;
+  if (view_t0_ >= 0) {
+    double k = clamp01((t - view_t0_) / 0.34);
+    v = mix_views(view_from_, v, k * k * (3 - 2 * k));
+    moving = k < 1;
+    if (!moving) view_t0_ = -1;
+  }
+  play_.in.music_view = v;
+  MpvFraming m = mpv_framing(music_scene_, v, cw_, ch_);
+  if (std::fabs(m.zoom - framing_sent_.zoom) > 1e-4 || std::fabs(m.pan_x - framing_sent_.pan_x) > 1e-5 ||
+      std::fabs(m.pan_y - framing_sent_.pan_y) > 1e-5) {
+    framing_sent_ = m;
+    char b[3][32];
+    std::snprintf(b[0], 32, "%.5f", m.zoom); std::snprintf(b[1], 32, "%.6f", m.pan_x); std::snprintf(b[2], 32, "%.6f", m.pan_y);
+    mpv_.set_async("file-local-options/video-zoom", b[0]);
+    mpv_.set_async("file-local-options/video-pan-x", b[1]);
+    mpv_.set_async("file-local-options/video-pan-y", b[2]);
+    update_blur_cloud();
+  }
+  return moving;
+}
+
+// The cover look and the spectrum (and the wide and tall compositions) are graphs built around
+// the cover's track. Swapping that graph while the song plays leaves the engine either waiting
+// for a cover picture it does not send again (silence) or ending the file (the album skips a
+// song). So the song is opened again at the same moment, behind the same pixel transition the
+// audio-track change uses: a clean start, like any song, with the new look.
+void App::reopen_music() {
+  if (!audio_only_ || !waveform_active_ || path_.empty()) return;
+  if (amix_) {  // several tracks mixed: the mix lives in the graph; rebuild it in place
+    int look = cover_fallback_ ? 1 : store_.music_look;
+    cover_art_ = look == 0;
+    music_look_on_ = look;
+    play_.in.cover_art = cover_art_;
+    mpv_.set("file-local-options/scale", cover_art_ ? "spline36" : "nearest");
+    mpv_.set("file-local-options/dscale", cover_art_ ? "mitchell" : "nearest");
+    change_audio_graph(audio_mix_graph(play_.in.amix_ids, true, visual_cover(), music_scene_, look), 0);
+    update_blur_cloud();
+    return;
+  }
+  if (!loaded_) return;  // a load is already on its way: configure_audio_mode reads the choice
+  if (fullscreen_transition_) settle_fullscreen_motion();
+  auto& a = audio_switch_;
+  if (!a.stage || a.stage == 5) {
+    // a song that has ended opens again from its start, paused, instead of ending once more
+    a.position = eof_ ? 0 : mpv_.get_double("time-pos", play_.in.time);
+    a.paused = eof_ || (pause_pending_ ? pause_target_ : play_.in.paused);
+    a.stage = 1; a.at = now(); a.retries = 0;
+    mpv_.set("pause", "yes");
+  }
+  a.reopen = true; a.graph.clear(); a.track = 0; a.dirty = true;
+  if (hidden_now() || reduce_motion()) { a.dirty = false; a.stage = 3; a.at = now(); music_reopening_ = true; release_video_window(); mpv_.cmd({"loadfile", path_, "replace"}); }
+  ensure_anim();
+}
+
 void App::configure_audio_mode() {
   mpv_node node{};
   std::vector<Track> tracks;
@@ -1239,6 +1488,12 @@ void App::configure_audio_mode() {
   audio_only_ = id > 0;
   play_.in.audio_only = audio_only_;
   waveform_active_ = false;
+  cover_vid_ = audio_only_ ? audio_cover_track(tracks) : 0;
+  cover_scene_ = cover_art_ = false;
+  play_.in.cover_art = false;
+  play_.in.has_cover = cover_vid_ > 0;
+  play_.in.music_look = store_.music_look;
+  play_.in.cover_scene = false;
   // File-local options are restored by mpv on unload: a following film must
   // never inherit the waveform, low-resolution scaler or audio clock.
   if (!audio_only_) return;
@@ -1249,11 +1504,42 @@ void App::configure_audio_mode() {
   mpv_.set("file-local-options/aid", std::to_string(id));
   play_.in.aid = id;
   if (!waveform_fallback_) {
-    mpv_.set("file-local-options/scale", "nearest");
-    mpv_.set("file-local-options/dscale", "nearest");
-    waveform_active_ = mpv_.set("file-local-options/lavfi-complex", audio_waveform_graph(id));
+    // the cover look is a picture (smooth scaling keeps the cover sharp); the spectrum alone is
+    // pixels (nearest keeps every dot square)
+    const int look = cover_fallback_ ? 1 : store_.music_look;
+    const bool cover = look == 0;
+    music_scene_ = MusicScene::wide();  // one picture; the window frames it (music_fit_window)
+    play_.in.music_scene = music_scene_;
+    framing_sent_ = {1e9, 0, 0};          // file-local: the engine starts every file unframed
+    music_frame_ = music_frame_for(cw_, ch_, s_);
+    view_t0_ = -1;
+    play_.in.music_view = {};
+    mpv_.set("file-local-options/scale", cover ? "spline36" : "nearest");
+    mpv_.set("file-local-options/dscale", cover ? "mitchell" : "nearest");
+    waveform_active_ = mpv_.set("file-local-options/lavfi-complex", audio_waveform_graph(id, cover ? cover_vid_ : 0, music_scene_, look));
     if (!waveform_active_) log("audio waveform filter unavailable; keeping audio controls");
+    cover_scene_ = waveform_active_;  // both looks are a scene: the words, the list, the framing
+    cover_art_ = waveform_active_ && cover;
+    music_look_on_ = look;
+    play_.in.cover_scene = cover_scene_;
+    play_.in.cover_art = cover_art_;
+    if (cover_scene_) step_music_view(now());  // framed for this window from its first picture
+    // the captions under the cover: the tags when there are some, else the file's own name
+    std::string title = mpv_.get_string("metadata/by-key/title"), artist = mpv_.get_string("metadata/by-key/artist"),
+                album = mpv_.get_string("metadata/by-key/album");
+    // under the title: who, and from which album, when the file says
+    if (!album.empty() && album != title) artist = artist.empty() ? album : artist + " \xc2\xb7 " + album;
+    if (title.empty()) {
+      title = file_name(path_);
+      size_t dot = title.rfind('.');
+      if (dot != std::string::npos && dot > 0) title.resize(dot);
+    }
+    play_.in.music_title = title;
+    play_.in.music_artist = artist;
   }
+  if (!audio_only_) return;
+  if (queue_.active()) find_next_episode();  // the queue was read before this file was known as music
+  else music_album_queue();
 }
 
 void App::on_client_message(const mpv_event_client_message* m) {
@@ -1270,8 +1556,9 @@ void App::on_client_message(const mpv_event_client_message* m) {
   if (name == "lbracket") name = "[";
   else if (name == "rbracket") name = "]";
   else if (name == "backslash") name = "\\";
-  bool shift = name.rfind("s_", 0) == 0, ctrl = name.rfind("c_", 0) == 0;
-  std::string k = (shift || ctrl) ? name.substr(2) : name;
+  bool both=name.rfind("cs_",0)==0;
+  bool shift = both||name.rfind("s_", 0) == 0, ctrl = both||name.rfind("c_", 0) == 0;
+  std::string k = both?name.substr(3):(shift || ctrl) ? name.substr(2) : name;
   key(k, shift, ctrl);
 }
 
@@ -1319,8 +1606,17 @@ void App::on_file_loaded() {
   ext_subs_ = 0;
   for (auto& t : play_.in.subs) if (t.external) ++ext_subs_;
   set_title(file_name(path_));
+  const bool reopened = music_reopening_;  // the same song again: the interface stays as it is
+  music_reopening_ = false;
+  // a new song while music plays: it comes in through the pixels (see PLAYBACK_RESTART)
+  music_intro_ = !reopened && audio_only_ && waveform_active_ && mode_ == Mode::Play && !reduce_motion() && !audio_switch_.stage;
+  if (music_intro_) set_snap(kSwitchDim, snap_px(1.0, ch_), 1.0);  // held in big pixels until it plays
   play_.resize(cw_, ch_, portrait_scale(s_, cw_, ch_, store_.ui_scale));
-  play_.reset(now());
+  // a song that follows a song keeps the controls (and an open list) where they are: only the
+  // picture changes, through the pixels; anything else starts the interface afresh
+  const bool song_follows = !reopened && audio_only_ && last_was_music_ && mode_ == Mode::Play;
+  last_was_music_ = audio_only_;
+  if (!reopened && !song_follows) play_.reset(now());
   // black over the picture until its first frame is ready, then the pixel iris opens it
   first_frame_ = false;
   if (audio_only_) {
@@ -1328,13 +1624,17 @@ void App::on_file_loaded() {
     first_frame_ = true;
     background_warmup_.first_frame(now());
   }
-  geom_done_ = false;   // a new file may want a different window shape
   logged_hw_ = false;
   accent_k_target_ = 0;  // neutral until this film's first colours are read
   accent_req_t_ = -10;
-  user_sized_ = false;
-  request_video_geometry();
-  play_.begin_cover();
+  if (!reopened && !song_follows) {
+    // a new file may want a different window shape; the same song again, or the next song of
+    // an album, keeps the window the person has (a small window stays small)
+    geom_done_ = false;
+    user_sized_ = false;
+    request_video_geometry();
+  }
+  if (!reopened && !song_follows) play_.begin_cover();
   play_.prepare(now());
   upload_overlays();
   if (mode_ != Mode::Play) {
@@ -1350,10 +1650,12 @@ void App::on_file_loaded() {
   apply_style();
   save_state();
   end_what(false);
-  find_next_episode();
+  queue_refresh();
   remote_publish();
   if (!audio_only_) SetTimer(hwnd_, T_THUMB, (UINT)(PlaybackWarmup::kAtmosphereDelay * 1000), nullptr);
   else KillTimer(hwnd_, T_THUMB);
+  if (hidden_ && !audio_only_) mpv_.set_async("file-local-options/video-sync", "audio");  // still covered
+  update_blur_cloud();  // the cover's shader pass follows this file's look at once
   ensure_anim();
 }
 
@@ -1382,6 +1684,16 @@ void App::try_start_iris() {
 }
 
 void App::on_end_file(const mpv_event_end_file* e) {
+  if (e && e->reason == MPV_END_FILE_REASON_ERROR && audio_only_ && waveform_active_ && cover_art_ && !cover_fallback_) {
+    // the cover look could not start: the same file again, with the spectrum alone
+    release_video_window();
+    cover_fallback_ = true;
+    cover_scene_ = cover_art_ = waveform_active_ = false;
+    loaded_ = false;
+    log("cover scene initialization failed; retrying with the spectrum");
+    mpv_.cmd({"loadfile", path_, "replace"});
+    return;
+  }
   if (e && e->reason == MPV_END_FILE_REASON_ERROR && audio_only_ && waveform_active_ && !waveform_fallback_) {
     release_video_window();
     waveform_fallback_ = true;
@@ -1410,7 +1722,7 @@ void App::on_end_file(const mpv_event_end_file* e) {
 
 void App::save_position(bool finished) {
   if (path_.empty() || !loaded_) return;
-  if (store_.set_position(path_, finished ? 0 : last_time_, play_.in.dur)) save_state();
+  if (store_.set_position(path_, finished || audio_only_ ? 0 : last_time_, play_.in.dur)) save_state();
 }
 
 void App::save_state() { SetTimer(hwnd_, T_PERSIST, 400, nullptr); }
@@ -1475,12 +1787,15 @@ void App::open(std::string path, std::vector<std::string> subs) {
   // Own the argument before clearing next_ep_ (manual, phone and EOF callers
   // can all pass that member). Empty input must not tear down current playback.
   if (path.empty()) { log("ignored empty open request"); return; }
+  if(folder_scan_&&folder_scan_->replace)folder_scan_->cancelled=true;
+  if (!queue_.select_path(path)) queue_.clear();
   next_advance_.clear();
   next_thumb_job_.reset(); next_thumb_requested_ = false; play_.set_next_details("");
   media_idle_ = false;
   news_due_ = false;
   if (news_host_.visible()) news_host_.close(news_host_.now());
   settle_fullscreen_motion();  // a fullscreen movement in progress lands at once
+  if (music_intro_) { music_intro_ = false; end_snap(); }
   thumb_stop();
   reset_atmosphere();
   if (onboarding_) {
@@ -1500,8 +1815,15 @@ void App::open(std::string path, std::vector<std::string> subs) {
   if (loaded_) save_position();
   next_cancelled_ = false; next_count_ = -1; next_auto_ = false; next_ep_.clear(); play_.in.has_next = false; KillTimer(hwnd_, T_NEXT);
   loaded_ = false; pause_pending_=false; ++pause_request_;
-  audio_only_ = waveform_active_ = waveform_fallback_ = false;
-  play_.in.audio_only = false;
+  audio_only_ = waveform_active_ = waveform_fallback_ = cover_fallback_ = cover_scene_ = cover_art_ = false;
+  cover_vid_ = 0;
+  // until the engine says, the name tells: music keeps its controls between two songs, and
+  // the picture's menu never offers to save a frame of a song
+  // a song after a song keeps the scene (and a list open beside it) until the engine has
+  // looked at the new one, so nothing jumps between them
+  const bool song_to_song = play_.in.audio_only && remote::is_audio_name(path) && mode_ == Mode::Play;
+  play_.in.audio_only = remote::is_audio_name(path);
+  if (!song_to_song) play_.in.has_cover = play_.in.cover_scene = play_.in.cover_art = false;
   play_.in.file_info.clear();
   ++play_.in.file_info_revision;
   vid_w_ = vid_h_ = vid_rot_ = 0;
@@ -1522,7 +1844,12 @@ void App::open(std::string path, std::vector<std::string> subs) {
 void App::handle_files(const std::vector<std::string>& files) {
   std::vector<std::string> media, subs;
   for (auto& f : files) (is_subtitle_path(f) ? subs : media).push_back(f);
-  if (!media.empty()) { open(media[0], subs); return; }
+  if (!media.empty()) {
+    if(mode_==Mode::Play&&play_.queue_open()) {queue_add(media);return;}
+    queue_.clear();
+    if (media.size() > 1) queue_.append(media);
+    open(media[0], subs); queue_refresh(); return;
+  }
   if (subs.empty()) return;
   if (mode_ == Mode::Play && loaded_) {
     for (auto& s : subs) mpv_.cmd({"sub-add", s, "select"});  // "CC ✓" comes from the track list
@@ -1533,6 +1860,9 @@ void App::handle_files(const std::vector<std::string>& files) {
 }
 
 void App::go_home() {
+  if (folder_scan_) folder_scan_->cancelled=true;
+  // Retain the worker slot until cancellation completes; no new scan can pile up.
+  queue_.clear(); queue_refresh();
   next_thumb_job_.reset(); next_thumb_requested_ = false; play_.set_next_details("");
   media_idle_ = false;
   next_advance_.clear();
@@ -1549,6 +1879,9 @@ void App::go_home() {
   reveal_pending_ = false;
   home_.enter(now());
   mode_ = Mode::Home;  // `loaded_` stays: the end-file event may still arrive and must save the position
+  taskbar_sync();
+  set_hidden(false);  // the home is only drawn while in view, and only checked while playing
+  last_was_music_ = false;
   remove_overlays();
   KillTimer(hwnd_, T_SAVE);
   SetTimer(hwnd_, T_POLL, 33, nullptr);  // the eyes follow the cursor on the home
@@ -1588,17 +1921,32 @@ void App::refresh_recents(bool check) {
     if (HANDLE th = CreateThread(nullptr, 0, recents_worker, job, 0, nullptr)) CloseHandle(th);
     else delete job;
   }
+  // the list reads like a person would say it: one entry per show, what is left, the episode
+  std::vector<RecentFile> files;
+  for (auto& r : store_.recents) {
+    if (missing_.count(widen(r.path))) continue;  // gone: not shown, not deleted
+    files.push_back({r.path, store_.resume_point(r.path), r.dur});
+  }
+  auto span = [](double seconds) {
+    int h = 0, m = 0;
+    split_minutes(seconds, h, m);
+    return h > 0 ? i18n::format(str::home_hours_minutes, {{"h", std::to_string(h)}, {"m", (m < 10 ? "0" : "") + std::to_string(m)}})
+                 : i18n::format(str::home_minutes, {{"m", std::to_string(m)}});
+  };
   std::vector<HomeRow> rows;
   shown_paths_.clear();
-  for (auto& r : store_.recents) {
-    if (rows.size() >= 6) break;
-    if (missing_.count(widen(r.path))) continue;  // gone: not shown, not deleted
-    shown_paths_.push_back(r.path);
+  for (auto& e : live_recents(files, 6)) {
+    shown_paths_.push_back(e.path);
     HomeRow hr;
-    hr.name = file_name(r.path);
-    double rp = store_.resume_point(r.path);
-    if (rp > 0) { hr.right = fmt_time(rp); hr.progress = r.dur > 0 ? rp / r.dur : 0; }
-    else if (r.dur > 0) hr.right = fmt_time(r.dur);
+    hr.name = e.title;
+    hr.audio = e.audio;
+    if (e.pos > 0 && e.dur > 0) {
+      hr.right = i18n::format(str::home_left, {{"time", span(std::max(0.0, e.dur - e.pos))}});
+      hr.progress = std::clamp(e.pos / e.dur, 0.0, 1.0);
+    } else if (e.dur > 0) hr.right = span(e.dur);
+    if (!e.episode.empty())
+      hr.sub = e.episodes > 1 ? e.episode + " \xc2\xb7 " + i18n::plural(str::home_episodes_n, e.episodes) : e.episode;
+    else hr.sub = tr(e.audio ? str::home_kind_audio : str::home_kind_video);
     rows.push_back(hr);
   }
   home_.eggs_seen = store_.eggs_seen;
@@ -1632,7 +1980,7 @@ void App::resolve_props() {
 
 void App::apply_style(bool live) {
   if (!mpv_ok_) return;
-  for (auto& ps : sub_style_props(play_.in.style, play_.in.kind)) {
+  for (auto& ps : sub_style_props(play_.in.style, play_.in.kind,subtitle_typography_scale(cw_,ch_))) {
     if (ps.names[0] == "sub-pos") continue;
     std::string key = ps.names[0];
     auto known = prop_name_.find(key);
@@ -1678,7 +2026,8 @@ void App::run_actions() {
   bool live_style = false;
   for (auto& a : acts) {
     switch (a.a) {
-      case PA::NextEpisode: if (!next_ep_.empty()) open(next_ep_); break;
+      case PA::NextEpisode: if(queue_.active()) {if(auto* i=queue_following())queue_play(i->id);} else if (!next_ep_.empty()) open(next_ep_); break;
+      case PA::PreviousInQueue: if(queue_.active()) {if(auto* i=queue_.previous())queue_play(i->id);} break;
       case PA::CancelNext: next_advance_.clear(); next_cancelled_ = true; next_count_ = -1; play_.next_notice("", t); break;
       case PA::TogglePause:
         if (eof_) {  // play at the end: from the beginning
@@ -1725,6 +2074,13 @@ void App::run_actions() {
         for (auto& s : f) mpv_.cmd({"sub-add", s, "select"});
         break;
       }
+      case PA::QueueAdd: { auto f=open_file_dialog(hwnd_,DialogKind::Video); if(!f.empty())queue_add(f); break; }
+      case PA::QueueFolder: { auto p=pick_folder_dialog(hwnd_); if(!p.empty())queue_folder(p,false); break; }
+      case PA::QueuePlay: queue_play((uint32_t)a.id); break;
+      case PA::QueueRemove: if(queue_.remove((uint32_t)a.id))queue_refresh(); break;
+      case PA::QueueMove: if(queue_.move((uint32_t)a.id,a.v<0?-1:1))queue_refresh(); break;
+      case PA::QueueReorder: if(queue_.move_to((uint32_t)a.id,(int)a.v))queue_refresh(); break;
+      case PA::QueueClear: queue_clear(); break;
       case PA::OpenFile: { auto f = open_file_dialog(hwnd_, DialogKind::Video); if (!f.empty()) handle_files(f); break; }
       case PA::CloseVideo: release_video_window(); save_position(); mpv_.cmd({"stop"}); break;
       case PA::StyleLive: live_style = true; break;  // coalesced: applied once per frame
@@ -1767,6 +2123,24 @@ void App::run_actions() {
       case PA::OpenFrameFolder: if (!last_frame_.empty()) show_in_folder(last_frame_); break;
       case PA::FileInfo: refresh_file_info(); break;
       case PA::OpenLicenses: open_licenses(hwnd_, exe_dir()); break;
+      case PA::OpenEmail: {
+        // No mail app registered (common with webmail): the address goes to the clipboard instead.
+        const std::wstring address = widen(CUE_CONTACT_EMAIL);
+        const std::wstring link = L"mailto:" + address + L"?subject=Cue%20" + widen(CUE_VERSION);
+        if ((INT_PTR)ShellExecuteW(hwnd_, L"open", link.c_str(), nullptr, nullptr, SW_SHOWNORMAL) > 32) break;
+        bool copied = false;
+        if (OpenClipboard(hwnd_)) {
+          EmptyClipboard();
+          size_t bytes = (address.size() + 1) * sizeof(wchar_t);
+          if (HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes)) {
+            if (void* dst = GlobalLock(mem)) { memcpy(dst, address.c_str(), bytes); GlobalUnlock(mem); }
+            if (SetClipboardData(CF_UNICODETEXT, mem)) copied = true; else GlobalFree(mem);
+          }
+          CloseClipboard();
+        }
+        play_.toast(tr(copied ? str::toast_email_copied : str::toast_link_failed), nullptr, t);
+        break;
+      }
       case PA::OpenLinkedIn:
       case PA::OpenGitHub: {
         const wchar_t* url = a.a == PA::OpenLinkedIn ? L"https://www.linkedin.com/in/gabrielbenzoni" : L"https://github.com/tinypeep";
@@ -1775,9 +2149,13 @@ void App::run_actions() {
         break;
       }
       case PA::Loop:
-        // repeat the file forever (a music video, a loop); stays on for the next files too
-        store_.loop = a.v > 0;
+        // 2: repeat the file forever (a music video, a loop); 1: repeat the queue (an album
+        // plays on from its first song); 0: off. Stays as chosen for the next files too
+        store_.loop = a.v > 1.5;
+        store_.loop_all = a.v > 0.5 && a.v < 1.5;
         play_.in.loop = store_.loop;
+        play_.in.loop_all = store_.loop_all;
+        find_next_episode();  // the list's end now leads back to its start, or not
         mpv_.set_async("loop-file", store_.loop ? "inf" : "no");
         if (store_.loop && eof_) {  // switched on at the end: it starts over right away
           eof_ = false;
@@ -1810,6 +2188,7 @@ void App::run_actions() {
         step_sub_fx(t, 0);
         ensure_anim();
         break;
+      case PA::MusicLook: set_music_look((int)a.v); break;
       case PA::ControlsFree:
         store_.controls_free = a.v > 0;
         play_.in.controls_free = store_.controls_free;
@@ -1886,9 +2265,28 @@ void App::update_blur_cloud() {
   } else if (snap_.was_on) {
     options += ",cue_on=0";
   }
+  // music with its cover: the soft shadow always, the tilt and its light under the pointer
+  bool cov = cover_art_ && mode_ == Mode::Play && first_frame_ && !hidden_;
+  if (cov) {
+    auto ct = play_.cover_tilt();
+    // the shader works in the shown part of the picture: the cover's place there
+    const MusicScene& S = music_scene_;
+    MusicView v = play_.in.music_view.f > 0 ? play_.in.music_view : music_view(S, MusicFrame::Scene, cw_, ch_, ch_);
+    MusicVisible vis = music_visible(S, v, cw_, ch_);
+    if (vis.w < 1 || vis.h < 1) vis = {0, 0, (double)std::max(1, cw_), (double)std::max(1, ch_)};
+    char f[220];
+    std::snprintf(f, sizeof f, ",cov_on=1,cov_x=%.5f,cov_y=%.5f,cov_hw=%.5f,cov_rx=%.4f,cov_ry=%.4f,cov_k=%.3f",
+                  (v.ox + (S.x + S.side / 2.0) * v.f - vis.x) / vis.w, (v.oy + (S.y + S.side / 2.0) * v.f - vis.y) / vis.h,
+                  S.side / 2.0 * v.f / vis.w,
+                  ct.rx * 3.14159265358979 / 180, ct.ry * 3.14159265358979 / 180, ct.k);
+    options += f;
+  } else if (cov_sent_) {
+    options += ",cov_on=0";
+  }
   cloud_pending_ = false;
   if (options == cloud_options_) return;
-  if ((cloud.alpha > 0 || fx) && !cloud_cadence_.ready(tn, .0015)) { cloud_pending_ = true; return; }
+  if ((cloud.alpha > 0 || fx || cov) && !cloud_cadence_.ready(tn, .0015)) { cloud_pending_ = true; return; }
+  cov_sent_ = cov;
   snap_.was_on = fx;
   cloud_cadence_.mark(tn);
   cloud_options_ = options;
@@ -1975,7 +2373,8 @@ void App::arm_animation_timer() {
 }
 
 void App::frame() {
-  if (IsIconic(hwnd_)) {
+  if(!closing_app_&&mode_==Mode::Play&&play_.queue_open()&&!queue_thumb_timer_) {queue_thumb_timer_=true;SetTimer(hwnd_,T_QUEUE,60,nullptr);}
+  if (hidden_now()) {
     // Playback continues in mpv; a minimized interface has no pixels to animate.
     anim_on_ = false;
     KillTimer(hwnd_, T_ANIM);
@@ -1995,6 +2394,7 @@ void App::frame() {
   bool moving = geom_.on;
   moving |= step_fullscreen_transition(t);
   moving |= step_audio_switch(t);
+  if (view_t0_ >= 0) moving |= step_music_view(t);
   moving |= step_sub_fx(t, dt);
   step_geom(t);
   if (mode_ == Mode::Home && onboarding_) {
@@ -2106,6 +2506,8 @@ void App::key(const std::string& k, bool shift, bool ctrl) {
   if (k == "esc" && next_count_ >= 0 && !next_cancelled_) {
     next_advance_.clear(); next_cancelled_ = true; next_count_ = -1; play_.next_notice("", t); ensure_anim(); return;
   }
+  if(mode_==Mode::Play&&play_.queue_open()&&ctrl&&k=="o") {play_.key(k,shift,ctrl,t);run_actions();ensure_anim();return;}
+  if (ctrl && shift && k == "o") { auto p=pick_folder_dialog(hwnd_); if(!p.empty())queue_folder(p,true); return; }
   if (ctrl && k == "o") {
     auto f = open_file_dialog(hwnd_, DialogKind::Video);
     if (!f.empty()) handle_files(f);
@@ -2126,6 +2528,7 @@ void App::key(const std::string& k, bool shift, bool ctrl) {
   }
   if (mode_ == Mode::Home) {
     HomeAction a = home_.key(k, shift, t);
+    if(a.a==HomeAct::OpenFolder) {auto p=pick_folder_dialog(hwnd_);if(!p.empty())queue_folder(p,true);}
     if (a.a == HomeAct::OpenDialog) { auto f = open_file_dialog(hwnd_, DialogKind::Video); if (!f.empty()) handle_files(f); }
     if (a.a == HomeAct::OpenRecent) {
       if (a.index >= 0 && a.index < (int)shown_paths_.size()) open(shown_paths_[a.index]);
@@ -2235,7 +2638,7 @@ void App::begin_fullscreen_motion() {
   fz_=FullscreenZoom{};
   fz_.entering=!fullscreen_;
   fz_.t0=now();
-  if(reduce_motion() || !mpv_ok_ || audio_only_) {
+  if(reduce_motion() || !mpv_ok_ || (audio_only_ && !waveform_active_)) {  // music has a picture: it snaps too
     perform_fullscreen_switch();
     fullscreen_changed_at_=now();
     fullscreen_stage_=9;
@@ -2281,6 +2684,7 @@ bool App::step_fullscreen_transition(double t) {
     fullscreen_transition_=false; fullscreen_stage_=0; logged_fs_stage_=-1;
     play_.end_viewport_transition(t);  // the controls rise in on their spring
     log("fullscreen snap done");
+    music_fit_window();  // a full screen of another shape may want the other composition
   };
   switch(fullscreen_stage_) {
     case 1: {  // out: pixels grow, colour goes, light goes (accelerating: pulled in)
@@ -2349,7 +2753,7 @@ void App::perform_fullscreen_switch() {
 
 }
 
-void App::set_title(const std::string& t) { SetWindowTextW(hwnd_, widen(t == "Cue" ? "Cue" : t + " · Cue").c_str()); }
+void App::set_title(const std::string& t) { SetWindowTextW(hwnd_, widen(t == "Cue" ? CUE_PRODUCT_NAME : t + " · " CUE_PRODUCT_NAME).c_str()); }
 
 // ── timeline previews ───────────────────────────────────────────────
 // Decoded by the helper process (thumbhost.cpp): its own engine at background priority, CPU only.
@@ -2616,7 +3020,8 @@ void App::save_frame(bool with_subs) {
   // frames saved back when the app was called Player stay together with the new ones
   if (GetFileAttributesW(root.c_str()) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW(old.c_str()) != INVALID_FILE_ATTRIBUTES)
     MoveFileExW(old.c_str(), root.c_str(), 0);
-  std::wstring dir = root + L"\\Frames";
+  // Frames land directly in Pictures\Cue. An older Pictures\Cue\Frames folder is left as it is.
+  std::wstring dir = root;
   SHCreateDirectoryExW(nullptr, dir.c_str(), nullptr);
   std::wstring name = widen(file_name(path_));
   size_t dot = name.find_last_of(L'.');
@@ -2893,6 +3298,12 @@ static LRESULT CALLBACK mpv_subclass(HWND h, UINT m, WPARAM w, LPARAM l) {
   }
 
   if (m == WM_SETCURSOR && LOWORD(l) == HTCLIENT && apply_cursor()) return TRUE;
+  if(m==WM_CANCELMODE||(m==WM_CAPTURECHANGED&&(GetKeyState(VK_LBUTTON)&0x8000)))
+    if(g_app_hwnd)PostMessageW(g_app_hwnd,WM_APP+13,0,0);
+  if(m==WM_MOUSEWHEEL) {
+    if(g_app_hwnd)PostMessageW(g_app_hwnd,WM_APP+14,w,l);
+    return 0; // one Win32 source preserves high-resolution wheel/touchpad deltas
+  }
   if (m == WM_MOUSEMOVE) forward_mouse(l);
   // One source of button input. In a CS_DBLCLKS window Windows replaces the
   // second DOWN with DBLCLK; route both as DOWN and suppress mpv's synthesis.
@@ -3028,7 +3439,10 @@ void App::shutdown_engine(DWORD max_ms) {
 // Leaving: what the person sees goes first (window, glow, sound), then what must be kept
 // (settings, position), then the rest is let go without waiting for anyone.
 void App::quit_now() {
-  for (UINT_PTR t : {T_ANIM, T_POLL, T_WAKE, T_SAVE, T_THUMB, T_PERSIST, T_GEOM, T_PREFETCH, T_FINE}) KillTimer(hwnd_, t);
+  next_cancelled_=true;next_advance_.clear();
+  if(folder_scan_)folder_scan_->cancelled=true;
+  folder_scan_.reset();
+  for (UINT_PTR t : {T_ANIM, T_POLL, T_WAKE, T_SAVE, T_THUMB, T_PERSIST, T_GEOM, T_PREFETCH, T_FINE, T_MAINTENANCE, T_REMOTE, T_REMOTE_START, T_NEXT, T_NEWS, T_FOLDER, T_QUEUE}) KillTimer(hwnd_, t);
   if (mpv_ok_) release_video_window();  // focus and mouse leave the engine's window first, as before
   ShowWindow(hwnd_, SW_HIDE);  // gone from the screen and the taskbar now
   ambient_.destroy();
@@ -3116,20 +3530,7 @@ LRESULT CALLBACK App::videoproc(HWND h, UINT m, WPARAM w, LPARAM l) {
       case WM_LBUTTONDBLCLK: SetCapture(h); self->mouse_button(0, true, GET_X_LPARAM(l), GET_Y_LPARAM(l)); return 0;
       case WM_LBUTTONUP: ReleaseCapture(); self->mouse_button(0, false, GET_X_LPARAM(l), GET_Y_LPARAM(l)); return 0;
       case WM_RBUTTONUP: self->mouse_button(1, true, GET_X_LPARAM(l), GET_Y_LPARAM(l)); return 0;
-      case WM_MOUSEWHEEL:
-        // ctrl + wheel: the interface size, one notch a step (a trackpad's small deltas add up)
-        if (GET_KEYSTATE_WPARAM(w) & MK_CONTROL) {
-          self->size_wheel_ += GET_WHEEL_DELTA_WPARAM(w);
-          if (std::abs(self->size_wheel_) >= WHEEL_DELTA) {
-            int dir = self->size_wheel_ > 0 ? 1 : -1;
-            self->size_wheel_ = 0;
-            int next = next_ui_size(self->store_.ui_scale, dir);
-            if (next != self->store_.ui_scale) self->set_ui_scale(next);
-            self->say_ui_size();
-          }
-          return 0;
-        }
-        self->play_.wheel(GET_WHEEL_DELTA_WPARAM(w) > 0 ? 1 : -1, self->now()); self->run_actions(); self->ensure_anim(); return 0;
+      case WM_MOUSEWHEEL:self->mouse_wheel(w,l);return 0;
     }
   }
   return DefWindowProcW(h, m, w, l);
@@ -3148,6 +3549,12 @@ static std::string vk_name(WPARAM vk) {
     case VK_VOLUME_UP: case VK_VOLUME_DOWN: case VK_VOLUME_MUTE: return "";
     case VK_MEDIA_PLAY_PAUSE: return "space";
     case VK_MEDIA_NEXT_TRACK: return "n";
+    case VK_MEDIA_PREV_TRACK: return "mediaprev";
+    case VK_HOME:return "home";
+    case VK_END:return "end";
+    case VK_PRIOR:return "pageup";
+    case VK_NEXT:return "pagedown";
+    case VK_DELETE:return "delete";
     case VK_OEM_PLUS: case VK_ADD: return "plus";
     case VK_OEM_MINUS: case VK_SUBTRACT: return "minus";
     case '0': case VK_NUMPAD0: return "zero";
@@ -3157,7 +3564,19 @@ static std::string vk_name(WPARAM vk) {
 }
 
 LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
+  if (m == taskbar_created_ && taskbar_created_) { taskbar_.created(hwnd_); taskbar_sync(); return 0; }
+  if (m == WM_COMMAND && TaskbarButtons::is_click(w)) { taskbar_command(LOWORD(w)); return 0; }
   switch (m) {
+    case WM_ACTIVATEAPP:
+      if(!w&&!closing_app_) {play_.cancel_queue_gesture();ensure_anim();}
+      if(w) set_hidden(false);  // brought forward: in view at once, not at the next check
+      break;
+    case WM_APP_QUEUE_CANCEL:
+    case WM_CANCELMODE:
+      if(!closing_app_) {play_.cancel_queue_gesture();ensure_anim();}break;
+    case WM_CAPTURECHANGED:
+      if(!closing_app_&&(GetKeyState(VK_LBUTTON)&0x8000)) {play_.cancel_queue_gesture();ensure_anim();}
+      break;
     case WM_COPYDATA: {
       if (closing_app_) return FALSE;
       std::vector<std::string> files;
@@ -3187,6 +3606,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       mouse_button(m == WM_APP_RIGHT_UP ? 1 : 0, m != WM_APP_LEFT_UP, p.x, p.y);
       return 0;
     }
+    case WM_APP_WHEEL: mouse_wheel(w,l);return 0;
     case WM_APP_MOUSE: {
       g_mouse_pending = false;
       long xy = g_mouse_xy.load();
@@ -3281,6 +3701,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       home_.set_size(cw_, ch_, s_);
       ob_.set_size(cw_, ch_, s_);
       play_.resize(cw_, ch_, portrait_scale(s_, cw_, ch_, store_.ui_scale));
+      if (mode_ == Mode::Play) music_fit_window();  // the cover follows the window, also mid-drag
       if (mode_ == Mode::Play) {
         play_.changed(now());
         apply_style(true);  // only what changed (normally just the lifted subtitle position)
@@ -3338,6 +3759,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       if (mode_ == Mode::Play) { play_.activity(now()); ensure_anim(); }
       RECT r;
       GetClientRect(hwnd_, &r);
+      if (mode_ == Mode::Play) music_fit_window();
       if (r.right != sizemove_start_.cx || r.bottom != sizemove_start_.cy) {
         user_sized_ = true;              // respected for this media
         auto_portrait_ = false;          // their shape now, not ours
@@ -3391,8 +3813,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         KillTimer(hwnd_, T_NEXT);
         auto target = next_advance_.take();
         if (!target.empty() && mode_ == Mode::Play && !next_cancelled_ && !store_.loop && remote_timer_ != -1 && next_auto_)
-          open(std::move(target));
+          {if(queue_.active()) {if(auto* i=queue_following())queue_play(i->id);} else open(std::move(target));}
       }
+      else if (w == T_QUEUE) { queue_thumbnail_tick(); }
+      else if (w == T_FOLDER) { finish_folder(); }
       else if (w == T_PREFETCH) { KillTimer(hwnd_, T_PREFETCH); thumb_next(); }
       else if (w == T_FINE) {
         KillTimer(hwnd_, T_FINE);
@@ -3402,7 +3826,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         // Start colour sampling after 1.5 s; timeline decoding still waits 3 s.
         KillTimer(hwnd_, T_THUMB);
         if (mode_ == Mode::Play && loaded_) {
-          if (atmosphere_ready() && play_.in.dur > 0 && !IsIconic(hwnd_)) thumb_request(-1);
+          if (atmosphere_ready() && play_.in.dur > 0 && !hidden_now()) thumb_request(-1);
           else SetTimer(hwnd_, T_THUMB, 250, nullptr);
         }
       }
@@ -3420,7 +3844,9 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
       }
       else if (w == T_POLL && mode_ == Mode::Play) {
-        if (!next_ep_.empty() && play_.in.dur > 0 &&
+        taskbar_sync();
+        if (++hidden_poll_ >= 15) { hidden_poll_ = 0; set_hidden(covered()); }  // twice a second
+        if (!audio_only_ && !next_ep_.empty() && play_.in.dur > 0 &&  // music's "up next" has no picture
             (play_.in.dur - play_.in.time) / std::max(.1, play_.in.speed) <= 90 && !next_thumb_requested_) {
           next_thumb_job_ = request_file_thumbnail(next_ep_);
           next_thumb_requested_ = !!next_thumb_job_;
@@ -3429,7 +3855,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
           play_.set_next_picture(next_thumb_job_->pixels,84,48);
           next_thumb_job_.reset(); ensure_anim();
         }
-        if (IsIconic(hwnd_)) {
+        if (hidden_now()) {
           if (ambient_.active()) {
             double tn = now(), dt = std::clamp(tn - atmo_t_, 0.0, 0.1);
             atmo_t_ = tn;
@@ -3462,7 +3888,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         // while paused; spatial interpolation continues at the UI poll's ~30 Hz.
         if (atmosphere_ready() && preview_.loaded && !preview_.failed && now() - accent_req_t_ > (store_.ambient ? 0.9 : 4.0) &&
             (accent_media_t_ < 0 || std::fabs(play_.in.time - accent_media_t_) >= 0.25) &&
-            !IsIconic(hwnd_)) {
+            !hidden_now()) {
           accent_req_t_ = now();
           accent_media_t_ = play_.in.time;
           accent_want_ = play_.in.time;
@@ -3501,6 +3927,11 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
           if (onboarding_) ob_.mouse_leave(now()); else home_.mouse_leave(now());
           ensure_anim();
         }
+      } else if (mode_ == Mode::Play) {
+        POINT p = cursor_client();
+        RECT rc;
+        GetClientRect(hwnd_, &rc);
+        if (!PtInRect(&rc, p)) { play_.pointer_left(); ensure_anim(); }  // a tilted cover settles back
       }
       return 0;
     case WM_LBUTTONDOWN:
@@ -3511,7 +3942,8 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       }
       if (mode_ == Mode::Home) {
         HomeAction a = home_.mouse_down(GET_X_LPARAM(l), GET_Y_LPARAM(l), now());
-        if (a.a == HomeAct::OpenDialog) { auto f = open_file_dialog(hwnd_, DialogKind::Video); if (!f.empty()) handle_files(f); }
+        if(a.a==HomeAct::OpenFolder) {auto p=pick_folder_dialog(hwnd_);if(!p.empty())queue_folder(p,true);}
+    if (a.a == HomeAct::OpenDialog) { auto f = open_file_dialog(hwnd_, DialogKind::Video); if (!f.empty()) handle_files(f); }
         else if (a.a == HomeAct::ClearRecents) { store_.clear_recents(); save_state(); refresh_recents(); }
         else if (a.a == HomeAct::EggSeen) { store_.eggs_seen = home_.eggs_seen; save_state(); }
         else if (a.a == HomeAct::WinMin) ShowWindow(hwnd_, SW_MINIMIZE);
@@ -3579,4 +4011,21 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
     case WM_DESTROY: PostQuitMessage(0); return 0;
   }
   return DefWindowProcW(hwnd_, m, w, l);
+}
+
+void App::mouse_wheel(WPARAM keys,LPARAM screen_point) {
+  if(closing_app_||mode_!=Mode::Play)return;
+  if(GET_KEYSTATE_WPARAM(keys)&MK_CONTROL) {
+    size_wheel_+=GET_WHEEL_DELTA_WPARAM(keys);
+    if(std::abs(size_wheel_)>=WHEEL_DELTA) {
+      int dir=size_wheel_>0?1:-1;size_wheel_=0;
+      int next=next_ui_size(store_.ui_scale,dir);
+      if(next!=store_.ui_scale)set_ui_scale(next);
+      say_ui_size();
+    }
+    return;
+  }
+  POINT p{GET_X_LPARAM(screen_point),GET_Y_LPARAM(screen_point)};ScreenToClient(hwnd_,&p);
+  play_.mouse_move(p.x,p.y,now());
+  play_.wheel(GET_WHEEL_DELTA_WPARAM(keys)/(double)WHEEL_DELTA,now());run_actions();ensure_anim();
 }

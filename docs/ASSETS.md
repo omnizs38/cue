@@ -1,6 +1,6 @@
 # Visual assets: origin and licenses
 
-Gabriel Benzoni states that Cue Omni and the custom Omni SVGs, glyphs, and sprites were created with Claude for this project. This records the author's declaration, not an independent originality assessment. AI use alone is not treated as evidence of infringement; licenses cover rights the distributor can grant and do not override pre-existing third-party rights. The supplied review identified no concrete evidence of prohibited copying.
+Gabriel Benzoni states that Cue Omni and the custom Omni SVGs, glyphs, and sprites were created with Claude for this project. This records the author's declaration, not an independent originality assessment. AI use alone is not treated as evidence of infringement; licenses cover rights the distributor can grant and do not override pre-existing third-party rights.
 
 | Asset | License / provenance |
 |---|---|
@@ -14,7 +14,8 @@ Cue Omni's outlines, family, and appearance were preserved when copyright/licens
 
 ## Supplied artwork
 
-- `res/cue.ico`: supplied by the author for 1.1.5; all seven resolutions preserved.
+- `res/cue.ico`: redrawn for 1.2 by `tools/gen_icon.py` (seven sizes, each drawn on its own pixel grid) after the 1.1.5 icon supplied by the author: the same dark tile and pixel play mark, with the tile filling the icon box, a visible rim and a larger mark.
+- `res/cue-audio.ico`: the icon of music files, drawn by the same tool: the same tile with a pixel note in place of the play mark. Video files use `res/cue.ico`.
 - Six action SVGs in `assets/icons/`: supplied for 1.1.7 (save frame, back, information, open, close video, About). Originals are preserved; `tools/gen_action_icons.py` compiles the pixel grid without runtime SVG dependencies.
 - `assets/icons/skip-15s-sheet.svg`: supplied for 1.1.8; retained after compact icons returned in 1.1.9.
 

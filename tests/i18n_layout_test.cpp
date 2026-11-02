@@ -38,13 +38,14 @@ static void settle(PlayView& p, double& t) { for (int i = 0; i < 40; ++i) { t +=
 
 // Every word of a panel row fits the space the layout gave it.
 static void check_rows(PlayView& p) {
-  const double s = p.s_;
+  const double s = p.panel_==PlayView::Panel::CC?p.cc_scale_:p.s_;
   const int text_col = p.icon_grid() ? 23 : 6;
   for (auto& r : p.rows_) {
     const std::string tag = "row '" + r.label + "' " + R(r.r);
     auto tw = [&](const std::string& t) { return text_w(t, s); };
     switch (r.k) {
       case PlayView::RK::Option: case PlayView::RK::Action: case PlayView::RK::Submenu: case PlayView::RK::Header: {
+        if(p.panel_==PlayView::Panel::CC&&r.id==PlayView::R_SUB_TRACK) {expect(tw(r.display_label)+(int)(29*s)<=r.r.w,tag);break;}
         int right = r.right.empty() ? 0 : tw(r.right) + (int)(6 * s);
         int chev = r.k == PlayView::RK::Submenu ? (int)(10 * s) : 0;
         expect((int)(23 * s) + tw(r.label) + right + chev <= r.r.w, tag);
@@ -212,6 +213,6 @@ int main() {
     check_setup();
   }
   if (failures) { std::printf("%d of %d layout checks failed\n", failures, checks); return 1; }
-  std::printf("Layout: %d checks in 5 languages x 4 sizes x 10 windows (DPI 100-250%%, full screen, portrait) for every "
+  std::printf("Layout: %d checks in 8 languages x 4 sizes x 10 windows (DPI 100-250%%, full screen, portrait) for every "
               "player panel, tooltips, toasts, the home and its menu, the welcome and the installer passed\n", checks);
 }

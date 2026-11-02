@@ -1,9 +1,15 @@
 #include "../src/core/release.h"
 #include "../src/core/version.h"
 #include <cassert>
+#include "../src/core/update_temp.h"
 #include <cstdio>
 
 int main() {
+  assert(update_temp_directory_name(L"Cue-update-0123456789abcdef0123456789abcdef"));
+  for(auto bad:{L"Cue-update-",L"Cue-update-../",L"Other-update-0123456789abcdef0123456789abcdef",L"Cue-update-0123456789abcdef0123456789abcdeg"})assert(!update_temp_directory_name(bad));
+  assert(kUpdateEvery==3*24*3600);
+  assert(!update_due(1000000+3*24*3600-1,1000000));
+  assert(update_due(1000000+3*24*3600,1000000));
   assert(compare_versions("1.1.0", "1.0") == 1);
   assert(compare_versions("v1.1", "1.1.0") == 0);
   assert(compare_versions("1.10.0", "1.9.9") == 1);
@@ -15,8 +21,8 @@ int main() {
 
   const int64_t day = 24 * 3600, now = 1800000000;
   assert(update_due(now, 0));
-  assert(!update_due(now, now - 14 * day));
-  assert(update_due(now, now - 15 * day));
+  assert(!update_due(now, now - 2 * day));
+  assert(update_due(now, now - 3 * day));
   assert(update_due(now, now + 3 * day));  // clock went back: check again
 
   const char* ok = R"({"tag_name":"v1.2.0","draft":false,"prerelease":false,"body":"novidades\n- a\n- b",
@@ -36,5 +42,5 @@ int main() {
   ReleaseInfo nd;
   assert(parse_release(R"({"tag_name":"1.4","assets":[{"name":"cue-setup.exe","browser_download_url":"https://x/y"}]})", nd));
   assert(nd.sha256.empty() && nd.version == "1.4");
-  puts("Updates: version order, 15-day schedule, release parsing, installer asset and digest passed");
+  puts("Updates: version order, 3-day schedule, release parsing, installer asset and digest passed");
 }

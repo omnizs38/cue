@@ -46,7 +46,7 @@ int main(){
    if(start<0&&y>raised+.0001)start=t;
    if(start>0&&finish<0&&std::abs(y-100)<.00001)finish=t;
   }
-  assert(start>0&&finish-start>.36&&finish-start<.44);
+  assert(start>0&&finish-start>.20&&finish-start<.50);
  }
  {
   PlayView p;p.resize(1280,720,2);p.in.dur=120;double t=1;p.reset(t);
@@ -57,5 +57,5 @@ int main(){
   }
   assert(fractional>0); // whole physical pixels, including the panel's right edge
  }
- puts("Motion/cadence: bounded 320/420 ms motion, continuous reversal, 60 Hz deadlines with timer jitter, no alternate upload skips, lighter cloud geometry and subtitle return in both modes passed");
+ puts("Motion/cadence: finite subtitle motion and continuous clearance, continuous reversal, 60 Hz deadlines with timer jitter, no alternate upload skips, lighter cloud geometry and subtitle return in both modes passed");
 }

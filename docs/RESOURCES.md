@@ -1,6 +1,6 @@
 # Disk I/O and RAM review: 1.1.1
 
-Scope: Cue 1.1.1 application code plus the exact bundled mpv source (`ad5877edabdb05c0c62aad444722938d37666e2d`). This review identifies avoidable work and validates component limits; it does not measure the user's Windows disk or total player RAM.
+Scope: Cue 1.1.1 application code plus the exact bundled mpv source (`ad5877edabdb05c0c62aad444722938d37666e2d`). This review identifies avoidable work and validates component limits; it does not measure native Windows disk activity or total player RAM.
 
 ## Disk activity
 
@@ -27,13 +27,10 @@ Normal operation does not write a copy of the whole video: the bundled mpv defau
 - Decoded reference frames, audio mixing, subtitles/fonts, UI surfaces, shell providers, GPU/driver allocations and the separate preview process add memory. A 12 MiB thumbnail budget is **not** a promise that the whole player uses 12 MiB.
 - The memory lifecycle fixes from 1.1.1 remain in place. High working set alone does not establish a memory leak.
 
-## Validation
+## Verification
 
-- A controlled 400-image fixture (320×180 BGRA each) retains **87.89 MiB** under a count-only cache. The new cache stayed at or below **12 MiB** through 1,000 inserts (observed 11.87 MiB). This is a component stress fixture, not measured RAM savings on the user's media or PC.
-- Tests cover capacity accounting, entry limits, LRU, replacement, oversized rejection and release on clear.
-- After recovery-copy warm-up, 1,100 identical settings-save calls leave both file modification times unchanged. Real changes and corrupt-state recovery remain covered. Files are still read for comparison when the general save path runs.
-- Portable regressions and Windows x64 cross-compilation are used. Native playback bandwidth, physical-disk active time, GPU memory and total RAM have not been measured here.
-- `tools/measure_resources.ps1` is an optional, read-only Windows probe for Cue.exe processes (player and thumbnail helper). It records private bytes, working set and logical process I/O to CSV. It has not been executed in this Linux environment. Logical I/O includes more than physical disk reads and must not be interpreted as physical-disk busy percentage.
+Current release validation is recorded in [VALIDATION.md](VALIDATION.md).
+Portable tests do not establish native GPU performance or whole-process leak freedom.
 
 ## Native check
 
@@ -47,7 +44,7 @@ Compare the same file/device across revisions. Capture playback without timeline
 
 ## Remaining storage considerations
 
-`cue.log` is append-only and verbose `mpv.log` is enabled only with the explicit `--log` switch. Downloaded update installers use unique temporary folders and can remain after an update. These can contribute to disk-space growth over time; this change does not delete existing logs/installers or perform a broad temporary-file cleanup. None of these observations proves a current disk-saturation incident.
+`cue.log` rotates at about 1 MiB, retaining one previous file and verbose `mpv.log` is enabled only with the explicit `--log` switch. Failed update downloads and their private temporary folders are removed. Cue also removes update executables/partials from its exact `Cue-update-<32 hex>` temporary folders after seven days, during low-priority startup maintenance. Cleanup is nonrecursive, skips reparse points, and visits at most 64 directories / 16 files per directory per launch. A locked file is left for a later launch. These can contribute to disk-space growth over time; this change does not delete existing logs/installers or perform a broad temporary-file cleanup. None of these observations proves a current disk-saturation incident.
 
 ## Sources
 

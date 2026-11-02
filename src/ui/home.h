@@ -10,12 +10,14 @@
 #include "gfx.h"
 
 struct HomeRow {
-  std::string name;   // display name (file name)
-  std::string right;  // "1:24:12"
+  std::string name;      // the title: a show's name, or the file name without its extension
+  std::string right;     // "24 min left", or the length when not started
   double progress = -1;  // 0..1 when in progress
+  std::string sub;       // the quiet second line: "S18E15 · 3 episodes", or "video"
+  bool audio = false;
 };
 
-enum class HomeAct { None, OpenDialog, OpenRecent, ClearRecents, EggSeen, WinMin, WinMax, WinClose, WinPin, Update, SkipUpdate,
+enum class HomeAct { None, OpenDialog, OpenFolder, OpenRecent, ClearRecents, EggSeen, WinMin, WinMax, WinClose, WinPin, Update, SkipUpdate,
                      Language, Remote, News, NewsClose };  // Language: index -1 automatic, else i18n::Lang
 struct HomeAction { HomeAct a = HomeAct::None; int index = -1; };
 
@@ -32,6 +34,7 @@ struct HomeView {
   double update_progress = -1;  // 0..1 while downloading
   bool update_busy = false;     // checking / downloading / starting the installer
   bool news = false;            // "what's new" at the bottom until it is closed (once per version)
+  bool remote_available = true;  // the platform has the phone remote (the ports do not yet)
 
   Face face;
   WindowChrome chrome;
@@ -66,10 +69,10 @@ struct HomeView {
   void relayout() { layout(); }  // the words changed (another interface language)
 
  private:
-  // the ··· menu next to Recentes: "idioma ›", "controle remoto" and "limpar recentes"; idioma opens the six choices
+  // the ··· menu next to Recentes: "idioma ›", "controle remoto" and "limpar recentes"; language opens automatic plus the supported catalogs
   enum : int { kOpen = 100, kDots = 101, kMenuClear = 102, kUpdate = 103, kUpdateSkip = 104, kMenuLang = 105,
-               kLangOpt = 106 /* ..111: automatic, then each i18n::Lang */, kMenuPad = 112, kMenuRemote = 113, kNews = 114,
-               kNewsClose = 115, kHitIds = 16 };
+               kLangOpt = 106 /* ..114: automatic, then eight languages */, kMenuPad = 115, kMenuRemote = 116, kNews = 117,
+               kNewsClose = 118, kMenuFolder=119, kHitIds = 20 };
   int hover_ = -1, focus_ = -1;
   bool kb_ = false, menu_ = false, menu_lang_ = false, drag_ = false;
   std::vector<int> menu_ids_;
@@ -90,6 +93,7 @@ struct HomeView {
   Rect r_open_, r_title_, r_dots_, r_menu_, r_list_, r_update_, r_update_skip_, r_news_, r_news_close_;
   void layout_update();
   std::vector<Rect> r_rows_;
+  std::vector<HomeRow> all_rows_;  // what was given; `rows` is the part that fits the window
 
   void layout();
   int hit(int x, int y) const;
@@ -105,6 +109,7 @@ struct HomeView {
   bool swallow_ = false;
   double leave_dur() const { return swallow_ ? 0.36 : 0.2; }
   void fades(double now, double& content, double& face) const;  // 1 = fully shown
+  Fade menu_fade_{0, 0, 0.12, 0.14};  // the ··· menu unfolding and folding
   std::vector<double> hov_;  // hover fade per hit id (rows, open, dots, menu)
   double hov(int id) const;
 };

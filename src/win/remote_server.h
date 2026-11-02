@@ -39,6 +39,8 @@ class RemoteServer {
   int clients() const;  // phones connected right now
 
   // From the UI thread; each is copied under a lock and used by the server thread.
+  struct QueueFile { uint32_t id; std::string path; };
+  void set_queue(const std::string& json,std::vector<QueueFile> files = {});
   void set_state(const std::string& json);      // sent to the phones when it changes
   void set_boot(const std::string& script);     // `window.CUE = {...};` (strings, language)
   void set_roots(std::vector<Root> roots);
@@ -47,6 +49,7 @@ class RemoteServer {
   void set_pairing(bool open, const std::string& code);  // the code is accepted only while open
   // the timeline frame a phone asked for while turning the wheel (0x00RRGGBB pixels)
   void set_peek(double at, const std::vector<uint32_t>& px, int w, int h);
+  void set_cover(const std::string& path);  // the song whose cover the phone shows ("" = none)
   std::vector<Event> take_events();
 
  private:
@@ -59,4 +62,4 @@ std::string lan_address();
 // A pairing code: kCodeDigits random digits.
 std::string new_pairing_code();
 
-std::vector<uint32_t> file_thumbnail_pixels(const std::string& path);
+std::vector<uint32_t> file_thumbnail_pixels(const std::string& path, bool square = false);  // square: music covers

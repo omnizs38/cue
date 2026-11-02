@@ -1,6 +1,8 @@
 #include <windows.h>
 #include "../src/core/version.h"
 1 ICON "cue.ico"
+// music files: the same tile with a pixel note (video files carry the icon above)
+2 ICON "cue-audio.ico"
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "cue.manifest"
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION CUE_VERSION_MAJOR,CUE_VERSION_MINOR,CUE_VERSION_PATCH,0
@@ -12,9 +14,9 @@ BEGIN
   BEGIN
     BLOCK "041604B0"
     BEGIN
-      VALUE "CompanyName", ".tinypeep"
+      VALUE "CompanyName", CUE_DISTRIBUTOR
       VALUE "FileDescription", "Cue"
-      VALUE "ProductName", "Cue"
+      VALUE "ProductName", CUE_PRODUCT_NAME
       VALUE "InternalName", "Cue"
       VALUE "OriginalFilename", "Cue.exe"
       VALUE "FileVersion", CUE_VERSION

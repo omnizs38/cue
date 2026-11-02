@@ -47,11 +47,11 @@ int main(int argc, char** argv) {
   int W = 480 * s, H = 270 * s;
   HomeView hv;
   hv.set_size(W, H, s);
-  hv.set_rows({{"Cena de exemplo.mkv", "1:24:12", 0.51},
-               {"Episódio de exemplo.mkv", "31:09", 0.62},
-               {"entrevista.mp4", "08:42", 0.3},
-               {"filme.mov", "52:17", 0.44},
-               {"Landscape at sunset (final revision).mp4", "12:03", -1}});
+  hv.set_rows({{"Cena de exemplo", "faltam 41 min", 0.51, "vídeo"},
+               {"Série de exemplo", "faltam 12 min", 0.62, "S01E04 · 3 episódios"},
+               {"entrevista", "faltam 6 min", 0.3, "áudio", true},
+               {"filme", "faltam 29 min", 0.44, "vídeo"},
+               {"Landscape at sunset (final revision)", "12 min", -1, "vídeo"}});
   Canvas c;
   double now = 10;
   run(hv, now, 0.1);

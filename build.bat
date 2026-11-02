@@ -19,6 +19,10 @@ if not exist build\Cue\sources mkdir build\Cue\sources
 copy /y res\sources-README.txt build\Cue\sources\README.txt >nul
 copy /y LICENSE build\Cue\ >nul
 copy /y COPYRIGHT.md build\Cue\ >nul
+copy /y NOTICE.md build\Cue\ >nul
+copy /y docs\BRANDING.md build\Cue\ >nul
+copy /y docs\VALIDATION.md build\Cue\ >nul
+xcopy /y /i docs\*.md build\Cue\docs\ >nul
 xcopy /y /e /i third_party\libmpv build\Cue\third_party\libmpv >nul
 if not exist build\Cue\libmpv-2.dll echo Missing libmpv-2.dll in build\Cue. Run tools\fetch-libmpv.ps1
 echo ok: build\Cue\Cue.exe

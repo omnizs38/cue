@@ -81,6 +81,11 @@ bool episode_of(std::string_view name, int& season, int& episode, size_t* marker
 // The file after `current` among its siblings: by season/episode when both have one, else by
 // natural order. Only playable files count. "" when it is the last one.
 bool same_series(std::string_view a, std::string_view b);
+// For people: "Twin.Peaks.S01E03.1080p.mkv" -> "Twin Peaks" and "S01E03" ("" when not an episode).
+std::string series_title(std::string_view name);
+std::string episode_label(std::string_view name);
+// Same show (the identity same_series compares); "" when not an episode.
+std::string series_id(std::string_view name);
 std::string next_file(std::string_view current, const std::vector<std::string>& siblings);
 std::string next_episode(std::string_view current, const std::vector<std::string>& siblings);
 // Two or more playable files numbered as episodes: shown as a series (a stack, not a folder).
@@ -94,6 +99,7 @@ struct State {
   std::string file;              // shown name
   double pos = 0, dur = 0, speed = 1, volume = 100;
   bool paused = true, muted = false, ended = false, audio_only = false;
+  uint32_t cover = 0;  // music: changes with each song that has a cover; 0 = no cover
   bool has_subs = false, subs_on = false;
   double sub_delay = 0;
   int sub_size = 44, sub_size_min = 28, sub_size_max = 72;
@@ -102,9 +108,15 @@ struct State {
   int audio_mix = 0;                      // how many play together (when audio_index is -1)
   int timer = 0;                 // 0 off, -1 end of the episode, else minutes
   double timer_left = 0;         // seconds, for minutes
+  uint64_t queue_revision=0;
+  bool queue_active=false,queue_busy=false;
+  uint64_t queue_notice_id=0;
+  int queue_result=0;  // 0 none/working, 1 added, 2 no direct media, 3 failed/at capacity
+  std::string queue_notice;
   bool next_auto = false;
   std::string next;              // the next episode's name, or ""
   std::string color = "#a0508f"; // the film's light (the phone glows with it)
+  std::string lang;              // Cue's interface language tag; the page reloads its words when it changes
 };
 std::string state_json(const State& s);
 
@@ -112,6 +124,7 @@ struct Command {
   std::string c;                 // see the switch in App::remote_command
   double v = 0;
   bool has_v = false;
+  int to=-1;
   std::string path;
 };
 bool parse_command(std::string_view json, Command& out);

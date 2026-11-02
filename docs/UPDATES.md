@@ -8,7 +8,7 @@ Cue reads the latest public GitHub release from `CUE_UPDATE_REPO` in `src/core/v
 GET https://api.github.com/repos/tinypeep/cue/releases/latest
 ```
 
-Checks run every 15 days after launch on a low-priority maintenance thread, or manually from About Cue. Failed offline checks retry on a later launch. The tag must be newer than `CUE_VERSION`; drafts and prereleases are excluded by this API endpoint.
+Checks run every 3 days after launch on a low-priority maintenance thread, or manually from About Cue. Failed offline checks retry on a later launch. The tag must be newer than `CUE_VERSION`; drafts and prereleases are excluded by this API endpoint.
 
 The updater selects an `.exe` asset containing `setup` in its name, downloads over HTTPS, and checks size, GitHub's SHA-256 `digest`, and executable signature bytes. The installer checks payload CRC-32 before writing files. These checks do not imply a digitally signed executable.
 
@@ -21,7 +21,7 @@ An update appears on the home screen, in More, and in About. It can be skipped f
 3. Put the matching `libmpv-2.dll` in `build/Cue/`.
 4. With `gh` authenticated, run `bash tools/release.sh`. It tests, builds, packages, and publishes `v<version>`. The engine source defaults to `sources/Cue-Engine-Source.zip`; override with `ENGINE_SRC=...` if needed.
 
-For manual publication, run `make setup`, create the matching GitHub tag/release, and attach `Cue-<version>-Setup.exe` plus `Cue-<version>-Engine-Source.zip`. GitHub supplies Cue's source archives for the tag. For the current release, use `v1.1.1`.
+For manual publication, run `make setup`, create the matching GitHub tag/release, and attach `Cue-<version>-Setup.exe` plus `Cue-<version>-Engine-Source.zip`. GitHub supplies Cue's source archives for the tag. For the current release, use `v1.2`.
 
 Keep the matching engine source ZIP and license notices available beside the download. The installer contains `sources/README.txt` pointing to that release rather than bundling the large source archives.
 
@@ -38,7 +38,7 @@ Keep the matching engine source ZIP and license notices available beside the dow
 
 Default location: `C:\Cue`, with no administrator prompt in the documented installation flow. The installer creates Start menu/optional desktop shortcuts, current-user Uninstall and App Paths entries, and an `install.txt` file inventory. Updates remove files no longer shipped. Cue registers “Open with” without changing the Windows default app.
 
-Uninstall removes these entries and registered subtitle fonts. Preferences/recent files can be kept; saved frames in Pictures/Cue/Frames are never deleted. The uninstaller runs a temporary copy to remove its installation files.
+Uninstall removes these entries and registered subtitle fonts. Preferences/recent files can be kept; saved frames in Pictures/Cue (and the older Pictures/Cue/Frames) are never deleted. The uninstaller runs a temporary copy to remove its installation files.
 
 Preview without Windows:
 ```bash

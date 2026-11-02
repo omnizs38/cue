@@ -1,6 +1,6 @@
 # Additional stability review — Cue 1.1.1
 
-This build consolidates the earlier phone UI, security, memory and disk changes under **1.1.1**, as requested. The temporary 1.1.2/1.1.3 development labels do not represent separate releases in this source tree. The playback engine DLL is unchanged.
+The following lifecycle safeguards were introduced in 1.1.1 and remain in use. The playback engine is unchanged.
 
 ## Findings fixed in this pass
 
@@ -17,23 +17,16 @@ This build consolidates the earlier phone UI, security, memory and disk changes 
 
 Additional preview checks reject oversized command lines, line/NUL injection and non-finite frame times. Screenshot result nodes are released even for unexpected types, and stride bounds are checked without overflowing a multiplication.
 
-## Validation and evidence
+## Verification
 
-- Portable suite passed, including the existing 27,630 layout checks, 12,000 malformed remote inputs, memory/cache and disk-write regressions.
-- New tests cover 100,000 command replacements, bounded bytes/count, cancellation of a waiting consumer, a 100,000-iteration lifecycle-event flood, extreme integers/version strings, oversized state-file recovery and JSON node limits.
-- AddressSanitizer/UndefinedBehaviorSanitizer passed for the preview mailbox; UndefinedBehaviorSanitizer with float-cast-overflow checks passed for the settings/release tests. LeakSanitizer is not claimed: leak detection was disabled because this environment does not support its process inspection reliably.
-- Chromium remote UI regression passed at six portrait/landscape sizes. The browser uses a mock player connection.
-- Browser lifecycle stress: 10 warmups, 100 open/close cycles and 20 rapid-close cycles ended with **zero tracked blob URLs, grid images and audio graph edges**. Forced-GC JS heap changed from 2,380,332 to 2,606,804 bytes (+226,472 bytes). This is not proof of zero whole-app leaks.
-- Windows x64 app/installer cross-compilation passed. The native `thumb_client_engine_test.cpp` deliberately starts a non-reading helper, floods file changes, restarts 50 times and checks handle counts. It was compiled, **not executed here**.
-- Installer contents, CRC, executable identity, version and the unchanged engine DLL hash are checked separately during packaging.
+Current release validation is recorded in [VALIDATION.md](VALIDATION.md).
+Portable tests do not establish native GPU performance or whole-process leak freedom.
 
 ## Remaining limits
 
-No claim of a complete security audit, leak-free process or measured speedup on the user's Windows PC is made. Real Windows playback, codec/GPU allocations, Winsock/COM integration, stalled-process cancellation and iOS Safari still need native validation. Explorer providers can stall within the fixed worker budget; a stuck provider is not forcibly terminated in-process. HTTP/WS remains unencrypted, and bearer tokens remain in per-user storage. See [Security](SECURITY.md), [Memory](MEMORY.md) and [Disk/RAM](RESOURCES.md).
+No claim of a complete security audit, leak-free process or measured speedup on native Windows is made. Real Windows playback, codec/GPU allocations, Winsock/COM integration, stalled-process cancellation and iOS Safari still need native validation. Explorer providers can stall within the fixed worker budget; a stuck provider is not forcibly terminated in-process. HTTP/WS remains unencrypted, and bearer tokens remain in per-user storage. See [Security](SECURITY.md), [Memory](MEMORY.md) and [Disk/RAM](RESOURCES.md).
 
 The 12 MiB budget applies to the timeline pixel cache, not the entire player. The existing engine buffering and ambient-light sampling behavior are preserved. Settings remain compatible with the previous working builds.
-
-Since the public version stays 1.1.1, an already installed 1.1.1 will not detect this revision as a newer semantic version; install this revised package manually. This does not remove prior corrections.
 
 ## API references
 

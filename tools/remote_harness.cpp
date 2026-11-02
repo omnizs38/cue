@@ -71,7 +71,7 @@ int wmain(int argc, wchar_t** argv) {
   bool first = true;
   for (int i = 0; i < str::kCount; ++i) {
     std::string key = i18n::key_name((str::Id)i);
-    if (key.rfind("remote.", 0) != 0 && key != "number.decimal") continue;
+    if (key.rfind("remote.", 0) != 0 && key.rfind("queue.",0)!=0 && key != "number.decimal") continue;
     boot += (first ? "" : ",") + json_quote(key) + ":" + json_quote(tr((str::Id)i));
     first = false;
   }

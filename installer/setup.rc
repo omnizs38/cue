@@ -13,9 +13,9 @@ BEGIN
   BEGIN
     BLOCK "041604B0"
     BEGIN
-      VALUE "CompanyName", ".tinypeep"
+      VALUE "CompanyName", CUE_DISTRIBUTOR
       VALUE "FileDescription", "Instalador do Cue"
-      VALUE "ProductName", "Cue"
+      VALUE "ProductName", CUE_PRODUCT_NAME
       VALUE "InternalName", "Cue-Setup"
       VALUE "OriginalFilename", "Cue-Setup.exe"
       VALUE "FileVersion", CUE_VERSION
@@ -23,9 +23,9 @@ BEGIN
     END
     BLOCK "040904B0"
     BEGIN
-      VALUE "CompanyName", ".tinypeep"
+      VALUE "CompanyName", CUE_DISTRIBUTOR
       VALUE "FileDescription", "Cue installer"
-      VALUE "ProductName", "Cue"
+      VALUE "ProductName", CUE_PRODUCT_NAME
       VALUE "InternalName", "Cue-Setup"
       VALUE "OriginalFilename", "Cue-Setup.exe"
       VALUE "FileVersion", CUE_VERSION
@@ -33,9 +33,9 @@ BEGIN
     END
     BLOCK "0C0A04B0"
     BEGIN
-      VALUE "CompanyName", ".tinypeep"
+      VALUE "CompanyName", CUE_DISTRIBUTOR
       VALUE "FileDescription", "Instalador de Cue"
-      VALUE "ProductName", "Cue"
+      VALUE "ProductName", CUE_PRODUCT_NAME
       VALUE "InternalName", "Cue-Setup"
       VALUE "OriginalFilename", "Cue-Setup.exe"
       VALUE "FileVersion", CUE_VERSION
@@ -43,9 +43,9 @@ BEGIN
     END
     BLOCK "040C04B0"
     BEGIN
-      VALUE "CompanyName", ".tinypeep"
+      VALUE "CompanyName", CUE_DISTRIBUTOR
       VALUE "FileDescription", "Programme d'installation de Cue"
-      VALUE "ProductName", "Cue"
+      VALUE "ProductName", CUE_PRODUCT_NAME
       VALUE "InternalName", "Cue-Setup"
       VALUE "OriginalFilename", "Cue-Setup.exe"
       VALUE "FileVersion", CUE_VERSION
@@ -53,11 +53,35 @@ BEGIN
     END
     BLOCK "080404B0"
     BEGIN
-      VALUE "CompanyName", ".tinypeep"
+      VALUE "CompanyName", CUE_DISTRIBUTOR
       VALUE "FileDescription", "Cue 安装程序"
-      VALUE "ProductName", "Cue"
+      VALUE "ProductName", CUE_PRODUCT_NAME
       VALUE "InternalName", "Cue-Setup"
       VALUE "OriginalFilename", "Cue-Setup.exe"
+      VALUE "FileVersion", CUE_VERSION
+      VALUE "ProductVersion", CUE_VERSION
+    END
+    BLOCK "041904B0"
+    BEGIN
+      VALUE "CompanyName", CUE_DISTRIBUTOR
+      VALUE "FileDescription", "Установщик Cue"
+      VALUE "ProductName", CUE_PRODUCT_NAME
+      VALUE "FileVersion", CUE_VERSION
+      VALUE "ProductVersion", CUE_VERSION
+    END
+    BLOCK "040704B0"
+    BEGIN
+      VALUE "CompanyName", CUE_DISTRIBUTOR
+      VALUE "FileDescription", "Cue-Installationsprogramm"
+      VALUE "ProductName", CUE_PRODUCT_NAME
+      VALUE "FileVersion", CUE_VERSION
+      VALUE "ProductVersion", CUE_VERSION
+    END
+    BLOCK "041104B0"
+    BEGIN
+      VALUE "CompanyName", CUE_DISTRIBUTOR
+      VALUE "FileDescription", "Cue インストーラー"
+      VALUE "ProductName", CUE_PRODUCT_NAME
       VALUE "FileVersion", CUE_VERSION
       VALUE "ProductVersion", CUE_VERSION
     END
@@ -65,6 +89,6 @@ BEGIN
   BLOCK "VarFileInfo"
   BEGIN
     // the description in each interface language Cue speaks (Explorer picks the one it shows)
-    VALUE "Translation", 0x416, 1200, 0x409, 1200, 0xC0A, 1200, 0x40C, 1200, 0x804, 1200
+    VALUE "Translation", 0x416, 1200, 0x409, 1200, 0xC0A, 1200, 0x40C, 1200, 0x804, 1200, 0x419, 1200, 0x407, 1200, 0x411, 1200
   END
 END

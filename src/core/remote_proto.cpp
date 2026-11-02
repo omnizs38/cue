@@ -435,6 +435,33 @@ std::string series_key(std::string_view name) {
   return key;
 }
 }
+std::string series_id(std::string_view name) { return series_key(name); }
+
+std::string series_title(std::string_view name) {
+  int season = 0, episode = 0; size_t marker = 0;
+  if (!episode_of(name, season, episode, &marker)) return {};
+  std::string t(name.substr(0, marker));
+  while (!t.empty() && t.front() == '[') { auto end = t.find(']'); if (end == std::string::npos) break; t.erase(0, end + 1); }
+  std::string out; bool space = false;
+  for (unsigned char c : t) {
+    bool sep = c == '.' || c == '_' || c == ' ';
+    if (sep) { space = true; continue; }
+    if (space && !out.empty()) out += ' ';
+    out += (char)c; space = false;
+  }
+  while (!out.empty() && (out.back() == '-' || out.back() == ' ' || out.back() == '(' || out.back() == '[')) out.pop_back();
+  return out;
+}
+
+std::string episode_label(std::string_view name) {
+  int season = 0, episode = 0;
+  if (!episode_of(name, season, episode)) return {};
+  char b[24];
+  if (season > 0) std::snprintf(b, sizeof b, "S%02dE%02d", season, episode);
+  else std::snprintf(b, sizeof b, "E%02d", episode);
+  return b;
+}
+
 bool same_series(std::string_view a,std::string_view b) {
   auto key=series_key(a); return !key.empty() && key==series_key(b);
 }
@@ -536,6 +563,7 @@ std::string state_json(const State& s) {
   o += std::string(",\"muted\":") + (s.muted ? "true" : "false");
   o += std::string(",\"ended\":") + (s.ended ? "true" : "false");
   o += std::string(",\"audioOnly\":") + (s.audio_only ? "true" : "false");
+  o += ",\"cover\":" + std::to_string(s.cover);
   o += std::string(",\"sub\":{\"has\":") + (s.has_subs ? "true" : "false") + ",\"on\":" + (s.subs_on ? "true" : "false") +
        ",\"delay\":" + num(s.sub_delay, 2) + ",\"size\":" + std::to_string(s.sub_size) +
        ",\"sizeMin\":" + std::to_string(s.sub_size_min) + ",\"sizeMax\":" + std::to_string(s.sub_size_max) +
@@ -543,8 +571,13 @@ std::string state_json(const State& s) {
        ",\"posMin\":" + num(s.sub_pos_min, 1) + ",\"posMax\":" + num(s.sub_pos_max, 1) + "}";
   o += ",\"audio\":{\"n\":" + std::to_string(s.audio_tracks) + ",\"i\":" + std::to_string(s.audio_index) + ",\"m\":" + std::to_string(s.audio_mix) + "}";
   o += ",\"timer\":{\"m\":" + std::to_string(s.timer) + ",\"left\":" + num(s.timer_left, 0) + "}";
+  o += ",\"queueRevision\":"+std::to_string(s.queue_revision);
+  o += std::string(",\"queueActive\":")+(s.queue_active?"true":"false")+",\"queueBusy\":"+(s.queue_busy?"true":"false");
+  o += ",\"queueResult\":"+std::to_string(s.queue_result);
+  o += ",\"queueNoticeId\":"+std::to_string(s.queue_notice_id)+",\"queueNotice\":"+escape(s.queue_notice);
   o += ",\"next\":" + escape(s.next);
   o += std::string(",\"nextAuto\":") + (s.next_auto ? "true" : "false");
+  if (!s.lang.empty()) o += ",\"lang\":" + escape(s.lang);
   o += ",\"color\":" + escape(s.color) + "}";
   return o;
 }
@@ -565,8 +598,18 @@ bool parse_command(std::string_view text, Command& out) {
   if (out.path.size() > 4096 || out.path.find('\0') != std::string::npos) return false;
   static const char* simple[] = {"toggle", "next", "what"};
   for (auto k : simple) if (out.c == k) return true;
+  if(out.c=="queue-add")return !out.path.empty()&&is_playable_name(out.path);
+  if(out.c=="queue-folder")return !out.path.empty();
+  if(out.c=="queue-clear")return true;
   if (out.c == "open") return !out.path.empty() && is_playable_name(out.path);
   if (v.t != JVal::Num || !out.has_v || std::abs(out.v) > 1000000000.0) return false;
+  if(out.c=="queue-move") {
+    const auto& to=j["to"];
+    if(out.v<1||out.v>1000000000.0||std::floor(out.v)!=out.v||to.t!=JVal::Num||!std::isfinite(to.num())||to.num()<0||to.num()>=512||std::floor(to.num())!=to.num())return false;
+    out.to=(int)to.num();return true;
+  }
+  if(out.c=="queue-play"||out.c=="queue-remove"||out.c=="queue-up"||out.c=="queue-down")
+    return out.v>=1&&out.v<=1000000000.0&&std::floor(out.v)==out.v;
   if (out.c == "timer") return out.v >= -1 && out.v <= 600;
   if (out.c == "skip") return std::abs(out.v) <= 600;
   if (out.c == "vol") return out.v >= 0 && out.v <= 200;
