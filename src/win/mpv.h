@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "../core/model.h"
+#include "word_subtitles.h"
 
 extern "C" {
 typedef struct mpv_handle mpv_handle;
@@ -73,7 +74,7 @@ class Mpv {
   void destroy();
   bool ready() const { return h_ != nullptr; }
   bool loaded() const { return dll_ != nullptr; }
-  void forget() { h_ = nullptr; }  // the caller destroys the handle elsewhere
+  void forget();  // the caller destroys the handle elsewhere
 
   void option(const char* k, const std::string& v);
   bool set(const char* k, const std::string& v);  // sync, returns success
@@ -86,7 +87,7 @@ class Mpv {
   double get_double(const char* k, double def = 0);
   std::string get_string(const char* k);
   void observe(const char* k, mpv_format f, uint64_t id);
-  mpv_event* wait() { return api_.wait_event(h_, 0); }
+  mpv_event* wait();
   void hook_add(const char* name, uint64_t id) { api_.hook_add(h_, id, name, 0); }
   void hook_continue(uint64_t id) { api_.hook_continue(h_, id); }
   const MpvApi& api() const { return api_; }
@@ -101,4 +102,13 @@ class Mpv {
   HWND notify_ = nullptr;
   UINT msg_ = 0;
   static void wakeup(void* ctx);
+  void word_subtitles_tick();
+  void cancel_word_subtitles();
+  std::shared_ptr<WordSubtitleJob> word_job_;
+  uint64_t word_generation_ = 0, word_started_ = 0;
+  bool word_loaded_ = false;
+  std::string word_sid_, word_caption_;
+  char* word_caption_ptr_ = nullptr;
+  mpv_event word_event_{};
+  mpv_event_property word_property_{};
 };

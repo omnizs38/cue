@@ -70,6 +70,37 @@ With music, the same switch turns on a light show inside the window instead of t
 
 Cue supports Brazilian Portuguese, English, Spanish, French, Simplified Chinese, Russian, German, and Japanese. Automatic mode follows Windows display-language preferences, then falls back to English. Change the language in **… → language**, or the **…** beside Recent on the home screen. Changes apply immediately and are saved.
 
+### Spoken-word highlight
+
+Put a word-timed transcript beside a media file to add a **Spoken word - white glow**
+subtitle track automatically: `Film.mkv` → `Film.words.json`. The full caption
+stays readable while a soft white glow crossfades from the current word to the
+next over 80 ms. Windows reduced motion uses immediate word changes instead.
+Select another track in CC to return to normal subtitles.
+
+The sidecar accepts Whisper's `segments[].words[]` output, or a compact array:
+
+```json
+{"words":[
+  {"word":"Hello", "start":1.0, "end":1.4},
+  {"word":" world.", "start":1.4, "end":1.9}
+]}
+```
+
+Times are absolute seconds in the media, ordered and non-overlapping. Preserve
+leading spaces between words (as Whisper does); CJK text can omit them. Cue
+splits long segments into short captions and keeps pauses without highlighting
+unspoken words. The generated track uses libass, so seeking, pausing, playback
+speed and CC timing adjustments use the same playback clock. Temporary generated
+files live in the Windows temporary folder and are removed when their session is replaced.
+
+**Word timestamps are required.** Ordinary SRT lines and bitmap subtitles do
+not identify when each word is spoken and remain unchanged; Cue does not guess
+word timing or upload audio. Use a locally aligned transcript in the spoken
+language for accurate highlighting. Malformed/unsupported sidecars are ignored.
+Input is bounded to 4 MiB / 8,192 words and the existing JSON parser's node limit.
+No speech model or additional runtime dependency is installed.
+
 ## Phone remote
 
 Open **… → remote control** while a film plays, or **··· → remote control** beside Recent on the home screen. Cue shows a QR code with its network address and a six-digit code. Point the phone's camera at the code (or type the address in the phone's browser and enter the code). The phone and the computer must be on the same network. Nothing is installed on the phone.
