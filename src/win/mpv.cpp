@@ -59,8 +59,82 @@ bool Mpv::create(HWND notify, UINT msg, int64_t wid, std::string* err) {
   return true;
 }
 
+void Mpv::cancel_word_subtitles() {
+  word_loaded_ = false;
+  if (word_job_) word_job_->cancelled = true;
+}
 void Mpv::destroy() {
+  cancel_word_subtitles();
   if (h_) { api_.terminate_destroy(h_); h_ = nullptr; }
+  word_job_.reset();
+}
+void Mpv::forget() {
+  cancel_word_subtitles();
+  h_ = nullptr;
+  word_job_.reset();
+}
+
+void Mpv::word_subtitles_tick() {
+  if (!h_ || !word_loaded_) return;
+  if (word_job_) {
+    if (!word_job_->done.load(std::memory_order_acquire)) return;
+    if (word_started_ == word_generation_) {
+      if (!word_job_->submitted) {
+        word_job_->submitted = true;
+        // Don't steal a subtitle choice made while conversion was running.
+        if (!word_job_->file.empty() && get_string("sid") == word_sid_ && get_string("sub-visibility") == "yes") {
+          auto path = word_job_->file.u8string();
+          cmd({"sub-add", std::string(path.begin(), path.end()), "select", "Spoken word - white glow"});
+        }
+      }
+      return;
+    }
+    word_job_->cancelled = true;
+    word_job_.reset();
+  }
+  if (word_started_ == word_generation_) return;
+  word_started_ = word_generation_;
+  word_sid_ = get_string("sid");
+  wchar_t temp[MAX_PATH]{};
+  DWORD len = GetTempPathW(MAX_PATH, temp);
+  if (!len || len >= MAX_PATH) return;
+  BOOL animations = TRUE;
+  SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &animations, 0);
+  word_job_ = request_word_subtitles(std::filesystem::u8path(get_string("path")), temp, !animations, notify_, msg_);
+}
+
+mpv_event* Mpv::wait() {
+  mpv_event* event = api_.wait_event(h_, 0);
+  if (event->event_id == MPV_EVENT_START_FILE) { ++word_generation_; word_loaded_ = false; }
+  else if (event->event_id == MPV_EVENT_FILE_LOADED) word_loaded_ = true;
+  else if (event->event_id == MPV_EVENT_END_FILE) word_loaded_ = false;
+  else if (event->event_id == MPV_EVENT_SHUTDOWN) cancel_word_subtitles();
+  // Wait for the batch to drain: App has restored its saved track/visibility
+  // choices by then. A worker completion posts this same wake-up message.
+  else if (event->event_id == MPV_EVENT_NONE) word_subtitles_tick();
+  else if (event->event_id == MPV_EVENT_PROPERTY_CHANGE && word_job_ && word_job_->submitted) {
+    const auto* property = static_cast<const mpv_event_property*>(event->data);
+    if (property && property->name && std::strcmp(property->name, "sub-text") == 0 &&
+        property->format == MPV_FORMAT_STRING && property->data &&
+        get_string("current-tracks/sub/title") == "Spoken word - white glow") {
+      const char* caption = *static_cast<char**>(property->data);
+      if (caption) {
+        std::string text(caption);
+        size_t middle = text.size() / 2;
+        // libass sees two visual layers, but drag/clearance estimates and text
+        // consumers should see one caption. Return owned event storage with
+        // the same lifetime as wait_event's original (until the next wait).
+        if (text.size() % 2 && text[middle] == '\n' && text.compare(0, middle, text, middle + 1, middle) == 0) {
+          word_caption_ = text.substr(0, middle);
+          word_caption_ptr_ = word_caption_.data();
+          word_property_ = *property; word_property_.data = &word_caption_ptr_;
+          word_event_ = *event; word_event_.data = &word_property_;
+          return &word_event_;
+        }
+      }
+    }
+  }
+  return event;
 }
 
 void Mpv::option(const char* k, const std::string& v) { if (h_) api_.set_option_string(h_, k, v.c_str()); }
