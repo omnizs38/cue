@@ -23,7 +23,11 @@ int main(){
   assert(audio_waveform_graph(1,0).find("[vid")==std::string::npos);  // no cover: the spectrum alone
   assert(audio_mix_graph({1,3},true,2).find("[vid2]")!=std::string::npos && audio_mix_graph({1,3},false,2).find("[vid")==std::string::npos);
   // the spectrum runs at the display's pace, and ends without leaving solid wings behind
-  assert(g.find("r=60")!=std::string::npos && g.find("alphamerge")==std::string::npos && g.find("colorkey")!=std::string::npos);
+  assert(g.find("r=60")!=std::string::npos && g.find("colorkey")==std::string::npos);
+  // each cell is as opaque as it is lit (no dark holes over a bright cover's light), and the
+  // music leads every merge: the cells merge with themselves, then lead the blend with the tint
+  assert(g.find("[cue_cells]split=2[cue_ca][cue_cb];[cue_ca][cue_cb]alphamerge[cue_cell];")!=std::string::npos);
+  assert(g.find("[cue_cell][cue_tinta]blend=")!=std::string::npos && g.find("[cue_tint][cue_cells]")==std::string::npos);
   // one picture, framed by the window: all of it, tall (words under the cover), or the cover alone
   {
     const MusicScene S=MusicScene::wide();
@@ -214,5 +218,17 @@ int main(){
     // films keep their own drop: nothing opens
     PlayView v;v.in.dur=200;v.resize(1280,720,1);v.reset(t);v.changed(t);settle(v,t);v.drag_files(true,t);assert(!v.queue_open());
   }
-  puts("Music cover: cover track, graph, saved look, tilt toward the pointer and back, wide and tall captions, right-click choice, music dock, up-next pill, album list, repeat modes, narrow bar, the list beside the cover, Cue tile, spectrum scene and drop-to-add passed");
+  {
+    // a cover boxed in black bars: the engine cuts them before the cover, its wings and its light
+    MusicScene plain=MusicScene::wide(),boxed=plain;boxed.crop_y=.17;boxed.crop_h=.66;
+    assert(!plain.cropped()&&boxed.cropped());
+    std::string a=audio_waveform_graph(1,2,plain,0),b=audio_waveform_graph(1,2,boxed,0);
+    assert(a.find("crop=w=iw*")==std::string::npos);
+    auto at=b.find("[vid2]crop=w=iw*1.0000:h=ih*0.6600:x=iw*0.0000:y=ih*0.1700,");
+    assert(at!=std::string::npos&&b.find("format=gbrp,split=3",at)!=std::string::npos);
+    // Cue's own tile and the spectrum alone have nothing to cut
+    assert(audio_waveform_graph(1,0,boxed,0).find("crop=w=iw*")==std::string::npos);
+    assert(audio_waveform_graph(1,2,boxed,1).find("crop=w=iw*")==std::string::npos);
+  }
+  puts("Music cover: cover track, graph, saved look, tilt toward the pointer and back, wide and tall captions, right-click choice, music dock, up-next pill, album list, repeat modes, narrow bar, the list beside the cover, Cue tile, spectrum scene, drop-to-add and covers cut out of black bars passed");
 }

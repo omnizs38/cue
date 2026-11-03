@@ -50,9 +50,15 @@ int main() {
     }
     assert(!p.in.paused);
     for (int i = 0; i < 8; ++i) p.key("down", false, false, t);
+    p.key("up", false, false, t);  // the last row is the shortcut sheet's link; credits just above
     p.key("enter", false, false, t);
     auto license_actions = p.take_actions();
     assert(license_actions.size() == 1 && license_actions[0].a == PA::OpenLicenses);
+    // the shortcut sheet opens from About, and Esc brings About back
+    p.key("down", false, false, t); p.key("enter", false, false, t); settle(p, t);
+    assert(p.panel_ == PlayView::Panel::Keys && p.take_actions().empty());
+    p.key("esc", false, false, t); settle(p, t);
+    assert(p.panel_ == PlayView::Panel::About);
     p.key("esc", false, false, t); settle(p, t);
     assert(p.panel_open());
     p.key("esc", false, false, t); settle(p, t);
@@ -63,5 +69,5 @@ int main() {
     settle(p, t);
     assert(!p.panel_open() && p.take_actions().empty());
   }
-  std::puts("About: menu navigation, centered layout, keyboard links, back and outside dismissal passed for audio/video at six scales");
+  std::puts("About: menu navigation, centered layout, keyboard links, back, the shortcut sheet's link and outside dismissal passed for audio/video at six scales");
 }

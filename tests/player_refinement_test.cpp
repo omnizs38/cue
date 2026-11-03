@@ -23,6 +23,14 @@ int main(){
  double p_small=portrait_scale(1,540,960,-1), p_med=portrait_scale(1.5,540,960,2), p_big=portrait_scale(3,540,960,1);
  assert(p_small>=1.5 && p_med>=p_small && p_big==3);
  assert(kCompactDockW*p_med<=540*0.8+1e-9);
+ // squarish windows (1:1 video): the landscape dock, raised to fill a share of the width; a
+ // 16:9 or 4:3 window is unchanged, and the dock always fits with room to spare
+ assert(portrait_scale(2.5,1675,1675,2)==3.0 && portrait_scale(2.5,1675,942,2)==2.5 && portrait_scale(2.5,1600,1200,2)==2.5);
+ for(int c:{-1,2,0,3})for(int w:{480,720,1080,1500,2160})for(double r:{0.8,0.9,1.0,1.1})for(double s0:{1.,1.5,2.,3.}){
+   int h=(int)(w*r);double ps=portrait_scale(s0,w,h,c);
+   assert(ps>=s0 && ps<=s0+1.5 && (ps==s0 || kLandscapeDockW*ps<=w*0.85));
+   assert(portrait_scale(s0,w,(int)(w*1.0),c)>=portrait_scale(s0,w,(int)(w*0.8),c));
+ }
  std::filesystem::remove(path);std::filesystem::remove(path.string()+".bak");
  for(double ui:{1.,1.5,2.,3.})for(int dpi:{96,144,192}){
   WindowChrome c;c.s=ui;c.vis.v=1;

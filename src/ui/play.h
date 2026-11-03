@@ -67,6 +67,7 @@ struct PlayInput {
   // screen (the cover can be tilted); which look the person chose; the captions under the cover
   bool has_cover = false, cover_scene = false;
   int music_look = 0;  // 0 cover and spectrum, 1 spectrum only
+  bool music_mono = false;  // music in black and white
   std::string music_title, music_artist;
   MusicScene music_scene;  // the cover look's composition (the engine's picture)
   bool cover_art = false;  // the scene shows a cover (the file's or Cue's tile): it tilts under the pointer
@@ -82,7 +83,8 @@ enum class PA {
   Language,  // v: -1 automatic, else i18n::Lang
   NextEpisode, PreviousInQueue, CancelNext, QueueAdd, QueueFolder, QueuePlay, QueueRemove, QueueMove, QueueReorder, QueueClear,
   Remote,    // the phone remote's pairing scene
-  MusicLook  // v: 0 cover and spectrum, 1 spectrum only
+  MusicLook,  // v: 0 cover and spectrum, 1 spectrum only
+  MusicMono   // v: 0 colour, 1 black and white
 };
 struct PlayAction { PA a; double v = 0; int64_t id = 0; };
 
@@ -198,15 +200,15 @@ class PlayView {
 
  private:
   enum Btn { B_NONE = 0, B_VOL, B_VOLBAR, B_REW, B_PLAY, B_FWD, B_CC, B_AUDIO, B_FS, B_MORE, B_TIMELINE, B_DOCKBG, B_SPEED, B_TIME, B_LOOP, B_QUEUE, B_NEXT, B_PREV, B_COUNT };
-  enum class Panel { None, CC, Style, Audio, AudioMix, More, Speed, Context, About, FileInfo, Language, Queue };
+  enum class Panel { None, CC, Style, Audio, AudioMix, More, Speed, Context, About, FileInfo, Language, Queue, Keys };
   enum class RK { Header, Option, Action, Submenu, Slider, Fonts, Stepper, Segmented, Hint, Separator, Links, Toggle,
-                  SpeedBar, Chips, Brand, Credit, Profile, Info, CloseHeader, Contacts };
+                  SpeedBar, Chips, Brand, Credit, Profile, Info, CloseHeader, Contacts, Keys };
   enum RowId {
     R_NONE, R_SUB_TOGGLE, R_SUB_TRACK, R_ADD_SUB, R_STYLE, R_DELAY, R_BACK, R_FONTS, R_SIZE, R_TEXT, R_BG, R_OUTLINE, R_LINEGAP, R_TRACK,
     R_ASS, R_LINKS, R_AUDIO_TRACK, R_AUDIO_MIX, R_AUDIO_MIX_TRACK, R_AUDIO_MIX_ALL, R_BACK_AUDIO, R_STYLE_RESET, R_OPEN, R_CLOSE, R_SPEED, R_SPEED_OPT, R_BACK_MORE, R_UISCALE, R_AMBIENT,
     R_FRAME, R_FRAME_CLEAN, R_FS_ROW, R_AUDIO_ROW, R_AMBIENT_STR, R_SPEED_VALUE, R_SPEED_BAR, R_SPEED_CHIPS,
     R_ABOUT, R_LINKEDIN, R_GITHUB, R_EMAIL, R_CONTACTS, R_LICENSES, R_FILE_INFO, R_DISMISS, R_CONTROLS_FREE, R_UPDATE,
-    R_LANGUAGE, R_LANG_OPT, R_REMOTE, R_QUEUE, R_MUSIC_LOOK
+    R_LANGUAGE, R_LANG_OPT, R_REMOTE, R_QUEUE, R_MUSIC_LOOK, R_MUSIC_COLOR, R_KEYS
   };
   struct Row {
     RK k;
@@ -226,7 +228,15 @@ class PlayView {
     Rect r;
     std::string display_label;
     std::vector<Rect> parts;  // slider bar, stepper -/+, segments, links
+    // the shortcut sheet: one or two columns, each a section's name or an entry and its keys
+    struct KeyHalf { std::string label; std::vector<std::string> caps; bool section = false; } kh;
+    int kcol = 0;  // its column
   };
+  int keys_cols_ = 2, keys_col_w_ = 0;  // the shortcut sheet: columns, and each one's width (art px)
+  bool keys_compact_ = false;
+  double keys_s_ = 2;  // its own scale: a small window gets the whole sheet, a little smaller
+  void build_keys();
+  static int key_cap_w(const std::string& cap);  // art px
 
   QueueView queue_view_;
   void queue_event(QueueView::Event event,double now);
@@ -357,6 +367,7 @@ class PlayView {
   Canvas music_base_;
   uint64_t music_gen_ = 0;
   std::string music_key_;
+  uint32_t lang_rev_ = 0;  // the interface language the cached words were drawn in
   std::string music_song_;  // title and artist last drawn: a new song's words come in afresh
   void render_music();
   // music: "12 tracks" under the artist opens the album's list beside the cover; the captions
@@ -464,6 +475,8 @@ class PlayView {
   bool seg_inset_on_ = false;
   bool icon_grid() const;
   Rect panel_rect() const;
+  int chrome_room() const;   // below the window's own buttons
+  Rect chrome_rect() const;
   int hit_panel(int x, int y, int* part) const;
   void panel_click(int row, int part, int x, double now);
   void panel_adjust(int row, int dir, double now);

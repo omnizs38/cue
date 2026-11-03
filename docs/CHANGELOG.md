@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.2.2 — 2026-11-03
+
+- Music in black and white (issue #11): a second choice in the song's right-click menu, beside
+  cover + spectrum and spectrum only: colour (the default) or black and white. The spectrum and
+  the light turn to their own greys (each colour keeps its brightness) while the cover keeps its
+  colours, also tilted under the pointer; the colour drains away or comes back in 0.3 s, without
+  reopening the song. Saved for all music; films are never touched.
+- Keyboard shortcuts (issue #12): ? opens a sheet with every key Cue answers to, in four groups
+  (playback, subtitles, files and up next, window); ? again or Esc closes it. Two columns where
+  the window is wide enough; in a small window its rows close up and it gets a little smaller,
+  so it is always whole and clear of the window's buttons. About has a link to it, and a
+  button's name now says its key, a shade dimmer (full screen  f).
+- A maximized window stays maximized when the next file or song opens, or when going back home
+  (issue #9): the new file's shape becomes the place the window restores to, as full screen
+  already did.
+- Up next never opens up under the window's own buttons (pin, minimize, maximize, close), in a
+  window of any size (issue #10). Menus and the shortcut sheet keep clear of them too.
+- Music: a cover that is a video's frame boxed in black bars (common in songs taken from video
+  sites) is shown without the bars on the computer too, and its light is the picture's, not
+  the bars'. The bars are found in the background while the song opens.
+- Music: the spectrum's fading dots let the light behind them through instead of turning into
+  dark holes over a bright cover, so the wings stay whole on white covers.
+- Repeat (l), next and previous (n, p), the subtitle menu (c) and always on top (Ctrl+T) work
+  after a click on the picture too (the engine's window had the keyboard and did not pass
+  them on).
+- A square window (1:1 video) gets bigger controls: the bar is raised until it fills about two
+  thirds of the width (a share that follows the chosen interface size), easing in from 4:3, so
+  it is not lost under a tall picture. 16:9 and 4:3 windows are unchanged.
+- Changing the interface language redraws every word at once: the song's "N tracks", up next at
+  the end of a song and the home's recent list ("25 min left", "3 episodes") kept the old
+  language until they were touched.
+- Thanks to DetroNot74 (@DetroNot74 on GitHub) for the reports and ideas behind this version.
+
 ## 1.2.1 — 2026-11-02
 
 - Music: with ambient lighting on, a light show plays inside the window: a soft light around

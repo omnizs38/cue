@@ -44,6 +44,9 @@ const BitmapDef* bmp(std::string_view name) {
         // music looks: the cover with its note, and the spectrum's bars
         {"look-cover",7,7,"#######" "#.....#" "#..##.#" "#..#..#" "#.##..#" "#.....#" "#######"},
         {"look-bars",9,6,"....#...." "....#...." "..#.#.#.." "..#.#.#.." "#.#.#.#.#" "#.#.#.#.#"},
+        // in colour (a rainbow's arcs) or black and white (a disc half dark, half light)
+        {"look-color",9,6,"..#####.." ".#.....#." "#..###..#" "#.#...#.#" "#.#...#.#" "#.#...#.#"},
+        {"look-mono",7,7,"..###.." ".#..##." "#...###" "#...###" "#...###" ".#..##." "..###.."},
         {"queue",9,7,"#........" "##.######" "#........" "........." "...######" "........." "...######"},  // now playing, then what follows
         {"text-style", 9, 7, ".##......" "#..#....." "#..#.###." "####....#" "#..#.####" "#..#.#..#" "#..#..###"},
         // the interface language: a small globe, meridian and equator

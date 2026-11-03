@@ -279,6 +279,11 @@ class App {
   // song's own filter chain), the cover's colours, and the motion they make
   MusicLight music_light_;
   std::shared_ptr<CoverColorsJob> light_cover_job_;
+  std::shared_ptr<CoverTrimJob> cover_trim_job_;
+  double mono_k_ = 0;         // music in black and white: 0 colour .. 1 grey, eased
+  bool mono_sent_ = false;
+  bool step_mono(double dt);
+  void set_music_mono(bool on);  // the song's cover inside black bars (from open)
   bool light_meter_ = false;     // the song has the meter (set when it was opened)
   bool light_found_ = false;     // the song has a cover (its accent lights the spectrum-only look)
   Rgb light_accent_{196, 198, 214};

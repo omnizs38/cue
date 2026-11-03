@@ -60,8 +60,20 @@ constexpr int kCompactDockW = 204;
 // Instead of stretching that dock across the whole width at the landscape scale (tiny icons),
 // a portrait window raises the scale until the dock fills a share of the width that follows
 // the chosen size: narrower than the window, and bigger.
+// The landscape dock's width in px of art (with the subtitles and audio buttons).
+constexpr int kLandscapeDockW = 372;
 inline double portrait_scale(double s, int cw, int ch, int choice) {
-  if (cw <= 0 || ch < cw * 1.15) return s;
+  if (cw <= 0) return s;
+  if (ch < cw * 1.15) {
+    // a squarish window (1:1 video, 4:3 easing in from 0.75): the landscape dock, but raised
+    // until it fills a share of the width, so the controls are not lost under a tall picture
+    double t = std::clamp((ch / (double)cw - 0.75) / 0.25, 0.0, 1.0);
+    if (t <= 0) return s;
+    static const double sq[kUiSizes] = {0.56, 0.67, 0.76, 0.84};
+    double want = cw * sq[ui_size_index(choice)] * t / kLandscapeDockW;
+    double ps = std::floor(want * 2) / 2;
+    return std::max(s, std::min(ps, s + 1.5));
+  }
   static const double share[kUiSizes] = {0.72, 0.80, 0.88, 0.94};
   double want = cw * share[ui_size_index(choice)] / kCompactDockW;
   double ps = std::floor(want * 2) / 2;  // whole or half art px, like the medium size

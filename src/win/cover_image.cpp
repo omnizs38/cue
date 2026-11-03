@@ -22,7 +22,7 @@ bool cover_image(const std::string& path, std::vector<uint32_t>& px, int& w, int
   return true;
 }
 
-bool decode_image(const std::string& encoded, std::vector<uint32_t>& px, int& w, int& h, int max_side) {
+bool decode_image(const std::string& encoded, std::vector<uint32_t>& px, int& w, int& h, int max_side, int* full_w, int* full_h) {
   if (encoded.empty()) return false;
   std::string data = encoded;
   bool ok = false;
@@ -39,6 +39,8 @@ bool decode_image(const std::string& encoded, std::vector<uint32_t>& px, int& w,
       SUCCEEDED(dec->GetFrame(0, &frame))) {
     UINT fw = 0, fh = 0;
     frame->GetSize(&fw, &fh);
+    if (full_w) *full_w = (int)fw;
+    if (full_h) *full_h = (int)fh;
     if (fw > 0 && fh > 0 && fw <= 16384 && fh <= 16384) {
       double k = std::min(1.0, (double)max_side / std::max(fw, fh));
       UINT tw = std::max(1u, (UINT)std::lround(fw * k)), th = std::max(1u, (UINT)std::lround(fh * k));
@@ -73,8 +75,36 @@ std::shared_ptr<CoverColorsJob> request_cover_colors(std::string path) {
         int w = 0, h = 0;
         job->bytes = cover_art::find(path);
         if (decode_image(job->bytes, px, w, h, 96)) {
+          crop_pixels(px, w, h, trim_dark_bars(px, w, h));  // the light is the picture's, not its bars'
           job->colors = analyze_frame(px.data(), w, h);
           job->found = job->colors.valid;
+        }
+      } catch (...) {}
+      if (SUCCEEDED(co)) CoUninitialize();
+      job->done.store(true);
+    }).detach();
+    return job;
+  } catch (...) { return {}; }
+}
+
+std::shared_ptr<CoverTrimJob> request_cover_trim(std::string path) {
+  if (path.empty()) return {};
+  try {
+    auto job = std::make_shared<CoverTrimJob>();
+    std::thread([job, path = std::move(path)] {
+      HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+      try {
+        std::vector<uint32_t> px;
+        int w = 0, h = 0, fw = 0, fh = 0;
+        // 192 px a side is plenty to find bars a few percent tall, and quick to decode
+        if (decode_image(cover_art::find(path), px, w, h, 192, &fw, &fh) && w > 0 && h > 0) {
+          TrimBox b = trim_dark_bars(px, w, h);
+          job->x = (double)b.x / w; job->y = (double)b.y / h; job->w = (double)b.w / w; job->h = (double)b.h / h;
+          // the scaled picture's edges are soft: a pixel in from each cut keeps no grey line
+          if (b.w < w) { job->x += 1.0 / w; job->w -= 2.0 / w; }
+          if (b.h < h) { job->y += 1.0 / h; job->h -= 2.0 / h; }
+          job->full_w = fw; job->full_h = fh;
+          job->found = true;
         }
       } catch (...) {}
       if (SUCCEEDED(co)) CoUninitialize();
