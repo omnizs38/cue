@@ -1,8 +1,37 @@
 #pragma once
 #include <filesystem>
 #include <string>
+#include <system_error>
 #include <vector>
 #include <utility>
+#include <chrono>
+#include <thread>
+
+namespace detail {
+inline bool rename_retryable(const std::error_code& ec) {
+  if (!ec) return false;
+#ifdef _WIN32
+  switch (ec.value()) {  // Win32: access denied, sharing violation, lock violation
+    case 5:
+    case 32:
+    case 33:
+      return true;
+    default: break;
+  }
+#endif
+  return ec == std::errc::permission_denied || ec == std::errc::resource_unavailable_try_again ||
+         ec == std::errc::device_or_resource_busy;
+}
+inline bool rename_with_retry(const std::filesystem::path& from, const std::filesystem::path& to, std::error_code& error) {
+  for (int attempt = 0; ; ++attempt) {
+    std::error_code ec;
+    std::filesystem::rename(from, to, ec);
+    if (!ec) { error.clear(); return true; }
+    if (attempt >= 39 || !rename_retryable(ec)) { error = ec; return false; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+}
+}  // namespace detail
 
 // Staged files and backups live on the destination volume. Existing files are never opened
 // for writing: a failed commit restores them by rename. Keep backups if recovery itself fails.
@@ -38,15 +67,13 @@ class FileTransaction {
         }
         std::filesystem::create_directories(backup.parent_path(), error);
         if (error) return fail(error);
-        std::filesystem::rename(dst, backup, error);
-        if (error) return fail(error);
+        if (!detail::rename_with_retry(dst, backup, error)) return fail(error);
         e.backed_up = true;
       }
       if (!e.remove) {
         std::filesystem::create_directories(dst.parent_path(), error);
         if (error) return fail(error);
-        std::filesystem::rename(staged(e.rel), dst, error);
-        if (error) return fail(error);
+        if (!detail::rename_with_retry(staged(e.rel), dst, error)) return fail(error);
         e.installed = true;
       }
     }
@@ -71,8 +98,8 @@ class FileTransaction {
         it->installed = false;
       }
       if (it->backed_up) {
-        std::filesystem::rename(work_ / "old" / it->rel, dst, ec);
-        if (ec) { error = ec; ok = false; continue; }
+        std::error_code re;
+        if (!detail::rename_with_retry(work_ / "old" / it->rel, dst, re)) { error = re; ok = false; continue; }
         it->backed_up = false;
       }
     }

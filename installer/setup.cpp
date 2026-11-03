@@ -214,6 +214,21 @@ bool write_file(const std::wstring& path, const unsigned char* data, size_t n, D
   return false;
 }
 
+// Removes staging folders left behind by an interrupted update.
+void remove_stale_staging(const std::wstring& dir) {
+  std::error_code ec;
+  for (const auto& entry : fs::directory_iterator(fs::path(dir), ec)) {
+    if (ec) break;
+    std::error_code dec;
+    if (!entry.is_directory(dec)) continue;
+    std::wstring folded = entry.path().filename().wstring();
+    if (!folded.empty()) CharLowerBuffW(folded.data(), (DWORD)folded.size());
+    if (folded.rfind(L".cue-install-", 0) != 0) continue;
+    std::error_code rmec;
+    fs::remove_all(entry.path(), rmec);
+  }
+}
+
 std::vector<std::wstring> read_manifest(const std::wstring& dir) {
   std::vector<std::wstring> out;
   std::ifstream f(fs::path(dir) / L"install.txt", std::ios::binary);
@@ -278,6 +293,7 @@ void install(Job& job) {
   HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   auto done = [&] { if (SUCCEEDED(com)) CoUninitialize(); };
   job.say(tr(str::setup_preparing));
+  remove_stale_staging(job.dir);
   close_running_cue(job);
 
   // the folder, and whether we may write there
@@ -481,6 +497,7 @@ void install(Job& job) {
 // ── uninstall ───────────────────────────────────────────────────────
 void uninstall(Job& job) {
   HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  remove_stale_staging(job.dir);
   job.say(tr(str::setup_closing));
   close_running_cue(job);
   job.progress = 0.1;

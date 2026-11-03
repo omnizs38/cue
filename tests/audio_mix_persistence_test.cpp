@@ -5,8 +5,6 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
-// This isolated persistence test does not exercise translated UI preferences.
-namespace i18n { std::string normalize_pref(std::string_view value) { return std::string(value); } }
 int main() {
   namespace fs = std::filesystem;
   auto dir = fs::temp_directory_path() / ("cue-audio-mix-test-" +
