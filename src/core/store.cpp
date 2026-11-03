@@ -205,7 +205,7 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
     std::snprintf(b, sizeof b, "{\"pos\": %.2f, \"dur\": %.2f, \"last\": %lld", r.pos, r.dur, (long long)r.last);
     o += (i ? ",\n    " : "\n    ") + std::string(b) + ", \"path\": " + json_quote(r.path);
     if (r.sid >= 0) o += ", \"sid\": " + std::to_string(r.sid) + ", \"slang\": " + json_quote(r.sid_lang);
-    if (r.aid >= 0) o += ", \"aid\": " + std::to_string(r.aid) + ", \"alang\": " + json_quote(r.aid_lang);
+    if (r.aid >= 0 || r.aid == -2) o += ", \"aid\": " + std::to_string(r.aid) + ", \"alang\": " + json_quote(r.aid_lang);
     if (!r.sub_visible) o += ", \"subvis\": false";
     if (std::fabs(r.sub_delay) > 0.001) { std::snprintf(b, sizeof b, ", \"delay\": %.3f", r.sub_delay); o += b; }
     if (r.has_style) o += ", \"style\": " + style_json(r.style);
