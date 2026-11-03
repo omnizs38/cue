@@ -1,3 +1,5 @@
+#include <chrono>
+#include <thread>
 #include "store.h"
 #include "remote_proto.h"
 #include "file_io.h"
@@ -235,9 +237,15 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
     std::filesystem::remove(bak, ec);
     std::filesystem::copy_file(path, bak, ec);
   }
-  ec.clear();
-  std::filesystem::rename(tmp, path, ec);  // atomic replace on the same volume
-  return !ec;
+  // atomic replace on the same volume; something reading the file for a moment (an antivirus,
+  // the search indexer, a Cue being started) can refuse it: a few short tries, then give up
+  for (int attempt = 0; attempt < 6; ++attempt) {
+    ec.clear();
+    std::filesystem::rename(tmp, path, ec);
+    if (!ec) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(15 + 15 * attempt));
+  }
+  return false;
 }
 
 RecentItem* SettingsStore::find(const std::string& p) {

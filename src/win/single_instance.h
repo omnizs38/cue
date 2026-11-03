@@ -14,6 +14,9 @@ class SingleInstance {
   SingleInstance& operator=(const SingleInstance&) = delete;
   Result route(const std::vector<std::string>& args);
   static bool decode(const COPYDATASTRUCT* data, std::vector<std::string>& files);
+  // Leaving: a Cue started now becomes the new first one at once, instead of waiting for this
+  // process to finish ending (call on the thread that took it).
+  void release();
 
  private:
   HANDLE mutex_ = nullptr;

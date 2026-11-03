@@ -56,5 +56,23 @@ int main() {
     p.resize(1280,720,2);p.reset(1);p.key("c",false,false,1);assert(p.cc_count_==n&&p.cc_scroll_max()==0);
     if(n) {p.in.subs[0].title="Updated metadata";++p.in.tracks_revision;p.changed(2);assert(p.rows_[1].label.find("Updated metadata")!=std::string::npos);}
   }
-  puts("Subtitle list: 0/1/2/500 tracks, 96 bounded layouts, pinned controls, long labels/metadata, selected visibility, fractional wheel, keyboard, no steady rebuild and close cleanup passed");
+  // the menu opens over the CC button, as audio, speed and "..." do, not in the bar's middle
+  for(auto size:{std::pair{1330,652},std::pair{2413,633},std::pair{1920,1080}}) {
+    PlayView p;p.in.dur=3900;p.in.subs={tracks[0]};p.in.sid=1;p.in.kind=SubKind::Text;
+    p.resize(size.first,size.second,2);p.reset(1);double t=1;p.key("c",false,false,t);settle(p,t);
+    Rect d=p.dock_rect(),r=p.panel_rect();int bx=-1;for(auto& hb:p.hots_)if(hb.id==PlayView::B_CC)bx=d.x+hb.r.cx();
+    assert(bx>0);
+    bool over=r.x<=bx&&r.r()>=bx;             // the button stays under the menu
+    bool snug=std::abs(r.cx()-bx)<=2*2||r.r()==d.r()||r.r()>=d.r()-2*2;  // centred on it, or at the bar's edge
+    assert(over&&snug&&std::abs(r.cx()-d.cx())>20);
+  }
+  // up next too: over its own button (the sizes of the screenshots it was found in)
+  for(auto size:{std::pair{1062,638},std::pair{1330,652},std::pair{1920,1080}}) {
+    PlayView p;p.in.dur=3900;p.in.queue_active=true;
+    p.resize(size.first,size.second,2);p.reset(1);double t=1;p.key("q",false,false,t);settle(p,t);
+    Rect d=p.dock_rect(),r=p.panel_rect();int bx=-1;for(auto& hb:p.hots_)if(hb.id==PlayView::B_QUEUE)bx=d.x+hb.r.cx();
+    assert(bx>0&&r.x<=bx&&r.r()>=bx);
+    assert(std::abs(r.cx()-bx)<=4||r.r()>=d.r()-4||r.w>=d.w);
+  }
+  puts("Subtitle list: 0/1/2/500 tracks, 96 bounded layouts, pinned controls, menu over its button, long labels/metadata, selected visibility, fractional wheel, keyboard, no steady rebuild and close cleanup passed");
 }

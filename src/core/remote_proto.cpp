@@ -327,7 +327,7 @@ std::string hex(std::string_view bytes) {
 // ── files ───────────────────────────────────────────────────────────
 bool is_video_name(std::string_view name) {
   static const char* v[] = {"mkv", "mp4", "m4v", "mov", "avi", "webm", "wmv", "flv", "ts", "m2ts", "mts", "mpg",
-                            "mpeg", "vob", "ogv", "3gp", "f4v", "divx", "rmvb", "rm", "asf", "mxf", "y4m"};
+                            "mpeg", "vob", "ogv", "3gp", "f4v", "divx", "rmvb", "rm", "asf", "mxf", "y4m", "dv", "dif"};
   std::string e = ext_of(name);
   for (auto x : v) if (e == x) return true;
   return false;
@@ -462,6 +462,56 @@ std::string episode_label(std::string_view name) {
   return b;
 }
 
+void card_words(std::string_view name, std::string& title, std::string& sub) {
+  title.clear(); sub.clear();
+  std::string stem(name);
+  if (auto slash = stem.find_last_of("/\\"); slash != std::string::npos) stem.erase(0, slash + 1);
+  if (auto dot = stem.rfind('.'); dot != std::string::npos && dot > 0 && stem.size() - dot <= 5) stem.resize(dot);
+  if (std::string ep = episode_label(stem); !ep.empty()) {
+    title = series_title(stem);
+    sub = ep;
+    if (!title.empty()) return;
+    sub.clear();
+  }
+  // words: a name with spaces keeps its dots ("Mr. Robot"); one without uses them as spaces
+  const bool spaced = stem.find(' ') != std::string::npos;
+  std::vector<std::string> words;
+  std::string cur;
+  for (char c : stem) {
+    bool sep = c == ' ' || c == '_' || (!spaced && c == '.');
+    if (sep) { if (!cur.empty()) words.push_back(cur), cur.clear(); continue; }
+    cur += c;
+  }
+  if (!cur.empty()) words.push_back(cur);
+  while (!words.empty() && words.front().front() == '[') words.erase(words.begin());  // a release group
+  auto lower = [](std::string w) { for (auto& c : w) c = (char)std::tolower((unsigned char)c); return w; };
+  auto strip = [](std::string w) {
+    while (!w.empty() && (w.front() == '(' || w.front() == '[')) w.erase(0, 1);
+    while (!w.empty() && (w.back() == ')' || w.back() == ']')) w.pop_back();
+    return w;
+  };
+  static const char* tags[] = {"2160p", "1080p", "720p", "576p", "480p", "4k", "uhd", "hdr", "hdr10", "dv", "web", "web-dl", "webdl",
+                               "webrip", "bluray", "blu-ray", "brrip", "bdrip", "dvdrip", "hdtv", "hdrip", "x264", "x265", "h264", "h265",
+                               "hevc", "avc", "aac", "ac3", "dts", "atmos", "10bit", "8bit", "proper", "repack", "remux", "extended",
+                               "unrated", "imax", "nf", "amzn", "dsnp", "hmax", "yts", "rarbg"};
+  size_t cut = words.size();
+  for (size_t i = 1; i < words.size(); ++i) {
+    std::string w = lower(strip(words[i]));
+    bool tag = false;
+    for (auto t : tags) if (w == t) tag = true;
+    if (!tag && words[i].front() == '[') tag = true;
+    if (tag) { cut = i; break; }
+  }
+  auto is_year = [](const std::string& w) {
+    return w.size() == 4 && std::all_of(w.begin(), w.end(), [](char c) { return c >= '0' && c <= '9'; }) && (w[0] == '1' || w[0] == '2') &&
+           std::atoi(w.c_str()) >= 1900 && std::atoi(w.c_str()) <= 2100;
+  };
+  if (cut >= 2 && is_year(strip(words[cut - 1]))) { sub = strip(words[cut - 1]); --cut; }
+  for (size_t i = 0; i < cut; ++i) { if (!title.empty()) title += ' '; title += words[i]; }
+  while (!title.empty() && (title.back() == '-' || title.back() == ' ')) title.pop_back();
+  if (title.empty()) { title = stem; sub.clear(); }
+}
+
 bool same_series(std::string_view a,std::string_view b) {
   auto key=series_key(a); return !key.empty() && key==series_key(b);
 }
@@ -564,6 +614,7 @@ std::string state_json(const State& s) {
   o += std::string(",\"ended\":") + (s.ended ? "true" : "false");
   o += std::string(",\"audioOnly\":") + (s.audio_only ? "true" : "false");
   o += ",\"cover\":" + std::to_string(s.cover);
+  if (s.audio_only && !s.title.empty()) o += ",\"title\":" + escape(s.title) + ",\"artist\":" + escape(s.artist);
   o += std::string(",\"sub\":{\"has\":") + (s.has_subs ? "true" : "false") + ",\"on\":" + (s.subs_on ? "true" : "false") +
        ",\"delay\":" + num(s.sub_delay, 2) + ",\"size\":" + std::to_string(s.sub_size) +
        ",\"sizeMin\":" + std::to_string(s.sub_size_min) + ",\"sizeMax\":" + std::to_string(s.sub_size_max) +

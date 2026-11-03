@@ -99,6 +99,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
 
   if (FAILED(OleInitialize(nullptr))) return 1;  // drag & drop + file dialog
   static App app;  // lives for the whole process
+  app.set_instance(&instance);
   int code = 1;
   if (app.init(inst, args, show)) code = app.run();
   OleUninitialize();

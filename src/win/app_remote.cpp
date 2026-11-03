@@ -128,7 +128,9 @@ void App::remote_publish() {
     for(const auto& item:queue_.items()) {
       std::string name=file_name(item.path);
       if(name.size()>240) {size_t end=240;while(end>0&&((unsigned char)name[end]&0xc0)==0x80)--end;name.resize(end);name+="…";}
-      bool preview=false;
+      // a song's cover is shown wherever it lives (see /queue-thumb); a film's frame only
+      // from a shared folder
+      bool preview=remote::is_audio_name(item.path);
       if(remote::is_video_name(item.path))for(const auto& root:store_.remote_folders)
         if(root.on&&remote::path_within(root.path,item.path))preview=true;
       queue_files.push_back({item.id,item.path});
@@ -143,6 +145,7 @@ void App::remote_publish() {
   st.muted = in.muted;
   if (st.playing_view) {
     st.file = file_name(path_);
+    if (audio_only_) { st.title = play_.in.music_title; st.artist = play_.in.music_artist; }
     st.pos = in.time;
     st.dur = in.dur;
     st.speed = in.speed;
@@ -171,7 +174,8 @@ void App::remote_publish() {
   }
   st.timer = remote_timer_;
   st.timer_left = remote_timer_ > 0 ? std::max(0.0, remote_timer_end_ - now()) : 0;
-  st.color = hex_color(in.accent_k > 0.2 && st.playing_view && !audio_only_ ? in.accent : kCueGlow);
+  st.color = hex_color(st.playing_view && audio_only_ && light_found_ ? light_accent_
+                       : in.accent_k > 0.2 && st.playing_view && !audio_only_ ? in.accent : kCueGlow);
   remote_.set_cover(st.cover ? path_ : std::string());
   remote_.set_state(remote::state_json(st));
 }
@@ -415,7 +419,9 @@ void App::open_remote_scene() {
   v.chips = remote_chips();
   v.phones = remote_devices_;
   v.sound = store_.remote_sound;
-  v.glow = play_.in.accent_k > 0.2 && mode_ == Mode::Play && loaded_ && !audio_only_ ? play_.in.accent : kCueGlow;
+  // the film's light, or a song's cover colour
+  v.glow = mode_ == Mode::Play && loaded_ && audio_only_ && light_found_ ? light_accent_
+         : play_.in.accent_k > 0.2 && mode_ == Mode::Play && loaded_ && !audio_only_ ? play_.in.accent : kCueGlow;
   v.problem.clear();
   v.address.clear();
   v.code.clear();

@@ -87,8 +87,11 @@ struct HomeView {
   int egg_ = 0;
   double egg_t0_ = 0;
   Rng rng_{42};
-  struct Spot { double x, y, at; int size; };
-  std::vector<Spot> spots_;
+  // the Christmas surprises: snowflakes (and the ones that land on the eyes), a falling hat,
+  // a string of lights
+  struct Flake { double x, y0, at, v, sway, ph; int size; int eye; double land; };
+  std::vector<Flake> flakes_;
+  double shake_t_ = -1;
 
   Rect r_open_, r_title_, r_dots_, r_menu_, r_list_, r_update_, r_update_skip_, r_news_, r_news_close_;
   void layout_update();
@@ -100,9 +103,11 @@ struct HomeView {
   int active() const { return kb_ ? focus_ : hover_; }
   void start_egg(double now, int forced = 0);
   void update_face_target(double now);
-  void draw_hand(Canvas& c, int fx, int fy, double a) const;
-  void draw_caligari_shapes(Canvas& c, double k) const;
-  void distort(Canvas& c, double k) const;
+  void draw_snow(Canvas& c, double t) const;
+  void draw_hat(Canvas& c, double t) const;
+  void draw_lights(Canvas& c, double t) const;
+  int lights_n() const;
+  double lights_y(double x, double t) const;
   int egg_variant_ = 0;
   double leave_t0_ = -1, enter_t0_ = -10;
   bool keep_face_ = false;

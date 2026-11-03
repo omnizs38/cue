@@ -1,6 +1,7 @@
 #include "app.h"
 #include "../core/i18n.h"
 #include "../core/util.h"
+#include <algorithm>
 #include <memory>
 
 void App::queue_refresh() {
@@ -31,10 +32,27 @@ size_t App::queue_add(const std::vector<std::string>& paths,bool replace) {
   return added+(paths.size()-batch.size());  // the playing file counts as accepted
 }
 
+// A file that is gone (deleted, moved, a drive unplugged) is skipped at once with a word about
+// it, and leaves the list: nothing waits on it.
 void App::queue_play(uint32_t id) {
-  const auto* item=queue_.get(id); if(!item)return;
-  const std::string path=item->path;
-  queue_.select(id); open(path); queue_refresh();
+  for(int guard=0;guard<(int)MediaQueue::kLimit;++guard) {
+    const auto* item=queue_.get(id); if(!item)return;
+    const std::string path=item->path;
+    if(path.find("://")!=std::string::npos||GetFileAttributesW(widen(path).c_str())!=INVALID_FILE_ATTRIBUTES) {
+      queue_.select(id); open(path); queue_refresh(); return;
+    }
+    play_.toast(i18n::format(str::queue_skipped,{{"name",file_stem(path)}}),nullptr,now());
+    log("queue: skipped a missing file");
+    const auto& items=queue_.items();
+    auto it=std::find_if(items.begin(),items.end(),[&](const auto& i){return i.id==id;});
+    uint32_t following=0;
+    if(it!=items.end()&&it+1!=items.end())following=(it+1)->id;
+    else if(store_.loop_all&&items.size()>1&&items.front().id!=id)following=items.front().id;
+    queue_.remove(id);
+    queue_refresh();
+    if(!following)return;
+    id=following;
+  }
 }
 
 DWORD WINAPI App::scan_folder(void* value) {

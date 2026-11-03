@@ -102,7 +102,7 @@ bool reg_set_dword(HKEY root, const std::wstring& key, const wchar_t* name, DWOR
 const wchar_t* kUninstallKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Cue";
 const wchar_t* kAppPathKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\App Paths\\Cue.exe";
 const wchar_t* kMediaExts[] = {L".mkv", L".mp4", L".m4v", L".mov", L".avi", L".webm", L".wmv", L".ts", L".m2ts", L".mpg",
-                               L".mpeg", L".ogv", L".ogg", L".oga", L".opus", L".mp3", L".m4a", L".aac", L".wav", L".flac",
+                               L".mpeg", L".ogv", L".divx", L".dv", L".dif", L".ogg", L".oga", L".opus", L".mp3", L".m4a", L".aac", L".wav", L".flac",
                                L".aif", L".aiff", L".wma", L".mka"};
 
 // ── payload ─────────────────────────────────────────────────────────

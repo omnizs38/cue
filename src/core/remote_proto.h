@@ -84,6 +84,10 @@ bool same_series(std::string_view a, std::string_view b);
 // For people: "Twin.Peaks.S01E03.1080p.mkv" -> "Twin Peaks" and "S01E03" ("" when not an episode).
 std::string series_title(std::string_view name);
 std::string episode_label(std::string_view name);
+// For Windows' media card: a film's or an episode's name as people say it.
+// "Twin.Peaks.S01E03.1080p.mkv" -> "Twin Peaks" / "S01E03";
+// "Blade.Runner.2049.2017.2160p.UHD.mkv" -> "Blade Runner 2049" / "2017"; else the name, cleaned.
+void card_words(std::string_view name, std::string& title, std::string& sub);
 // Same show (the identity same_series compares); "" when not an episode.
 std::string series_id(std::string_view name);
 std::string next_file(std::string_view current, const std::vector<std::string>& siblings);
@@ -97,6 +101,7 @@ bool path_within(std::string_view root, std::string_view path);
 struct State {
   bool playing_view = false;     // a file is open (else the home)
   std::string file;              // shown name
+  std::string title, artist;     // music: the song's title and artist (as the computer shows them)
   double pos = 0, dur = 0, speed = 1, volume = 100;
   bool paused = true, muted = false, ended = false, audio_only = false;
   uint32_t cover = 0;  // music: changes with each song that has a cover; 0 = no cover

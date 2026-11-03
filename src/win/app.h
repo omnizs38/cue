@@ -30,6 +30,10 @@
 #include "updater.h"
 #include "remote_server.h"
 #include "file_thumbnail.h"
+#include "cover_image.h"
+#include "single_instance.h"
+#include "media_controls.h"
+#include "../ui/music_light.h"
 #include "remote_scene.h"
 #include "taskbar_buttons.h"
 #include "overlay.h"
@@ -37,12 +41,13 @@
 
 class App {
  public:
+  void set_instance(SingleInstance* s) { instance_ = s; }  // released as soon as everything is saved, on leaving
   bool init(HINSTANCE inst, const std::vector<std::string>& args, int show);
   int run();
 
  private:
   enum class Mode { Home, Play };
-  enum : UINT { WM_APP_MPV = WM_APP + 1, WM_APP_ENGINE = WM_APP + 2, WM_APP_RECENTS = WM_APP + 3, WM_APP_THUMB = WM_APP + 4, WM_APP_MOUSE = WM_APP + 5, WM_APP_OPEN_FILES = WM_APP + 6, WM_APP_LEFT_DOWN = WM_APP + 7, WM_APP_LEFT_UP = WM_APP + 8, WM_APP_RIGHT_UP = WM_APP + 9, WM_APP_VSYNC = WM_APP + 10, WM_APP_UPDATE = WM_APP + 11, WM_APP_REMOTE = WM_APP + 12, WM_APP_QUEUE_CANCEL = WM_APP + 13, WM_APP_WHEEL = WM_APP + 14 };
+  enum : UINT { WM_APP_MPV = WM_APP + 1, WM_APP_ENGINE = WM_APP + 2, WM_APP_RECENTS = WM_APP + 3, WM_APP_THUMB = WM_APP + 4, WM_APP_MOUSE = WM_APP + 5, WM_APP_OPEN_FILES = WM_APP + 6, WM_APP_LEFT_DOWN = WM_APP + 7, WM_APP_LEFT_UP = WM_APP + 8, WM_APP_RIGHT_UP = WM_APP + 9, WM_APP_VSYNC = WM_APP + 10, WM_APP_UPDATE = WM_APP + 11, WM_APP_REMOTE = WM_APP + 12, WM_APP_QUEUE_CANCEL = WM_APP + 13, WM_APP_WHEEL = WM_APP + 14, WM_APP_MEDIA_BUTTON = WM_APP + 15 };
   enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREFETCH = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14, T_FOLDER = 15, T_QUEUE = 16 };
 
   HINSTANCE inst_ = nullptr;
@@ -92,6 +97,12 @@ class App {
   double last_time_ = 0;
   bool seek_in_flight_ = false;
   double seek_pending_ = -1;
+  // After a seek the engine can still report the old time for a while (music rebuilds its picture
+  // around the cover first): the bar keeps showing where it was sent until the engine agrees.
+  double seek_hold_ = -1, seek_hold_until_ = 0;
+  int open_failures_ = 0;
+  bool taskbar_seen_play_ = false;  // queued files in a row that would not open (skipping stops after three)
+  void hold_seek(double target);
   bool cursor_autohide_ = true;
   POINT last_cursor_{-1, -1};
   bool anim_on_ = false;
@@ -159,6 +170,8 @@ class App {
   void set_hidden(bool h);
   bool hidden_now() const { return hidden_ || IsIconic(hwnd_); }
   void reopen_music();
+  void reopen_song();           // the same song opened again at the same moment (behind pixels)
+  bool cover_graph_live() const { return audio_only_ && waveform_active_ && cover_art_ && cover_vid_ > 0; }
   MusicFrame music_frame_ = MusicFrame::Scene;
   MusicView view_from_;
   double view_t0_ = -1;           // a glide between two framings, when it began
@@ -262,11 +275,38 @@ class App {
   double accent_want_ = -1, accent_req_t_ = -10;
   double accent_media_t_ = -1;
   bool thumb_for_accent_ = false;
+  // music's light show: the engine's loudness for each audio frame (an astats filter on the
+  // song's own filter chain), the cover's colours, and the motion they make
+  MusicLight music_light_;
+  std::shared_ptr<CoverColorsJob> light_cover_job_;
+  bool light_meter_ = false;     // the song has the meter (set when it was opened)
+  bool light_found_ = false;     // the song has a cover (its accent lights the spectrum-only look)
+  Rgb light_accent_{196, 198, 214};
+  double light_k_ = 0;           // the show's fade
+  Rgb light_pal_[8]{{150, 152, 168}, {150, 152, 168}, {150, 152, 168}, {150, 152, 168},
+                    {150, 152, 168}, {150, 152, 168}, {150, 152, 168}, {150, 152, 168}};  // the cover's colours round it
+  double light_kick_[4]{};       // the corners' light, kicked in turn by the beats
+  int light_rings_ = 0;
+  bool lit_sent_ = false;
+  SingleInstance* instance_ = nullptr;
+  bool edge_sent_ = false;  // the music picture's soft edges toward the window's black
+  double light_latency_ = 0.25;  // how far the meter runs ahead of the speakers
+  bool step_music_light(double dt);
+  // the lock screen's and the volume flyout's media card (Windows' media controls)
+  MediaControls media_controls_;
+  bool media_attached_ = false;
+  std::string media_key_;        // the file and words last sent
+  std::shared_ptr<CoverColorsJob> media_cover_job_;
+  std::shared_ptr<CardStillJob> media_still_job_;
+  std::string media_title_, media_sub_;
+  double media_still_due_ = -1, media_still_read_ = -1;  // a film: when to take its still, when to read it
+  int media_still_tries_ = 0;
+  void media_sync();
   PlaybackWarmup background_warmup_;
   bool atmosphere_sampled_ = false;
   bool background_ready(double delay = PlaybackWarmup::kDelay) const;
   bool atmosphere_ready() const;
-  void reset_atmosphere();
+  void reset_atmosphere(bool keep_music_light = false);
   void sample_atmosphere(const std::vector<uint32_t>& px, int w, int h);
   bool step_atmosphere(double dt);
   double atmo_t_ = 0;

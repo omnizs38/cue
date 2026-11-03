@@ -342,6 +342,7 @@
   "queue.add_tracks": "add tracks",
   "queue.or_drag": "or drag them here",
   "queue.drop_to_add": "drop to add to the list",
+  "queue.skipped": "couldn't open {name} · skipped",
   "queue.up_next": "next",
   "toast.email_copied": "email address copied",
   "queue.add_files_short": "files",

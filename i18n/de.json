@@ -341,6 +341,7 @@
   "queue.add_tracks": "Titel hinzufügen",
   "queue.or_drag": "oder hierher ziehen",
   "queue.drop_to_add": "loslassen, um sie anzuhängen",
+  "queue.skipped": "{name} lässt sich nicht öffnen · übersprungen",
   "queue.up_next": "als Nächstes",
   "toast.email_copied": "E-Mail-Adresse kopiert",
   "queue.add_files_short": "Dateien",

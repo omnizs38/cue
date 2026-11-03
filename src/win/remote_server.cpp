@@ -23,6 +23,7 @@
 
 #include "platform.h"
 #include "../core/json.h"
+#include "cover_image.h"
 
 namespace {
 #include "remote_page.inc"
@@ -86,20 +87,18 @@ std::string bmp24(const std::vector<uint32_t>& px, int w, int h) {
   return d;
 }
 
-// What Explorer shows for a file, shrunk to W x H. The picture covers a centred tile `tw` wide
-// (W for a film's frame; a square for music, whose covers are square).
-static std::string make_image(const std::string& path, int W, int H, int tw) {
-  std::string out;
-  HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+// What Explorer shows for a file, as BGRA pixels about W x H or bigger.
+static bool shell_pixels(const std::string& path, int W, int H, std::vector<uint32_t>& src, int& w, int& h) {
+  bool ok = false;
   IShellItemImageFactory* f = nullptr;
   if (SUCCEEDED(SHCreateItemFromParsingName(widen(path).c_str(), nullptr, IID_PPV_ARGS(&f)))) {
     HBITMAP hb = nullptr;
-    if (SUCCEEDED(f->GetImage(SIZE{W * 4, H * 4}, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hb)) && hb) {
+    if (SUCCEEDED(f->GetImage(SIZE{W, H}, SIIGBF_THUMBNAILONLY | SIIGBF_BIGGERSIZEOK, &hb)) && hb) {
       BITMAP bm{};
       GetObjectW(hb, sizeof bm, &bm);
-      int w = bm.bmWidth, h = std::abs(bm.bmHeight);
+      w = bm.bmWidth; h = std::abs(bm.bmHeight);
       if (w > 0 && h > 0 && w <= 2048 && h <= 2048) {
-        std::vector<uint32_t> src((size_t)w * h);
+        src.assign((size_t)w * h, 0);
         BITMAPINFO bi{};
         bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
         bi.bmiHeader.biWidth = w;
@@ -107,43 +106,56 @@ static std::string make_image(const std::string& path, int W, int H, int tw) {
         bi.bmiHeader.biPlanes = 1;
         bi.bmiHeader.biBitCount = 32;
         HDC dc = GetDC(nullptr);
-        bool ok = GetDIBits(dc, hb, 0, (UINT)h, src.data(), &bi, DIB_RGB_COLORS) == h;
+        ok = GetDIBits(dc, hb, 0, (UINT)h, src.data(), &bi, DIB_RGB_COLORS) == h;
         ReleaseDC(nullptr, dc);
-        if (ok) {
-          // cover the 16:9 tile: crop the middle, then average each target pixel's box.
-          // Music keeps its square cover whole, centred in the tile on black.
-          const int ox = (W - tw) / 2;
-          double ar = (double)tw / H;
-          double cw = w, ch = h, cx = 0, cy = 0;
-          if (w / (double)h > ar) { cw = h * ar; cx = (w - cw) / 2; } else { ch = w / ar; cy = (h - ch) / 2; }
-          std::vector<uint32_t> dst((size_t)W * H);
-          for (int y = 0; y < H; ++y)
-            for (int x = 0; x < tw; ++x) {
-              int x0 = (int)(cx + x * cw / tw), x1 = std::max(x0 + 1, (int)(cx + (x + 1) * cw / tw));
-              int y0 = (int)(cy + y * ch / H), y1 = std::max(y0 + 1, (int)(cy + (y + 1) * ch / H));
-              uint64_t r = 0, g = 0, b = 0, n = 0;
-              for (int yy = y0; yy < std::min(y1, h); ++yy)
-                for (int xx = x0; xx < std::min(x1, w); ++xx) {
-                  uint32_t v = src[(size_t)yy * w + xx];
-                  b += v & 0xFF; g += (v >> 8) & 0xFF; r += (v >> 16) & 0xFF; ++n;
-                }
-              if (!n) n = 1;
-              dst[(size_t)y * W + ox + x] = (uint32_t)(r / n) << 16 | (uint32_t)(g / n) << 8 | (uint32_t)(b / n);
-            }
-          // a blank answer (an all-black first frame, a shell with nothing to show) is no
-          // picture: the phone draws its own pixel landscape instead
-          int lo = 255, hi = 0;
-          for (uint32_t v : dst) {
-            int l = (int)(((v >> 16) & 0xFF) * 3 + ((v >> 8) & 0xFF) * 6 + (v & 0xFF)) / 10;
-            lo = std::min(lo, l);
-            hi = std::max(hi, l);
-          }
-          if (hi - lo > 3) out = bmp24(dst, W, H);
-        }
       }
       DeleteObject(hb);
     }
     f->Release();
+  }
+  return ok;
+}
+
+// A file's picture shrunk to W x H. The picture covers a centred tile `tw` wide (W for a film's
+// frame; a square for music, whose covers are square). Music reads its own cover first (Windows
+// shows none for Opus, Ogg and many other songs), then asks the shell like any file.
+static std::string make_image(const std::string& path, int W, int H, int tw) {
+  std::string out;
+  HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+  std::vector<uint32_t> src;
+  int w = 0, h = 0;
+  bool ok = remote::is_audio_name(path) && cover_image(path, src, w, h, 512);
+  if (!ok) ok = shell_pixels(path, W * 4, H * 4, src, w, h);
+  if (ok) {
+    // cover the tile: crop the middle, then average each target pixel's box.
+    // Music keeps its square cover whole, centred in the tile on black.
+    const int ox = (W - tw) / 2;
+    double ar = (double)tw / H;
+    double cw = w, ch = h, cx = 0, cy = 0;
+    if (w / (double)h > ar) { cw = h * ar; cx = (w - cw) / 2; } else { ch = w / ar; cy = (h - ch) / 2; }
+    std::vector<uint32_t> dst((size_t)W * H);
+    for (int y = 0; y < H; ++y)
+      for (int x = 0; x < tw; ++x) {
+        int x0 = (int)(cx + x * cw / tw), x1 = std::max(x0 + 1, (int)(cx + (x + 1) * cw / tw));
+        int y0 = (int)(cy + y * ch / H), y1 = std::max(y0 + 1, (int)(cy + (y + 1) * ch / H));
+        uint64_t r = 0, g = 0, b = 0, n = 0;
+        for (int yy = y0; yy < std::min(y1, h); ++yy)
+          for (int xx = x0; xx < std::min(x1, w); ++xx) {
+            uint32_t v = src[(size_t)yy * w + xx];
+            b += v & 0xFF; g += (v >> 8) & 0xFF; r += (v >> 16) & 0xFF; ++n;
+          }
+        if (!n) n = 1;
+        dst[(size_t)y * W + ox + x] = (uint32_t)(r / n) << 16 | (uint32_t)(g / n) << 8 | (uint32_t)(b / n);
+      }
+    // a blank answer (an all-black first frame, a shell with nothing to show) is no
+    // picture: the phone draws its own pixel landscape instead
+    int lo = 255, hi = 0;
+    for (uint32_t v : dst) {
+      int l = (int)(((v >> 16) & 0xFF) * 3 + ((v >> 8) & 0xFF) * 6 + (v & 0xFF)) / 10;
+      lo = std::min(lo, l);
+      hi = std::max(hi, l);
+    }
+    if (hi - lo > 3) out = bmp24(dst, W, H);
   }
   if (SUCCEEDED(co)) CoUninitialize();
   return out;
@@ -465,6 +477,10 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&timeout), sizeof timeout);
     std::string path = r.path=="/queue-thumb"||r.path=="/cover"?queue_path:q("p");
     bool list = r.path == "/list", cover = r.path == "/cover";
+    // a song already in the queue shows its cover wherever it lives: the phone names only the
+    // queue's id, and the queue (names included) is already shared with it. Films still need a
+    // shared folder, as a frame can show more than a name.
+    bool queue_song = r.path == "/queue-thumb" && remote::is_audio_name(path);
     auto workers_ref = workers;
     auto thumbs_ref = thumbs;
     auto gate_ref = gate;
@@ -475,7 +491,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
     WSADATA wd{};
     if (WSAStartup(MAKEWORD(2, 2), &wd) != 0) { closesocket(s); return; }
     ++*workers_ref;
-    try { std::thread([s, path, list, cover, roots_copy, progress_copy, workers_ref, thumbs_ref, gate_ref, generation_ref, epoch] {
+    try { std::thread([s, path, list, cover, queue_song, roots_copy, progress_copy, workers_ref, thumbs_ref, gate_ref, generation_ref, epoch] {
       struct Cleanup {
         SOCKET socket;
         std::shared_ptr<std::atomic<int>> workers;
@@ -499,7 +515,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
           }
         }
         resp = img.empty() ? remote::http_response(404, "text/plain", "") : remote::http_response(200, "image/bmp", img);
-      } else if (!root_of(roots_copy, path) || !remote_path_allowed(root_of(roots_copy, path)->path, path) || !remote::is_video_name(path)) {
+      } else if (!queue_song && (!root_of(roots_copy, path) || !remote_path_allowed(root_of(roots_copy, path)->path, path) || !remote::is_playable_name(path))) {
         resp = remote::http_response(403, "text/plain", "");
       } else {
         std::string img, k = lower_path(path);
@@ -507,7 +523,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
           gate_ref->enter(3);
           struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
           if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
-            img = make_thumb(path, false);
+            img = make_thumb(path, remote::is_audio_name(path));  // a song: its square cover, centred
             if (*generation_ref == epoch) thumbs_ref->put(k, img);
           }
         }

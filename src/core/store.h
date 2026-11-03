@@ -50,7 +50,7 @@ struct SettingsStore {
   DockPlace dock;
   // last normal window rect (physical px at `dpi`), and whether it was maximized
   struct WinPlace { bool has = false; int x = 0, y = 0, w = 0, h = 0, dpi = 96; bool max = false; } win;
-  int eggs_seen = 0;  // bitmask of horror variants already seen
+  int eggs_seen = 0;  // bitmask of the home's surprises already seen (Christmas: bits 5-7)
 
   // ── media ──────────────────────────────────────────────────────
   std::vector<RecentItem> recents;  // newest first

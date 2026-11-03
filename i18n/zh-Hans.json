@@ -340,6 +340,7 @@
   "queue.add_tracks": "添加曲目",
   "queue.or_drag": "或拖到这里",
   "queue.drop_to_add": "松开以加入列表",
+  "queue.skipped": "无法打开 {name} · 已跳过",
   "queue.up_next": "下一项",
   "toast.email_copied": "邮箱地址已复制",
   "queue.add_files_short": "文件",

@@ -76,15 +76,17 @@ int main() {
   assert(playing.take_actions().empty());
   // The panel comes out of its button: its list icon sits over the bar's up-next icon
   // (unless the window edge stops it), it stays inside the window and off the controls.
+  // Like every other menu of the bar: centred on its button, or stopped at the bar's edge.
   for(bool free:{false,true})for(auto size:{std::pair{1920,1080},std::pair{2560,1080},std::pair{3840,2160}})for(double scale:{1.,2.}) {
     PlayView p;p.in.dur=100;p.in.controls_free=free;p.in.queue_active=true;p.in.queue=entries;
     p.resize(size.first,size.second,scale);p.reset(1);p.key("q",false,false,1);
     for(int n=0;n<40;++n)p.tick(1+n/60.,1./60);
     Rect r=p.panel_rect();assert(r.x>=0&&r.r()<=size.first&&r.y>=0&&r.b()<=size.second);
     Rect b;for(auto& h:p.hots_)if(h.id==PlayView::B_QUEUE)b=h.r;
-    int icon=r.x+(int)std::lround(16*p.queue_s_),button=p.dock_rect().x+b.cx();
-    bool clamped=r.x<=(int)std::lround(8*p.queue_s_)||r.r()>=size.first-(int)std::lround(8*p.queue_s_);
-    assert(clamped||std::abs(icon-button)<=1);
+    Rect d=p.dock_rect();int button=d.x+b.cx(),s=(int)std::ceil(scale);
+    bool centred=std::abs(r.cx()-button)<=2*s,at_edge=std::abs(r.r()-d.r())<=2*s||std::abs(r.x-d.x)<=2*s;
+    bool beside=r.r()<=d.x||r.x>=d.r();  // short, wide windows: beside the bar
+    assert(centred||at_edge||beside||(r.w>=d.w&&std::abs(r.cx()-d.cx())<=2*s));
     for(auto& h:p.hots_) {Rect b=h.r;b.x+=p.dock_rect().x;b.y+=p.dock_rect().y;assert(b.r()<=r.x||b.x>=r.r()||b.b()<=r.y||b.y>=r.b());}
   }
   puts("Queue sheet: complete 512-item list, drag/drop, cancellation, scroll, keyboard, image bounds, 96 adaptive layouts and panels anchored to their button and clear of the controls passed");

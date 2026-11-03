@@ -1,4 +1,4 @@
-# Validation · Cue 1.2
+# Validation · Cue 1.2.1
 
 Validation date: 2026-11-02. Environment: Linux x86_64, GCC, MinGW-w64 GCC 13
 cross-compiler and Chromium Headless Shell 134 through Playwright 1.51.1.
@@ -271,6 +271,42 @@ Run these on Windows with the release build:
    its note, the wings, and the title beside it; right-click → **spectrum only**: the
    equalizer stands where the tile was, the title, artist and album stay beside it, and
    **N tracks** still opens the list.
+43. **Seeking a song.** Click far along the timeline of a song with a cover, several times.
+   Expected: the knob and the time stay where clicked; they never jump back to the old time.
+44. **A queued file that is gone.** Queue an album, delete the next song in Explorer, press
+   next. Expected: a note "couldn't open … · skipped" and the song after it plays at once;
+   no busy cursor.
+45. **Taskbar buttons across songs.** Point at Cue's taskbar button and press next several
+   times. Expected: the buttons never disappear; the preview updates.
+46. **Phone covers.** Open the up next sheet and a music folder on the phone. Expected: songs
+   show their covers (square), songs without one the note.
+47. **Click on a song.** Click the cover and the empty scene. Expected: the music keeps playing
+   and the bar comes back; space pauses; a double click goes full screen without pausing.
+48. **A dropped folder.** With an album's list open, drop a folder of songs on the window.
+   Expected: "reading…", then its songs join the end of the list. On the home, drop a folder:
+   a new list starts playing from its first file.
+49. **Covers Explorer does not show.** Queue an `.opus` (or `.ogg`) song with an embedded
+   cover and an MP3 kept outside the shared folders, then open up next on the phone.
+   Expected: both show their covers, square; the wheel's centre check sits in the middle.
+
+50. **Music's light show.** Ambient lighting on, play an album with covers in the cover look,
+   then in spectrum only. Expected: soft light inside the window around the cover and in its
+   corners, in its colours, breathing slowly in and out (deeper in full passages), the beats barely visible, the spectrum's dots glowing a short way into the room as they rise; with a bright cover, no dark patch beside the wings; in spectrum only, a round light behind the equalizer and no dark square where the cover was; switching the look keeps the song going until the pixels are out and comes back in about half a second; nothing outside the window; pausing settles
+   it; ambient off removes it; Windows' "Show animations" off leaves only a slow breath.
+51. **Lock screen.** Play a song with a cover, press Win+L. Expected: the card shows title,
+   artist and cover; play/pause and next work from it and from the volume flyout; a film
+   shows its name; going home clears the card.
+52. **Phone record.** Turn the wheel on a song with a cover. Expected: the cover folds into a
+   pixel record that turns with the thumb and the offset under it; on release it unfolds
+   upright. The right-hand time switches between −left and length with a tap.
+53. **Christmas.** Click the home's eyes seven times, three times over. Expected: snow (with
+   caps on the eyes and a shake), a Santa hat, a string of lights; the eyes return to normal.
+54. **Music in any window shape.** Ambient lighting on, a song with a bright cover; drag the
+   window taller than 16:9, then much wider, then small, and let go each time. Expected: no
+   black band above and below the scene in the taller window (the light reaches the edges);
+   in a very wide one the scene fades softly into black at its sides, never over the cover or
+   wings; a long title ends with "..." at the window's edge; when the interface changes size on
+   letting go, the cover glides to its place; a film still letterboxes in black.
 
 ## Native release checks not covered by portable tests
 

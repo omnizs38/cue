@@ -342,6 +342,7 @@
   "queue.add_tracks": "añadir pistas",
   "queue.or_drag": "o arrástralas aquí",
   "queue.drop_to_add": "suelta para añadir a la lista",
+  "queue.skipped": "no se pudo abrir {name} · saltado",
   "queue.up_next": "siguiente",
   "toast.email_copied": "dirección de correo copiada",
   "queue.add_files_short": "archivos",

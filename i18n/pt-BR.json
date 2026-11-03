@@ -342,6 +342,7 @@
   "queue.add_tracks": "adicionar faixas",
   "queue.or_drag": "ou arraste para cá",
   "queue.drop_to_add": "solte para adicionar à lista",
+  "queue.skipped": "não deu para abrir {name} · pulei",
   "queue.up_next": "próximo",
   "toast.email_copied": "endereço de e-mail copiado",
   "queue.add_files_short": "arquivos",

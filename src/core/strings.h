@@ -340,6 +340,7 @@ enum Id : uint16_t {
   queue_add_tracks,
   queue_or_drag,
   queue_drop_to_add,
+  queue_skipped,
   queue_up_next,
   toast_email_copied,
   queue_add_files_short,

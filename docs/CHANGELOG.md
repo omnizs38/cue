@@ -1,5 +1,84 @@
 # Changelog
 
+## 1.2.1 — 2026-11-02
+
+- Music: with ambient lighting on, a light show plays inside the window: a soft light around
+  the cover and pools in the window's corners, in the cover's colours, that breathe in and
+  out on a slow cycle (deeper and a little quicker when the music is full, shallow in quiet
+  passages), follow the song's body, keep only a trace of each beat and turn round at a
+  chorus; the spectrum's dots glow softly into the room as they rise, in their own colours,
+  and take the cover's colour beside them (only the dots: a bright cover's own light around
+  them is no longer tinted into dark patches). With the spectrum alone,
+  the light sits behind it, round, and its dots take the light's colours. It never covers the cover or the words, rests while paused, and keeps to a slow
+  breath when Windows asks for less motion. The halo outside the window stays the films'.
+- Music: a window taller or wider than 16:9 is filled by the scene and its light (no more
+  black bars above and below, where the light stopped on a straight line); where it cannot
+  reach (very wide windows) it fades softly into the black. A long title ends with "..." at
+  the window's edge, and when the interface changes size at the end of a resize the cover
+  glides to its place.
+- Closing: saving and the engine's end happen out of sight, after Windows' closing animation,
+  and Cue opened again right after closing starts at once instead of waiting for the closing
+  one to finish. Settings are saved even while another program reads the file for a moment
+  (a few short retries), so the place in a film is not lost on closing.
+- The subtitle menu and up next open over their buttons, like the audio, speed and "..."
+  menus (centred on the button, or stopped at the bar's edge), instead of in the middle of the
+  bar or pushed to the window's side.
+- Starting the timeline previews' helper no longer shows Windows' "working in background"
+  pointer for a few seconds after opening Cue.
+- Phone: the wheel's outer ring follows the song's time again after a song is opened from the
+  phone's folders or on the computer (it stayed on the old song's place in the queue). It shows
+  the place in the queue only in up-next mode.
+- Phone: on short phones nothing lands on the title any more. A short note (+15 s, a mode,
+  the next episode) takes the title's row for a moment; the film's preview box and a song's
+  record and offset shrink with the stage and stay above it; the place a turn of the wheel
+  went to is no longer announced on top (the time under the bar says it), and a song skipped
+  to no longer flashes its file name before its title.
+- Phone: a song's cover made of a video frame boxed in black bars (common in songs taken from
+  video sites) is shown without the bars.
+- DV camcorder files (`.dv`, `.dif`) and `.divx` files are offered in Open, in Explorer's
+  Open with and Default apps, and in folders on the phone.
+- Music: switching between cover + spectrum and spectrum only is quicker: the song keeps
+  playing while the picture goes out, comes back where it was without a second search, and
+  the pixel transition is shorter.
+- Lock screen and the volume flyout: Windows' media card shows what plays (a song's title,
+  artist and cover; a film's name as people say it, "Twin Peaks · S01E03", with a still of
+  it), its timeline, and previous / play-pause / next.
+- The phone's pairing screen on the computer glows in a song's cover colour.
+- Phone: songs show their title and artist (as the computer does) instead of the file name.
+- Phone: turning the wheel on a song turns its cover into a pixel record that spins with the
+  thumb and turns back upright on release.
+- Phone: the time on the right of the bar is what is left or the whole length (a tap
+  switches, remembered for films and songs); "ends at" is gone.
+- Home: the seven-click surprises are now Christmas ones: first snow (some of it lands on the
+  eyes), a Santa hat, and a string of lights.
+- Music: a click on the scene no longer pauses; it brings the controls back. Pause with
+  the bar's button, the space bar, a media key, the taskbar or the phone. A double click
+  is still full screen; films keep click to pause.
+- A folder dropped on the window brings its media: into the open list, or as a new list
+  that starts playing (one folder at a time, not recursive).
+- Music with its own cover: choosing another audio track, or mixing tracks, opens the
+  song again at the same moment instead of rebuilding its picture mid-song; a remembered
+  mix is part of the picture from the start.
+- Phone: the click wheel's up next mode shows a song's cover while it is picked.
+- Music: the control bar rests like a film's once the pointer is still, and comes back
+  with any movement; a song without a picture keeps it.
+- Music: the look choice in the right-click menu is two icons at the end of its row;
+  the row names the look that is on, or the one under the pointer.
+- Music: after a seek the bar stays where it was sent instead of jumping back to the
+  old time while the engine restarts the picture.
+- A queued file that is gone (deleted, moved, a drive unplugged) is skipped with a
+  short note instead of being waited on; one that fails to open is skipped too (three
+  in a row at most).
+- The taskbar preview's buttons stay while the next file opens instead of vanishing and
+  coming back.
+- Phone: songs show their covers in the up next sheet and in the folders. Cue reads the
+  picture embedded in the song (MP3, FLAC, M4A, Ogg and Opus) or one beside it (the song's
+  own `.jpg`, then cover/folder/front), so covers that Windows Explorer does not show
+  appear too; a queued song shows its cover wherever it lives. Its picture is square.
+- Phone: the click wheel's centre icon (the check, the folder, the mode icons) sits in
+  the middle of the button.
+- What's new on the home is per version line: 1.2.1 does not bring 1.2's news back.
+
 ## 1.2 — 2026-11-02
 
 - Give Up next a permanent control-bar button beside repeat, in wide and narrow

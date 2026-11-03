@@ -20,7 +20,7 @@ The UI thread owns application state and rendering. An engine thread loads libmp
 
 The video occupies a child window. Mouse events are forwarded without blocking the engine; keyboard bindings reach the UI through mpv. Engine events wake the Win32 loop through `PostMessage`, with bounded batches to keep it responsive. Commands are asynchronous and seeking allows only one request in flight.
 
-`SingleInstance` holds a per-session mutex. Later launches send UTF-8 paths through `WM_COPYDATA` and exit before loading the engine. Requests received during startup wait in `pending_open_`. Preview-host and registration helper modes bypass this path.
+`SingleInstance` holds a per-session mutex, released by `quit_now` once the state is saved (the window is hidden first, with Windows' own closing animation; the engine ends behind it). Later launches send UTF-8 paths through `WM_COPYDATA` and exit before loading the engine. Requests received during startup wait in `pending_open_`. Preview-host and registration helper modes bypass this path.
 
 A single click sends pause/resume immediately. A recognized double-click restores the starting playback state before toggling fullscreen; a brief state change between clicks remains possible.
 
@@ -54,7 +54,7 @@ Controls remain visible; video previews and ambient lighting stay off. Timeline 
 
 `core/remote_proto` holds everything portable: HTTP parsing, the WebSocket handshake (SHA-1, Base64) and frames, the JSON state and commands, folder filtering, natural order and next-episode detection, pairing-code throttling, strict command validation, resource limits and lexical path containment. `core/qr` encodes the pairing QR code (byte mode, versions 1-10, ECC M; verified against a reference encoder). `core/remote_sound` synthesizes the pairing sound as WAV bytes.
 
-`win/remote_server` runs one thread with a `select` loop for HTTP and WebSocket clients, accepting only private IPv4 peers, exact local-endpoint `Host` headers and same-origin browser connections. Folder listings and thumbnails (Explorer's `IShellItemImageFactory`, reduced to 84×48 BMP) run on at most six short-lived workers that own their socket and copies of what they read. A same-origin WebSocket upgrades without exposing player state, then requires a credential in its first masked text frame within five seconds. HTTP data endpoints require a Bearer header. PINs have six digits, two-minute validity and one use; fresh tokens have 256 bits from Windows CSPRNG, with no predictable fallback. Turning the remote off revokes remembered tokens. WebSocket connections recheck token validity; frames, outgoing buffers, message rates and pending UI commands are bounded. HTML uses a per-response script nonce and CSP. Filesystem access rejects special Windows path syntax, checks resolved handles and refuses descendant reparse points. HTTP remains unencrypted.
+`win/remote_server` runs one thread with a `select` loop for HTTP and WebSocket clients, accepting only private IPv4 peers, exact local-endpoint `Host` headers and same-origin browser connections. Folder listings and thumbnails (Explorer's `IShellItemImageFactory`, reduced to 84×48 BMP; for songs, first the cover `core/cover_art` finds in the file's tags — ID3v2, FLAC, MP4, Ogg/Opus — or beside it, decoded by WIC at most 512 px a side) run on at most six short-lived workers that own their socket and copies of what they read. A same-origin WebSocket upgrades without exposing player state, then requires a credential in its first masked text frame within five seconds. HTTP data endpoints require a Bearer header. PINs have six digits, two-minute validity and one use; fresh tokens have 256 bits from Windows CSPRNG, with no predictable fallback. Turning the remote off revokes remembered tokens. WebSocket connections recheck token validity; frames, outgoing buffers, message rates and pending UI commands are bounded. HTML uses a per-response script nonce and CSP. Filesystem access rejects special Windows path syntax, checks resolved handles and refuses descendant reparse points. HTTP remains unencrypted.
 
 Commands reach the UI thread through `WM_APP + 12`; App applies them as the same `PlayAction`s the dock produces, then publishes a state snapshot (~2 Hz while phones are connected, and after every command).
 
@@ -111,8 +111,8 @@ the panel closes. Only the visible viewport is composed; the queue stays bounded
 to 512 entries. Each visible preview keeps a copy scaled to its row (released when
 the row leaves the viewport), and the panel background is cached per size, so a
 scroll frame copies rows instead of resampling previews pixel by pixel. The panel is a popover
-anchored to the up next button: its list icon is placed over the button's icon and
-only the window margin moves it. Windows at least 760 art px wide keep the interface
+anchored to the up next button like the bar's other menus: centred on its button, stopped
+at the bar's edge (centred on the bar when wider than it), then kept inside the window margin. Windows at least 760 art px wide keep the interface
 scale and allow about ten rows (320 px wide); smaller windows compact its scale.
 Other menus keep their placement above (or below) the bar, but when that space is
 too short for them (short, wide windows) they open beside the bar, level with its
@@ -134,7 +134,16 @@ cover is drawn (the shader's pass and the tilt). The cover is scaled once with
 Lanczos to 520 px and placed on one 1920x1080 scene (`MusicScene`), the cover on the left
 and the words' column on the right. The window frames it (`MusicFrame`, `music_view`):
 `Scene` shows all of it, `Tall` (portrait windows) the cover with the words under it,
-`Cover` (small windows) the cover and its wings alone above the bar. The framing is mpv's
+`Cover` (small windows) the cover and its wings alone above the bar. In a window of another
+shape than 16:9, `Scene` grows from fitting toward filling the window (at most by a third), as
+far as the cover, the wings and the start of the words' column stay inside margins of 3.5%
+(7% of the height above and below) and above the bar, found by a bisection on the scale; the
+words end in "..." at the window's edge. Where the picture still stops short of the window
+(very wide windows, `Cover` in a wide one), the `edge_*` pass fades it into the window's black
+on those sides, over a quarter of the frame's smaller side at most and never over the cover or
+wings: the picture and its light can only paint inside the picture's own frame, and would
+otherwise meet the black on a straight line. A new interface scale when a resize ends glides
+the framing too (`refresh_ui_scale`). The framing is mpv's
 `video-zoom` / `video-pan-x/y` as file-local options (`mpv_framing`), updated on every
 `WM_SIZE` including mid-drag and glided for 0.34 s across frames (`App::music_fit_window`,
 `step_music_view`); nothing is rebuilt. The shader's `cov_*` coordinates are taken in the
@@ -159,9 +168,12 @@ Look changes reopen the song rather than swapping `lavfi-complex` in place
 (`App::reopen_music`): with the cover's attached-picture track in the graph, a runtime swap
 could leave the graph waiting for a cover frame the demuxer does not send again (no sound)
 or fail and end the file (the queue skipped). The reopen runs inside the audio-switch stage
-machine: pixels out, `loadfile` of the same path with `start` at the saved position and pause
-held (`music_reopening_` in the `on_load` hook), an exact seek after `PLAYBACK_RESTART`,
-pixels in, pause restored. `on_file_loaded` keeps the interface (no reset) for a reopen. A
+machine: pixels out (0.12 s, the song still playing), `loadfile` of the same path with `start`
+at the position read just then and pause held (`music_reopening_` in the `on_load` hook),
+pixels in (0.26 s) and pause restored at `PLAYBACK_RESTART`. An absolute start is already a
+precise seek, so the reopen skips the exact seek a track change needs when it lands within
+0.2 s. Keeping both looks in one graph to switch without a reopen was measured at about 60%
+more CPU for the cover look, and is not used. `on_file_loaded` keeps the interface (no reset) for a reopen. A
 song that follows another in play mode starts at stage 5 of the same machine (`music_intro_`).
 The wings' dot grid is one `color`+`drawgrid` frame multiplied into their alpha by `blend`
 (repeated by framesync), not `drawgrid` per picture.
@@ -263,6 +275,16 @@ spring (`--spring`, about 3% overshoot) in 240–300 ms. Entrances travel 8–14
 staggers stay under about 110 ms in total. Image fades and the click-wheel position
 dot change in two or three pixel steps. `prefers-reduced-motion` removes transitions
 and animations on both surfaces.
+
+## Music's light show
+
+For music the ambient switch drives a pass inside the picture rather than the halo windows. When a song is opened, a meter joins its file-local audio filter chain: `@cuelvl:lavfi=[astats=metadata=1:reset=1:…]` reports each audio frame's RMS level and zero-crossing rate as frame metadata, read through `af-metadata/cuelvl` at the poll's 30 Hz while the window can be seen. The meter changes no sample; a failing user filter is bypassed by the engine. `ui/music_light` turns the readings into motion: readings wait for the moment they are heard (the engine runs `audio-buffer` plus 40 ms ahead), a slow automatic gain gives the music's body (rising over 0.4 s, falling over 1.1 s: the light follows the body, not each hit), a breathing cycle runs under it (`breath`, a sine of 6.5 s in quiet passages down to 4 s when full, its depth 0.45 to 1 with the body, easing to rest over about 1.5 s at a pause; 8 s and shallow for reduced motion), a fast envelope over a slow one starts a ring (at most three a second), a level a few seconds long against half a minute marks a chorus and turns the colours half a turn, and the zero-crossing rate against its own average makes twinkles. Windows' reduced motion leaves only a slow breath. The `lit_*` hook in `win/blur_shader.h` draws it on OUTPUT, before the OSD, in soft light only: two quarter-size passes first find the lit dots (`LIT_MASK`: the wings or the spectrum alone, the cells that stay lit for any sound left out, and with the cover the graph's soft light between the dots, read in the gap beside the cover and past the wing, subtracted) and gather, for each pixel, the dots found on the way back toward the cover's centre or the spectrum's foot (`LIT_RAYS`, 32 jittered taps over 27% of the way, longer on the in-breath), so the dots glow a short way into the room, in their own colours; then a bloom outside the cover (rounded-square distance) whose reach and strength follow the body a little and the breath (`lit_br`) more, with only a trace of each passing ring, and a Gaussian pool in each corner of the window nudged in turn by the rings (`lit_c*`, decaying over 0.7 s). With the spectrum alone (`lit_cov=0`) the bloom is round, centred and also lit behind the equalizer, so no dark square is left where a cover would be, and its dots take the light's colour where they stand. Colours come from eight samples of the cover's border colours (`lit_p*`, from the decoded cover's zones, from the left, clockwise), interpolated by angle and turned by `lit_t`; the spectrum's dots are tinted with the cover's colour at their height. Screen blending, a 1/255 noise against banding, nothing drawn on the cover. Parameters travel with the other dynamic shader options; nothing is sent while the window is hidden or the show is still.
+
+`core/cover_art` finds a song's picture without the engine (ID3v2 APIC/PIC with unsynchronisation, FLAC PICTURE, MP4 `covr`, Ogg Vorbis/Opus `METADATA_BLOCK_PICTURE`, then `<song>.jpg`, cover, folder, front); `win/cover_image` decodes it with WIC (scaled while decoding) on a background thread, for the phone's thumbnails, the show's colours, the pairing screen's glow and the media card. A film's card shows a still the engine saves with `screenshot-to-file` a few seconds in (checked on a worker that it is not black; up to three tries) and its name from `remote::card_words` (series and episode, or title and year, release tags dropped).
+
+## Windows media controls
+
+`win/media_controls` registers the window with System Media Transport Controls through `ISystemMediaTransportControlsInterop::GetForWindow`, with the few Windows Runtime interfaces declared in vtable order and `RoGetActivationFactory`, `RoActivateInstance` and the HSTRING functions loaded from combase.dll. It sends the playback status, the previous/next availability, the music display properties (title and artist; a film's name as the title), the cover's encoded bytes as a thumbnail stream (`CreateRandomAccessStreamOverStream` over a memory stream), and the timeline every few seconds or after a jump. Button presses arrive on a system thread and are posted to the window as `WM_APP_MEDIA_BUTTON`, handled like the taskbar's buttons. Leaving playback disables the controls and clears the card.
 
 ## Ambient light and rounded corners
 

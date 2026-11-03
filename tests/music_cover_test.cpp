@@ -1,3 +1,4 @@
+#include <tuple>
 #include <cassert>
 #include <cstdio>
 #include <string>
@@ -42,6 +43,23 @@ int main(){
       if(m==MusicFrame::Scene) assert(std::abs(f.zoom)<1e-9&&std::abs(f.pan_x)<1e-9&&std::abs(f.pan_y)<1e-9);
       else assert(std::abs(cx-w/2.0)<1e-6&&cy+side/2<=h-90&&cy-side/2>=0);  // centred, above the bar
     }
+  }
+  // a window taller or wider than the picture: it grows to fill it (no black bars where the light
+  // cannot reach) while the cover, its wings and the words' start stay inside, above the bar;
+  // never more than a third larger; a 16:9 window is untouched
+  {
+    const MusicScene S=MusicScene::wide();
+    for(auto [w,h,bar]:std::vector<std::tuple<int,int,int>>{{2246,1475,1215},{1690,1085,900},{1800,900,800},{1000,780,700},{2560,1080,980},{1800,600,520}}){
+      MusicView v=music_view(S,MusicFrame::Scene,w,h,bar);
+      double fit=std::min(w/1920.0,h/1080.0);
+      assert(v.f>=fit-1e-9&&v.f<=fit*1.33+1e-9);
+      double mg=std::min(w,h)*0.035;
+      assert(v.ox+S.left_x()*v.f>=mg-0.5&&v.ox+(S.text_x+S.text_w*0.55)*v.f<=w-mg+0.5);
+      assert(v.oy+S.wing_y()*v.f>=std::max(mg,h*0.07)-0.5&&v.oy+(S.wing_y()+S.wing_h)*v.f<=bar+0.5);
+      MusicVisible vis=music_visible(S,v,w,h);
+      if(w==2246||w==1690||w==1800&&h==900) assert(vis.x<0.5&&vis.y<0.5&&vis.w>w-1&&vis.h>h-1);  // filled: no bar at all
+    }
+    MusicView v=music_view(S,MusicFrame::Scene,1920,1080,980);assert(std::abs(v.f-1)<1e-9&&std::abs(v.ox)<1e-9&&std::abs(v.oy)<1e-9);
   }
   // the choice is saved for all music
   auto file=std::filesystem::temp_directory_path()/"cue-music-look.json";
@@ -96,6 +114,23 @@ int main(){
     p.in.time=192;p.changed(t);settle(p,t,30);p.compose(t);auto& N=p.layers[PlayView::L_NEXT];
     assert(N.visible&&N.y<720/4&&std::abs(N.x+N.c.w/2-640)<=2);
     p.in.next_title.clear();p.changed(t);settle(p,t,60);p.compose(t);assert(!p.layers[PlayView::L_NEXT].visible);
+    // music's bar rests like a film's once the pointer is still (a song with its scene)
+    p.in.cover_scene=true;p.in.next_title.clear();p.changed(t);settle(p,t,60*3);assert(!p.dock_visible());
+    p.mouse_move(200,200,t);p.mouse_move(260,260,t);settle(p,t,20);assert(p.dock_visible());
+    // the look control is two icons; the row names the look that is on
+    p.right_click(640,300,t);settle(p,t);
+    for(auto& r:p.rows_)if(r.id==PlayView::R_MUSIC_LOOK)assert(r.icons_only&&r.parts.size()==2&&r.parts[0].w<=20*1+1);
+    p.close_panel();settle(p,t);
+    // a click on the music scene never pauses (it only wakes the controls); a double click is
+    // still full screen
+    {
+      PlayView q;q.in.dur=200;q.in.audio_only=true;q.in.cover_scene=true;q.in.paused=false;q.resize(1280,720,1);double u=1;q.reset(u);q.changed(u);settle(q,u);
+      q.take_actions();q.mouse_down(300,200,u);q.mouse_up(300,200,u);settle(q,u,40);
+      for(auto& x:q.take_actions())assert(x.a!=PA::TogglePause);
+      assert(!q.in.paused);
+      q.mouse_down(300,200,u);q.mouse_up(300,200,u);u+=0.05;q.mouse_down(300,200,u);q.mouse_up(300,200,u);
+      bool fs=false,pause=false;for(auto& x:q.take_actions()){fs|=x.a==PA::Fullscreen;pause|=x.a==PA::TogglePause;}assert(fs&&!pause);
+    }
     // a film keeps its 15-second steps
     PlayView v;v.in.dur=200;v.resize(1280,720,1);v.reset(t);v.changed(t);settle(v,t);
     bool rew=false;for(auto& h:v.hots_)rew|=h.id==PlayView::B_REW;assert(rew);

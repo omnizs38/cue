@@ -90,6 +90,7 @@ static void pairing_checks() {
 
 static void file_checks() {
   assert(is_video_name("a.MKV") && is_audio_name("b.flac") && !is_playable_name("c.srt") && !is_playable_name("d"));
+  assert(is_video_name("tape.dv") && is_video_name("TAPE.DIF") && is_video_name("old.divx") && !is_audio_name("tape.dv"));  // camcorder DV, DivX
   assert(natural_less("ep 2.mkv", "ep 10.mkv") && !natural_less("ep 10.mkv", "ep 2.mkv"));
   assert(natural_less("Abc", "abd") && natural_less("a01", "a1b"));
   int s = 0, e = 0;
@@ -137,6 +138,23 @@ static void json_checks() {
   assert(j["lang"].t == JVal::Null);  // unset: omitted
   s.lang = "ru";
   assert(json_parse(state_json(s), j) && j["lang"].str() == "ru");  // the page reloads its words when this changes
+  // music: the song's title and artist travel with the state; a film never sends them
+  s.title = "Dream Sequence"; s.artist = "Jane Remover \xc2\xb7 Census Designated";
+  assert(json_parse(state_json(s), j) && j["title"].t == JVal::Null);
+  s.audio_only = true;
+  assert(json_parse(state_json(s), j) && j["title"].str() == "Dream Sequence" && j["artist"].str() == "Jane Remover \xc2\xb7 Census Designated");
+  s.audio_only = false; s.title.clear(); s.artist.clear();
+  // the words of Windows' media card
+  {
+    std::string t, u;
+    card_words("Twin.Peaks.S01E03.1080p.WEB.mkv", t, u); assert(t == "Twin Peaks" && u == "S01E03");
+    card_words("Blade.Runner.2049.2017.2160p.UHD.BluRay.x265.mkv", t, u); assert(t == "Blade Runner 2049" && u == "2017");
+    card_words("1917.2019.1080p.mkv", t, u); assert(t == "1917" && u == "2019");
+    card_words("C:\\Filmes\\Mr. Robot - pilot.mp4", t, u); assert(t == "Mr. Robot - pilot" && u.empty());
+    card_words("[Group] Some_Movie_(2008)_[1080p].mkv", t, u); assert(t == "Some Movie" && u == "2008");
+    card_words("vacation clip.mov", t, u); assert(t == "vacation clip" && u.empty());
+    card_words("2019.mp4", t, u); assert(t == "2019" && u.empty());
+  }
   Command c;
   assert(parse_command("{\"c\":\"seek\",\"v\":61.5}", c) && c.c == "seek" && c.has_v && c.v == 61.5);
   assert(parse_command("{\"c\":\"open\",\"path\":\"C:\\\\a.mkv\"}", c) && c.path == "C:\\a.mkv" && !c.has_v);

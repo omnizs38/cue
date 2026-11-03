@@ -63,8 +63,38 @@ inline MusicView music_view(const MusicScene& S, MusicFrame m, int w, int h, int
   v.frame = m;
   if (w <= 0 || h <= 0) return v;
   if (m == MusicFrame::Scene) {
-    v.f = std::min(w / (double)S.W, h / (double)S.H);
-    v.ox = (w - S.W * v.f) / 2; v.oy = (h - S.H * v.f) / 2;
+    // All of the picture fits; then it grows toward filling the window, so no black bar is left
+    // where the light cannot reach, as far as the cover, its wings and the start of the words
+    // (a long title ends in "..." at the window's edge) stay inside, above the control bar.
+    // (never more than a third larger: past that the cover would crowd a very wide window)
+    const double fit = std::min(w / (double)S.W, h / (double)S.H);
+    const double fill = std::min(std::max(w / (double)S.W, h / (double)S.H), fit * 1.33);
+    const double cx0 = S.left_x(), cx1 = S.text_x + S.text_w * 0.55;
+    const double cy0 = std::min(S.y, S.wing_y()), cy1 = std::max(S.y + S.side, S.wing_y() + S.wing_h);
+    const double mg = std::min(w, h) * 0.035, mgy = std::max(mg, h * 0.07);
+    const double floor_y = std::min(h - mgy, (double)controls_top - mg * 0.5);
+    // the place for scale f: centred, still covering the window, the content inside the margins
+    auto place = [&](double f, double& ox, double& oy) {
+      auto axis = [&](double win, double size, double c0, double c1, double lo, double hi, double& o) {
+        double a = size >= win ? win - size : (win - size) / 2, b = size >= win ? 0.0 : a;  // covering
+        double ca = lo - c0 * f, cb = hi - c1 * f;                                          // content inside
+        double l = std::max(a, std::min(ca, cb)), r = std::min(b, cb);
+        if (ca > cb) return false;
+        if (l > r) { if (size >= win && f > fit + 1e-9) return false; l = ca; r = cb; }  // at fit: content first
+        o = std::clamp((win - size) / 2, std::max(l, ca), std::min(r, cb));
+        return true;
+      };
+      return axis(w, S.W * f, cx0, cx1, mg, w - mg, ox) && axis(h, S.H * f, cy0, cy1, mgy, floor_y, oy);
+    };
+    double ox, oy, lo = fit, hi = fill;
+    if (!place(fit, ox, oy)) {  // not even the whole picture leaves room: as before, centred
+      v.f = fit; v.ox = (w - S.W * fit) / 2; v.oy = (h - S.H * fit) / 2;
+      return v;
+    }
+    if (place(fill, ox, oy)) lo = fill;
+    else for (int i = 0; i < 24; ++i) { double mid = (lo + hi) / 2; if (place(mid, ox, oy)) lo = mid; else hi = mid; }
+    place(lo, ox, oy);
+    v.f = lo; v.ox = ox; v.oy = oy;
     return v;
   }
   double room = std::clamp((double)controls_top, h * 0.45, (double)h);

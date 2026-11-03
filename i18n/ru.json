@@ -345,6 +345,7 @@
   "queue.add_tracks": "добавить треки",
   "queue.or_drag": "или перетащите сюда",
   "queue.drop_to_add": "отпустите, чтобы добавить",
+  "queue.skipped": "не удалось открыть {name} · пропущено",
   "queue.up_next": "следующий",
   "toast.email_copied": "адрес почты скопирован",
   "queue.add_files_short": "файлы",

@@ -64,7 +64,7 @@ std::vector<std::string> open_file_dialog(HWND owner, DialogKind kind) {
   const std::wstring media = widen(tr(str::win_filter_media)), audio = widen(tr(str::win_filter_audio)),
                      all = widen(tr(str::win_filter_all)), subtitles = widen(tr(str::win_filter_subtitles));
   COMDLG_FILTERSPEC video[] = {
-      {media.c_str(), L"*.mkv;*.mp4;*.m4v;*.mov;*.avi;*.webm;*.wmv;*.flv;*.ts;*.m2ts;*.mts;*.mpg;*.mpeg;*.ogv;*.3gp;*.vob;*.ogg;*.oga;*.opus;*.mp3;*.m4a;*.aac;*.wav;*.flac;*.aif;*.aiff;*.wma;*.mka"},
+      {media.c_str(), L"*.mkv;*.mp4;*.m4v;*.mov;*.avi;*.webm;*.wmv;*.flv;*.ts;*.m2ts;*.mts;*.mpg;*.mpeg;*.ogv;*.3gp;*.vob;*.divx;*.dv;*.dif;*.ogg;*.oga;*.opus;*.mp3;*.m4a;*.aac;*.wav;*.flac;*.aif;*.aiff;*.wma;*.mka"},
       {audio.c_str(), L"*.mp4;*.ogg;*.oga;*.opus;*.mp3;*.m4a;*.aac;*.wav;*.flac;*.aif;*.aiff;*.wma;*.mka"},
       {all.c_str(), L"*.*"}};
   COMDLG_FILTERSPEC subs[] = {{subtitles.c_str(), L"*.srt;*.vtt;*.ass;*.ssa;*.sub;*.sup;*.idx"}, {all.c_str(), L"*.*"}};
@@ -205,7 +205,7 @@ static bool reg_set(HKEY root, const std::wstring& key, const wchar_t* name, con
 
 // Two file types: video (Cue's own icon) and music (the same tile with a note, icon 2).
 // Files Windows already opens with Cue keep the type they were chosen with until chosen again.
-static const wchar_t* kVideoExts[] = {L".mkv", L".mp4", L".m4v", L".mov", L".avi", L".webm", L".wmv", L".ts", L".m2ts", L".mpg", L".mpeg", L".ogv"};
+static const wchar_t* kVideoExts[] = {L".mkv", L".mp4", L".m4v", L".mov", L".avi", L".webm", L".wmv", L".ts", L".m2ts", L".mpg", L".mpeg", L".ogv", L".divx", L".dv", L".dif"};
 static const wchar_t* kAudioExts[] = {L".ogg", L".oga", L".opus", L".mp3", L".m4a", L".aac", L".wav", L".flac", L".aif", L".aiff", L".wma", L".mka"};
 static const wchar_t* kVideoProg = L"Software\\Classes\\tinyoffice.Cue.video";
 static const wchar_t* kAudioProg = L"Software\\Classes\\tinyoffice.Cue.audio";
@@ -213,7 +213,7 @@ static const wchar_t* kAudioProg = L"Software\\Classes\\tinyoffice.Cue.audio";
 // chosen there gets the music icon. "Open with" can only offer Cue; Windows keeps a choice made
 // earlier (on an older version) until it is made again.
 static const wchar_t* kCapabilities = L"Software\\tinyoffice\\Cue\\Capabilities";
-static const wchar_t* kMediaTypes = L"video-audio-3";  // bumped when the registration's shape changes
+static const wchar_t* kMediaTypes = L"video-audio-4";  // bumped when the registration's shape changes
 
 bool register_open_with(std::string* err) {
   wchar_t exe[MAX_PATH * 4];

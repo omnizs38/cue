@@ -14,6 +14,11 @@ SingleInstance::~SingleInstance() {
   if (mutex_) CloseHandle(mutex_);
 }
 
+void SingleInstance::release() {
+  if (owned_) ReleaseMutex(mutex_);
+  owned_ = false;
+}
+
 SingleInstance::Result SingleInstance::route(const std::vector<std::string>& args) {
   // Local scopes this to the interactive Windows session. Ownership survives
   // startup and is automatically released by Windows after a crash.

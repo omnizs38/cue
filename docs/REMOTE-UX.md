@@ -59,16 +59,26 @@ Wheel steps in time mode scale with the length: the slow, medium and fast steps 
 song is not crossed in four detents while long media keep 5 / 15 / 60 s. The
 determined eyes follow the fast step, whatever its size.
 
-Audio files have no pictures: the page never requests peeks for them, the time-mode
-card drops its frame (no border, tint or background) and the face fades out while the
-wheel turns, so only the time shows; the end-of-file card is not shown for music, whose
+Audio files have no pictures: the page never requests peeks for them. A song with a cover
+turns it into a record while the wheel turns: a 72 px canvas, drawn from the cover's own
+pixels and sampled pixel by pixel at each angle (so it stays pixel art), folds from square to
+disc in four steps, gains grooves, a rim and a spindle hole, and turns 7.5 degrees per detent
+(the wheel's own step); the offset (+0:25) shows under it, and on release it turns back
+upright and unfolds. Without a cover the time-mode card drops its frame (no border, tint or
+background) and the face fades out while the wheel turns, so only the time shows; the end-of-file card is not shown for music, whose
 short length would keep it over the face most of the time. A song with a cover wears it
 as the face: the page fetches `/cover` (72 px, shown at 2x, pixel for pixel) when the
 state's `cover` number changes, takes its average colour (lifted so a dark cover still
 glows) for the glow, and dims it while paused; without a cover the eyes stay. With music
 in a queue, the side buttons are previous/next song (the up-next icons) and the long
 press "what?" is off: a song's neighbours matter more than fifteen seconds of it. Under
-the bar a song shows its length (like any music player) where a film shows when it ends.
+the bar, the right-hand time is what is left (−12:34) or the whole length; a tap switches,
+and the choice is kept per kind in the browser (films start with what is left, songs with
+their length). A song's title and artist come with the state (`title`, `artist`), the words
+the computer shows under the cover.
+Songs show their covers in the up next sheet and in the folders: `/thumb` and `/queue-thumb`
+serve a song's square cover (read from its tags or a picture beside it, else the shell's
+thumbnail), and the page shows that square.
 
 The page's words come from Cue's interface language. Every state message carries
 its tag (`lang`); when it differs from the language the page was served in, the page

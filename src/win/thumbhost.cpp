@@ -244,7 +244,9 @@ bool ThumbClient::start(HWND notify, UINT msg) {
   std::wstring cmd = L"\"" + std::wstring(exe) + L"\" --thumb-host";
   STARTUPINFOEXW si{};
   si.StartupInfo.cb = sizeof(si);
-  si.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+  // no "working in background" cursor: the helper never shows a window, so Windows would spin
+  // the pointer for up to five seconds each time it starts
+  si.StartupInfo.dwFlags = STARTF_USESTDHANDLES | STARTF_FORCEOFFFEEDBACK;
   si.StartupInfo.hStdInput = child_in;
   si.StartupInfo.hStdOutput = si.StartupInfo.hStdError = child_out;
   SIZE_T bytes = 0;

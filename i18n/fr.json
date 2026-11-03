@@ -342,6 +342,7 @@
   "queue.add_tracks": "ajouter des titres",
   "queue.or_drag": "ou glissez-les ici",
   "queue.drop_to_add": "déposez pour ajouter à la liste",
+  "queue.skipped": "impossible d’ouvrir {name} · passé",
   "queue.up_next": "suivant",
   "toast.email_copied": "adresse e-mail copiée",
   "queue.add_files_short": "fichiers",

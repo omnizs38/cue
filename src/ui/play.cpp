@@ -664,6 +664,7 @@ void PlayView::build_rows() {
       Row* look = R(RK::Segmented, R_MUSIC_LOOK);
       look->segs = {tr(str::music_cover), tr(str::music_spectrum)};
       look->seg_icons = {"look-cover", "look-bars"};
+      look->icons_only = true;  // two icons at the end; the row says which one is on (or pointed at)
       look->seg = in.music_look;
       R(RK::Separator, R_NONE);
     }
@@ -742,6 +743,11 @@ void PlayView::layout_rows() {
   about_compact_ = about_retry_ && panel_ == Panel::About;  // decided afresh at every layout
   auto seg_need = [&](const Row& r) {  // five sizes: tighter cells; an icon adds its width and a gap
     int pad = r.segs.size() > 4 ? 8 : 14, sw = 8;
+    if (r.icons_only) {
+      int words = 0;
+      for (auto& sg : r.segs) words = std::max(words, text_w(sg, 1));
+      return 23 + words + 12 + (int)r.segs.size() * 20 + 4;
+    }
     for (auto& sg : r.segs) sw += text_w(sg, 1) + pad + (r.seg_icons.empty() ? 0 : 13);
     return sw;
   };
@@ -832,6 +838,10 @@ void PlayView::layout_rows() {
     } else if (r.k == RK::Fonts) {
       int cw = (r.r.w - 8 * s) / 3 / s * s;
       for (int i = 0; i < 3; ++i) r.parts.push_back({x0 + 4 * s + i * cw, r.r.y + 2 * s, cw, r.r.h - 4 * s});  // the rules' edges, air above and below
+    } else if (r.k == RK::Segmented && r.icons_only) {
+      // a compact pair of icon cells at the row's end
+      int n = (int)r.segs.size(), cw = 20 * s, cx0 = x1 - 4 * s - n * cw;
+      for (int i = 0; i < n; ++i) r.parts.push_back({cx0 + i * cw, r.r.y + 2 * s, cw, r.r.h - 4 * s});
     } else if (r.k == RK::Segmented) {
       // cells as wide as their words plus an even share of the room left: equal breathing
       int n = std::max(1, (int)r.segs.size());
@@ -886,23 +896,6 @@ void PlayView::layout_rows() {
 Rect PlayView::panel_rect() const {
   Rect d{(int)std::lround(px_.x), (int)std::lround(py_.x), dw_, dh_};
   if(panel_==Panel::Queue&&scene_list()) {Rect r=scene_list_rect();return {r.x,r.y,pw_,ph_};}
-  if(panel_==Panel::Queue) {
-    // The panel's list icon sits exactly over the bar's up-next icon; only the window edge
-    // (or a margin) moves it. It opens on the side of the bar that has room.
-    Rect b;for(auto& hb:hots_)if(hb.id==B_QUEUE)b=hb.r;  // dock-local
-    int icon_cx=(int)std::lround(16*queue_s_),margin=(int)std::lround(8*queue_s_);
-    int x=b.w?d.x+b.cx()-icon_cx:d.cx()-pw_/2;
-    x=std::clamp(x,std::min(margin,std::max(0,w_-pw_)),std::max(0,w_-pw_-margin));
-    bool above=d.cy()>h_/2;
-    int y=above?d.y-(int)std::lround(8*queue_s_)-ph_:d.b()+(int)std::lround(8*queue_s_);
-    return {x,std::clamp(y,0,std::max(0,h_-ph_)),pw_,ph_};
-  }
-  if(panel_==Panel::Queue||panel_==Panel::CC) {
-    int x=std::clamp(d.cx()-pw_/2,0,std::max(0,w_-pw_));
-    bool above=d.cy()>h_/2;
-    int y=above?d.y-(int)(4*s_)-ph_:d.b()+(int)(4*s_);
-    return {x,std::clamp(y,0,std::max(0,h_-ph_)),pw_,ph_};
-  }
   if (panel_ == Panel::About) {
     // centred, unless that would cover the bar: then it rises to sit above (or below) it
     int y = (h_ - ph_) / 2, gap = (int)(8 * s_);
@@ -952,11 +945,15 @@ Rect PlayView::panel_rect() const {
     return {x, y, pw_, ph_};
   }
   if (panel_ == Panel::None) return closing_rect_;
+  // up next, the subtitle menu, audio, speed and "...": each opens over the button that opened it
   int bx = d.x + d.w / 2;
   for (auto& hb : hots_) if (hb.id == panel_btn_) bx = d.x + hb.r.cx();
   // centred on its button, but never past the dock's edges: one clean silhouette
-  double want = std::clamp<double>(bx - pw_ / 2, d.x, std::max(d.x, d.r() - pw_));
-  int x = std::clamp<double>(want, kMargin * s_ / 2, std::max(kMargin * s_ / 2, w_ - pw_ - kMargin * s_ / 2));
+  // (a menu wider than the bar, in a narrow window, is centred on the bar instead)
+  double want = pw_ >= d.w ? d.cx() - pw_ / 2.0 : std::clamp<double>(bx - pw_ / 2, d.x, std::max(d.x, d.r() - pw_));
+  // inside the window, with a margin when there is room for one
+  const double mg = std::min(kMargin * s_ / 2, std::max(0.0, (double)(w_ - pw_)));
+  int x = std::clamp<double>(want, mg, std::max(mg, w_ - pw_ - mg));
   if (panel_btn_ == B_NONE) x = std::clamp(d.x + d.w - pw_, 0, std::max(0, w_ - pw_));
   bool above = d.y + d.h / 2 > h_ / 2;
   int gap = 4 * s_;
@@ -1180,6 +1177,18 @@ void PlayView::render_panel() {
       case RK::Segmented: {
         // one control, not loose words: a quiet track holds the cells, the chosen one is lit
         if (!r.parts.empty()) c.cornered({r.parts.front().x, r.parts.front().y, r.parts.back().r() - r.parts.front().x, r.parts.front().h}, s, p.hover, 0.4);
+        if (r.icons_only) {
+          // the words name the choice that is on, or the one under the pointer before it is taken
+          int k = hot && ppart_ >= 0 && ppart_ < (int)r.segs.size() ? ppart_ : r.seg;
+          if (k >= 0 && k < (int)r.segs.size()) text(c, r.segs[k], r.r.x + 23 * s, ty, s, k == r.seg ? p.fg : p.dim);
+          for (int i = 0; i < (int)r.segs.size() && i < (int)r.parts.size(); ++i) {
+            const Rect& cell = r.parts[i];
+            bool sel = r.seg == i, ph = hot && ppart_ == i;
+            if (sel) c.cornered(cell, s, p.hover);
+            if (i < (int)r.seg_icons.size() && r.seg_icons[i]) action_icon(c, r.seg_icons[i], cell, s, sel || ph ? p.fg : p.dim);
+          }
+          break;
+        }
         for (int k = 0; k < (int)r.segs.size(); ++k) {
           const Rect& cell = r.parts[k];
           bool sel = r.seg == k, ph = hot && ppart_ == k;
@@ -2135,6 +2144,8 @@ void PlayView::render_music() {
   bool beside = V.words_beside();
   int room = std::max((int)(60 * s), beside ? std::min(w_ - (int)(2 * kMargin * s), (int)std::lround(S.text_w * V.f))
                                             : w_ - (int)(2 * kMargin * s));
+  // a picture grown to fill the window may push the words' column past its edge: they end there
+  if (beside) room = std::max((int)(60 * s), std::min(room, w_ - (int)(kMargin * s) - (int)std::lround(V.ox + S.text_x * V.f)));
   // the title as large as the column allows: twice the type, one and a half, or the type itself
   double ts = s;
   for (double f : {2.0, 1.5}) if (text_w(in.music_title, std::round(s * f * 2) / 2) <= room) { ts = std::round(s * f * 2) / 2; break; }
@@ -2384,7 +2395,8 @@ void PlayView::toggle_loop(double now) {
 }
 
 bool PlayView::pinned() const {
-  return in.audio_only || in.ended || scrubbing_ || vol_drag_ || dragging_dock_ || drag_pending_ || sub_drag_ || panel_ != Panel::None ||
+  // music hides its bar like a film; only a song without a picture keeps it (nothing else to see)
+  return (in.audio_only && !in.cover_scene) || in.ended || scrubbing_ || vol_drag_ || dragging_dock_ || drag_pending_ || sub_drag_ || panel_ != Panel::None ||
          slider_row_ >= 0 || hover_ != B_NONE || kb_ || back_hot_;
 }
 
@@ -2962,9 +2974,12 @@ void PlayView::mouse_up(int x, int y, double now) {
   if (press_ != P_NONE) {
     // The first click already responded. A double click explicitly restores
     // the pre-gesture state, rather than cycling a possibly stale engine state.
+    // Music: a click on the scene only wakes the controls; pausing a song is the bar's button,
+    // the space bar or a media key (a click to come back to the window must not stop the music)
+    const bool music_scene = in.audio_only && in.cover_scene;
     if (second_click_ && pending_click_ == press_) {
       pending_click_ = P_NONE;
-      if (press_ == P_VIDEO) {
+      if (press_ == P_VIDEO && !music_scene) {
         in.paused=click_was_paused_; act(PA::TogglePause,in.paused);
         morph_.target=in.paused?0:1; flash_t0_=-10; dock_dirty_=true;
       }
@@ -2972,7 +2987,7 @@ void PlayView::mouse_up(int x, int y, double now) {
       last_click_t_ = -10;
     } else {
       click_was_paused_=in.paused;
-      if (press_ == P_VIDEO) activate(B_PLAY,now);
+      if (press_ == P_VIDEO && !music_scene) activate(B_PLAY,now);
       pending_click_ = press_;
       last_click_t_ = now; last_click_x_ = x; last_click_y_ = y;
     }

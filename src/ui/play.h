@@ -220,6 +220,7 @@ class PlayView {
     double opt = 0;  // value carried by an option (speed)
     std::vector<std::string> segs;
     std::vector<const char*> seg_icons;  // a small icon before each segment's words (optional)
+    bool icons_only = false;  // a compact control at the row's end; the row's words name the choice
     const char* icon = nullptr;
     // layout (panel-local physical px)
     Rect r;

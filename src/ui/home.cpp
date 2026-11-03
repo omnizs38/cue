@@ -9,7 +9,9 @@ namespace {
 constexpr int kRowPitch = 30;  // art px: a title, its quiet line and a progress rule
 constexpr int kRowH = 28;
 constexpr int kMaxRows = 6;
-constexpr double kEggDur[5] = {0, 4.2, 3.4, 4.4, 3.6};
+constexpr double kEggDur[5] = {0, 5.4, 4.6, 5.4, 3.6};
+// which surprises were seen: Christmas uses its own bits (5..7), so the old ones never count
+constexpr int seen_bit(int v) { return v >= 1 && v <= 3 ? 1 << (v + 4) : 1 << v; }
 }  // namespace
 
 void HomeView::set_size(int w_, int h_, double s_) {
@@ -361,27 +363,44 @@ void HomeView::start_egg(double now, int forced) {
   if (!v) {
     std::vector<int> unseen;
     for (int i = 1; i <= 3; ++i)
-      if (!(eggs_seen & (1 << i))) unseen.push_back(i);
+      if (!(eggs_seen & seen_bit(i))) unseen.push_back(i);
     if (!unseen.empty()) v = unseen[rng_.pick((int)unseen.size())];
     else v = rng_.uni() < 0.16 ? 4 : 1 + rng_.pick(3);
   }
   egg_ = v;
   egg_variant_ = v;
-  eggs_seen |= (1 << v);
+  eggs_seen |= seen_bit(v);
   egg_t0_ = now;
-  spots_.clear();
-  if (v == 3) {
-    // little pairs of eyes in the dark, all looking at the character
-    Rect avoid = face.bounds().grow(14 * s);
-    for (int i = 0; spots_.size() < 11 && i < 400; ++i) {
-      double x = rng_.range(0.04, 0.96) * w, y = rng_.range(0.08, 0.92) * h;
-      Rect r{(int)x - 10 * s, (int)y - 6 * s, 20 * s, 12 * s};
-      bool bad = r.x < 0 || r.r() > w || r.y < 0 || r.b() > h;
-      auto inter = [&](const Rect& a) { return !(r.r() < a.x || a.r() < r.x || r.b() < a.y || a.b() < r.y); };
-      if (inter(avoid) || inter(r_list_) || inter(r_open_.grow(4 * s))) bad = true;
-      for (auto& sp : spots_) if (std::hypot(sp.x - x, sp.y - y) < 26 * s) bad = true;
-      if (bad) continue;
-      spots_.push_back({x, y, 0.25 + spots_.size() * 0.22, rng_.uni() < 0.3 ? 1 : 2});
+  flakes_.clear();
+  shake_t_ = -1;
+  if (v == 1) {
+    // first snow: flakes drift down the whole window; six of them land on the eyes
+    const double fall = std::max(160.0 * s, h / 3.2);  // px per second
+    for (int i = 0; i < 54; ++i) {
+      Flake f{};
+      f.x = rng_.range(0.0, 1.0) * w;
+      f.v = fall * rng_.range(0.7, 1.25);
+      f.at = rng_.range(-0.6, 3.2);
+      f.y0 = -8 * s;
+      f.sway = rng_.range(2.0, 7.0) * s;
+      f.ph = rng_.range(0.0, 6.28);
+      f.size = rng_.uni() < 0.35 ? 2 : 1;
+      f.eye = 0;
+      flakes_.push_back(f);
+    }
+    const double a = std::lround(face.scale) * s, top = face.eye_y() - 3 * a;
+    const double lands[6] = {1.35, 1.75, 2.3, 1.55, 2.05, 2.6};
+    for (int i = 0; i < 6; ++i) {
+      Flake f{};
+      f.eye = i < 3 ? -1 : 1;
+      f.land = lands[i];
+      f.x = face.cx + f.eye * 8 * a + rng_.range(-1.5, 1.5) * a;
+      f.v = fall * 0.8;
+      f.y0 = -8 * s;
+      f.at = f.land - (top - f.y0) / f.v;
+      f.sway = 0;
+      f.size = 2;
+      flakes_.push_back(f);
     }
   }
   if (v == 4) { face.set_mode(Face::Mode::Stare, now); face.max_look = 3.0 * face.scale; }
@@ -393,22 +412,30 @@ bool HomeView::tick(double now, double dt) {
     double t = now - egg_t0_;
     moving = true;
     switch (egg_) {
-      case 1:  // Nosferatu: the eyes watch the shadow, then blink it away
-        if (t > 1.6) face.look(face.max_look, 0.4);
-        face.wide = t > 2.6 && t < 3.4;
-        face.closed = t >= 3.4 && t < 3.66;
-        break;
-      case 2: {
-        double k = t < 0.6 ? ease_out(t / 0.6) : (t < 2.6 ? 1.0 : 1.0 - ease_out((t - 2.6) / 0.7));
-        face.lx_off = -2.0 * k; face.ly_off = -3.0 * k;
-        face.rx_off = 1.0 * k;  face.ry_off = 2.0 * k;
+      case 1: {  // first snow: look up, a surprise as it lands, a shake, and a smile
+        face.look(0, t > 0.5 && t < 3.6 ? -face.max_look : 0);
+        face.wide = t > 1.35 && t < 1.75;
+        if (t >= 3.6 && shake_t_ < 0) { shake_t_ = t; face.notice(now); }
+        if (t >= 3.6 && t < 4.0) face.look(std::fmod(t, 0.14) < 0.07 ? face.max_look : -face.max_look, 0);
+        face.happy = t >= 4.1 && t < 5.2;
         break;
       }
-      case 3: {
-        int shown = 0;
-        for (auto& sp : spots_) if (t >= sp.at) ++shown;
-        if (shown >= 4 && t < 3.4) face.set_mode(Face::Mode::Nervous, now);
-        if (t >= 3.4) { face.set_mode(Face::Mode::Idle, now); face.look(0, 0); }
+      case 2: {  // a Santa hat lands on the head: eyes shut at the bump, then a look up and a smile
+        face.closed = t >= 0.62 && t < 0.82;
+        if (t >= 0.62 && shake_t_ < 0) { shake_t_ = t; face.notice(now); }
+        face.look(t > 3.5 ? face.max_look : 0, t > 0.9 && t < 1.5 ? -face.max_look : 0);
+        face.happy = t >= 1.5 && t < 3.5;
+        break;
+      }
+      case 3: {  // the lights: the eyes chase the running light, gasp at the blinking, then glow
+        int n = lights_n();
+        if (t >= 0.6 && t < 2.7) {
+          double head = (t - 0.6) / 2.0 * (n + 2);
+          double x = (std::clamp(head, 0.0, n - 1.0) + 0.5) * w / n;
+          face.look_at(x, lights_y(x, t), 1.0);
+        } else face.look(0, t < 4.6 ? -face.max_look * 0.6 : 0);
+        face.wide = t >= 2.7 && t < 3.9;
+        face.happy = t >= 3.9 && t < 4.7;
         break;
       }
       case 4:
@@ -419,6 +446,7 @@ bool HomeView::tick(double now, double dt) {
       egg_ = 0;
       face.wide = false;
       face.closed = false;
+      face.happy = false;
       face.lx_off = face.ly_off = face.rx_off = face.ry_off = 0;
       face.max_look = 3.0 * face.scale / 1.5;
       face.mode = Face::Mode::Recent;  // force a refresh
@@ -450,65 +478,136 @@ double HomeView::next_event(double now) const {
   return std::max(0.0, t);
 }
 
-// A long-fingered shadow, built from rectangles on the art grid. (fx, fy) is the
-// tip of the longest finger; the arm extends to the right, off screen.
-void HomeView::draw_hand(Canvas& c, int fx, int fy, double a) const {
-  Rgb col = P().edge;
-  const int k = 2 * s;  // the shadow is drawn on a coarser grid, like a projected silhouette
-  auto R = [&](int x, int y, int ww, int hh) { c.fill(fx + x * k, fy + y * k, ww * k, hh * k, col, a); };
-  R(40, -2, 400, 10);   // forearm
-  R(30, -5, 14, 14);    // palm
-  R(28, 7, 8, 3);       // thumb base
-  R(22, 10, 8, 2);      // thumb
-  R(19, 11, 4, 2);
-  const int fy0[4] = {-5, -1, 3, 7};
-  const int len[4] = {26, 32, 29, 22};
-  for (int i = 0; i < 4; ++i) {
-    int x0 = 30 - len[i];
-    R(x0 + 4, fy0[i], len[i] - 4, 2);       // long finger
-    R(x0 + 1, fy0[i] + 1, 3, 2);            // last joint bends down
-    R(x0, fy0[i] + 3, 2, 2);                // nail
-    R(x0 + len[i] / 2, fy0[i] - 1, 3, 1);   // knuckle
+// ── Christmas ───────────────────────────────────────────────────────
+// Everything on the face's own grid: one cell is one art pixel of the eyes (scale x s).
+void HomeView::draw_snow(Canvas& c, double t) const {
+  const Palette& p = P();
+  const double a = std::lround(face.scale) * s;
+  int landed[2] = {0, 0};
+  for (const Flake& f : flakes_) {
+    double ft = t - f.at;
+    if (ft < 0) continue;
+    if (f.eye && t >= f.land) { if (!(shake_t_ >= 0 && t >= shake_t_)) ++landed[f.eye > 0]; continue; }
+    double y = f.y0 + f.v * ft;
+    if (y > h + 8 * s) continue;
+    double x = f.x + f.sway * std::sin(ft * 1.7 + f.ph);
+    int sz = f.size == 2 ? (int)a : (int)std::lround(s);  // big flakes are one cell of the eyes' grid
+    double fade = t > kEggDur[1] - 0.6 ? (kEggDur[1] - t) / 0.6 : 1.0;
+    c.fill((int)std::lround(x / s) * s, (int)std::lround(y / s) * s, sz, sz, f.size == 2 ? p.fg : p.dim, std::max(0.0, fade));
+  }
+  // the snow on top of each eye: a cap that grows with every flake, until the shake
+  const double block = std::lround(3 * face.scale) * s;
+  for (int e = 0; e < 2; ++e) {
+    int n = landed[e];
+    if (!n) continue;
+    double ex = face.cx + (e ? 1 : -1) * 8 * face.scale * s;
+    double top = face.eye_y() - block - face.hop.x * s * face.scale * 0.6;
+    int cw = (int)std::lround(2 * block + 2 * a);
+    for (int r = 0; r < std::min(n, 3); ++r) {
+      int rw = cw - (int)std::lround(r * 2 * a);
+      c.fill((int)std::lround(ex - rw / 2.0), (int)std::lround(top - (r + 1) * a), rw, (int)a, p.pixel);
+    }
+  }
+  // the shake throws it off in little puffs
+  if (shake_t_ >= 0 && t >= shake_t_ && t < shake_t_ + 0.8) {
+    double k = (t - shake_t_) / 0.8;
+    for (int e = 0; e < 2; ++e) {
+      double ex = face.cx + (e ? 1 : -1) * 8 * face.scale * s, ey = face.eye_y() - block - 2 * a;
+      for (int i = 0; i < 7; ++i) {
+        double ang = -2.6 + i * 0.36 + (e ? 0.3 : -0.3);
+        double d = k * (14 + i % 3 * 5) * a;
+        double x = ex + std::cos(ang) * d, y = ey + std::sin(ang) * d + k * k * 18 * a;
+        c.fill((int)std::lround(x / s) * s, (int)std::lround(y / s) * s, (int)a, (int)a, p.pixel, 1 - k);
+      }
+    }
   }
 }
 
-void HomeView::draw_caligari_shapes(Canvas& c, double k) const {
-  if (k <= 0) return;
-  // monochrome diagonal flats, like painted sets
-  auto tri = [&](double ax, double ay, double bx, double by, double cx, double cy, Rgb col) {
-    int minx = (int)std::min({ax, bx, cx}), maxx = (int)std::max({ax, bx, cx});
-    int miny = (int)std::min({ay, by, cy}), maxy = (int)std::max({ay, by, cy});
-    for (int y = std::max(0, miny); y < std::min(h, maxy); y += s)
-      for (int x = std::max(0, minx); x < std::min(w, maxx); x += s) {
-        double px = x + s / 2.0, py = y + s / 2.0;
-        double d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
-        double d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
-        double d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
-        bool neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
-        if (!(neg && pos)) c.fill(x, y, s, s, col, k);
-      }
+void HomeView::draw_hat(Canvas& c, double t) const {
+  // a Santa hat in pixels: red cone leaning right, a white band, and a pompom that swings
+  static const char* hat[] = {
+      "............rr......",
+      "...........RRr......",
+      "..........RRRr......",
+      ".........RRRRr......",
+      "........RRRRRr......",
+      ".......RRRRRRr......",
+      "......RRRRRRRRr.....",
+      ".....RRRRRRRRRRr....",
+      "....RRRRRRRRRRRRr...",
+      "..WWWWWWWWWWWWWWWW..",
+      "..WwWWWwWWWWwWWWwW..",
+      "..wwwwwwwwwwwwwwww..",
   };
-  tri(0, 0, w * 0.34, 0, 0, h * 0.78, P().band);
-  tri(w, h, w * 0.52, h, w, h * 0.16, P().band);
-  tri(w * 0.18, h, w * 0.30, h * 0.30, w * 0.40, h, P().hover);
-  tri(w * 0.62, 0, w * 0.70, h * 0.62, w * 0.80, 0, P().hover);
+  const Rgb red{214, 52, 58}, dark{150, 30, 44}, white{246, 244, 238}, shade{196, 196, 204};
+  const double a = std::lround(face.scale) * s;
+  const double block = std::lround(3 * face.scale) * s;
+  const double rest = face.eye_y() - block - 4 * a - 12 * a - face.hop.x * s * face.scale * 0.6;
+  double y = rest, x = face.cx - 10 * a, alpha = 1;
+  if (t < 0.62) { double k = t / 0.62; y = lerp(-14 * a, rest, k * k); }                     // falls
+  else if (t < 1.1) y = rest - std::sin((t - 0.62) / 0.48 * 3.14159) * 3 * a;                 // a little bounce
+  if (t > 3.5) { double k = std::min(1.0, (t - 3.5) / 0.9); x += k * k * 34 * a; y -= std::sin(k * 3.14159) * 6 * a + k * 6 * a; alpha = 1 - k; }
+  if (alpha <= 0) return;
+  int X = (int)std::lround(x / s) * s, Y = (int)std::lround(y / s) * s, A = (int)a;
+  for (int r = 0; r < 12; ++r)
+    for (int col = 0; col < 20; ++col) {
+      char ch = hat[r][col];
+      if (ch == '.') continue;
+      Rgb k = ch == 'R' ? red : ch == 'r' ? dark : ch == 'W' ? white : shade;
+      c.fill(X + col * A, Y + r * A, A, A, k, alpha);
+    }
+  // the pompom swings at the tip and slowly settles
+  double sw = t > 0.62 ? 2.4 * std::sin((t - 0.62) * 9) * std::exp(-(t - 0.62) * 1.2) : 0;
+  int px = X + (int)std::lround((13 + sw) * a), py = Y - 3 * A;
+  static const char* pom = ".WW.WWWwWWWw.ww.";
+  for (int i = 0; i < 16; ++i)
+    if (pom[i] != '.') c.fill(px + (i % 4) * A, py + (i / 4) * A, A, A, pom[i] == 'W' ? white : shade, alpha);
+  // three small stars twinkle while it sits there
+  if (t > 1.3 && t < 3.5) {
+    const double sx[3] = {-14, 22, 26}, sy[3] = {2, -2, 9};
+    for (int i = 0; i < 3; ++i) {
+      double k = 0.5 + 0.5 * std::sin((t - 1.3) * 6 + i * 2.1);
+      int cx = X + (int)std::lround((10 + sx[i]) * a), cy = Y + (int)std::lround(sy[i] * a);
+      c.fill(cx, cy - A, A, 3 * A, P().pixel, k * alpha);
+      c.fill(cx - A, cy, 3 * A, A, P().pixel, k * alpha);
+    }
+  }
 }
 
-void HomeView::distort(Canvas& c, double k) const {
-  if (k <= 0) return;
-  Canvas src = c;
-  for (int y = 0; y < h; ++y) {
-    double ny = (double)y / h - 0.5;
-    double shear = k * ny * 0.30 * w * 0.25;
-    double wob = k * std::sin(y / (23.0 * s)) * 2.0 * s;
-    double sx = 1.0 + k * 0.10 * ny;  // perspective that does not add up
-    int dx = (int)std::lround((shear + wob) / s) * s;
-    for (int x = 0; x < w; ++x) {
-      double fx = (x - w / 2.0) / sx + w / 2.0 - dx;
-      int qx = (int)std::floor(fx / s) * s;
-      uint32_t v = (qx >= 0 && qx < w) ? src.px[(size_t)y * w + qx] : src.px[(size_t)y * w];
-      c.px[(size_t)y * w + x] = v;
+int HomeView::lights_n() const { return std::clamp((int)std::lround(w / (26.0 * std::lround(face.scale) * s)), 8, 18); }
+
+// the wire's height at x: it sags between the window's corners, drops in and goes back up
+double HomeView::lights_y(double x, double t) const {
+  double u = (x - w / 2.0) / (w / 2.0);
+  double base = h * 0.12 + h * 0.07 * (1 - u * u);
+  double in = std::min(1.0, t / 0.5), out = t > 4.7 ? std::min(1.0, (t - 4.7) / 0.6) : 0;
+  return base - (1 - in * in * (3 - 2 * in)) * h * 0.3 - out * out * h * 0.3;
+}
+
+void HomeView::draw_lights(Canvas& c, double t) const {
+  const double a = std::lround(face.scale) * s;
+  const int A = (int)a, n = lights_n();
+  const Rgb colors[4] = {{232, 70, 70}, {80, 200, 112}, {250, 198, 76}, {92, 150, 250}};
+  // the wire, one cell at a time
+  for (double x = 0; x < w; x += a) c.fill((int)x, (int)std::lround(lights_y(x, t) / a) * A, A, A, P().edge);
+  for (int i = 0; i < n; ++i) {
+    double x = (i + 0.5) * w / n, y = lights_y(x, t);
+    // how lit: a light running along, then all of them blinking, then all on
+    double lit = 0.12;
+    if (t >= 0.6 && t < 2.7) { double d = (t - 0.6) / 2.0 * (n + 2) - i; if (d >= 0 && d < 3) lit = 1 - d / 3 * 0.75; }
+    else if (t >= 2.7 && t < 3.9) lit = std::fmod(t - 2.7, 0.4) < 0.2 ? 1 : 0.12;
+    else if (t >= 3.9) lit = 1;
+    Rgb col = colors[i % 4];
+    int bx = (int)std::lround(x / a) * A - A, by = (int)std::lround(y / a) * A + A;
+    if (lit > 0.5) {  // a soft dithered glow around a lit bulb
+      for (int gy = -2; gy <= 5; ++gy)
+        for (int gx = -2; gx <= 4; ++gx)
+          if (((gx + gy) & 1) == 0) c.fill(bx + gx * A, by + gy * A, A, A, col, 0.16 * lit);
     }
+    c.fill(bx + A / 2, by - A, 2 * A, A, P().dim);  // the socket
+    c.fill(bx, by, 3 * A, 3 * A, mix(Rgb{40, 40, 40}, col, lit));
+    c.fill(bx + A, by + 3 * A, A, A, mix(Rgb{40, 40, 40}, col, lit));
+    if (lit > 0.5) c.fill(bx, by, A, A, mix(col, Rgb{255, 255, 255}, 0.6), lit);  // the shine
   }
 }
 
@@ -519,31 +618,7 @@ void HomeView::render(Canvas& c, double now) {
   c.clear(p.bg);
   double et = egg_ ? now - egg_t0_ : 0;
 
-  double cal_k = 0;
-  if (egg_ == 2) cal_k = et < 0.6 ? ease_out(et / 0.6) : (et < 2.6 ? 1.0 : 1.0 - ease_out((et - 2.6) / 0.7));
-  draw_caligari_shapes(c, cal_k * 0.9);
-
-  if (egg_ == 1 && et < 3.5) {
-    // the shadow creeps in from the right, almost reaching the eyes
-    double pr = ease_in_out(std::min(1.0, et / 3.3));
-    int tip_end = (int)(face.cx + 8 * face.scale * s + 9 * face.scale * s);
-    int tip = (int)std::lround(lerp(w + 8.0 * s, tip_end, pr) / s) * s;
-    draw_hand(c, tip, (int)face.eye_y() - 4 * s, 1.0);
-  }
-
-  if (egg_ == 3) {
-    for (auto& sp : spots_) {
-      if (et < sp.at || et >= 3.4) continue;
-      double a = std::min(1.0, (et - sp.at) / 0.35);
-      int cell = sp.size * s;
-      const BitmapDef* e = bmp("sprite:eye-open");
-      double dx = face.cx - sp.x, dy = face.eye_y() - sp.y, l = std::hypot(dx, dy);
-      int ox = (int)std::lround(dx / l * 1.0) * s, oy = (int)std::lround(dy / l * 1.0) * s;
-      Rgb col = sp.size == 2 ? p.dim : p.faint;
-      c.bitmap(e, (int)sp.x - 4 * cell + ox, (int)sp.y + oy, cell, col, a);
-      c.bitmap(e, (int)sp.x + 2 * cell + ox, (int)sp.y + oy, cell, col, a);
-    }
-  }
+  if (egg_ == 3) draw_lights(c, et);
 
   // micro-instruction / state line
   {
@@ -681,6 +756,6 @@ void HomeView::render(Canvas& c, double now) {
   if (ca < 1) c.fill(0, 0, w, h, p.bg, 1 - ca);
   face.now_hint = now;
   if (fa > 0) face.render(c, fa);
-  if (egg_ == 2) distort(c, cal_k);
-  if (egg_ == 3 && et >= 3.4 && et < 3.72) c.clear(p.bg);  // the screen goes dark for a moment
+  if (egg_ == 1) draw_snow(c, et);
+  if (egg_ == 2) draw_hat(c, et);
 }

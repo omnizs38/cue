@@ -6,7 +6,7 @@ Open a file with `Ctrl+O`, drag it onto Cue, or use File Explorer's **Open with*
 
 Cue plays common video formats through libmpv, including MKV, MP4, MOV, WebM, and AVI. Audio-only MP4, OGG, Opus, MP3, M4A, AAC, WAV, and FLAC show a pixel spectrum visualization: the bass rises in the middle, higher frequencies spread to both sides, and bars fall back slowly. Album artwork does not prevent audio mode. If visualization initialization fails, Cue retries without it.
 
-Music plays as a scene. A song without a cover (embedded, or a `cover.jpg` beside it) wears Cue's music tile, a black square with its note, so both looks work for every song. With a cover: the cover, sharp, on the left; the spectrum as two wings beside it, the bass next to the cover; the title and artist to the right; and behind them a soft light in the cover's colours that swells with the music. The window frames the scene as it is resized, live and without touching the sound: a wide window shows all of it, a portrait window shows the cover with the title and artist under it, and a small window shows only the cover and its wings. The next song of an album keeps the window's size. A song without a title tag shows its file name; without an artist, only the title. In a song's last 12 seconds, *up next* drops in at the top of the window. Point at the cover and it leans away from the pointer; it settles flat when the pointer leaves. Right-click the picture to choose **cover + spectrum** or **spectrum only**; the choice is kept for all music. **Spectrum only** stands the equalizer where the cover stands, with the same title, artist and album beside it and the same list.
+Music plays as a scene. A song without a cover (embedded, or a `cover.jpg` beside it) wears Cue's music tile, a black square with its note, so both looks work for every song. With a cover: the cover, sharp, on the left; the spectrum as two wings beside it, the bass next to the cover; the title and artist to the right; and behind them a soft light in the cover's colours that swells with the music. The window frames the scene as it is resized, live and without touching the sound: a wide window shows all of it, filling the window (no black bars above and below, or beside it) as far as the cover, the wings and the start of the title still fit, a portrait window shows the cover with the title and artist under it, and a small window shows only the cover and its wings. Where the picture cannot reach the window's edges (a very wide window), it fades softly into the black. The next song of an album keeps the window's size. A song without a title tag shows its file name; without an artist, only the title. In a song's last 12 seconds, *up next* drops in at the top of the window. Point at the cover and it leans away from the pointer; it settles flat when the pointer leaves. Right-click the picture to choose the look with the two icons at the end of the row (the row names the one that is on, or the one under the pointer): **cover + spectrum** or **spectrum only**; the choice is kept for all music. Like a film's, the control bar rests while the pointer is still and comes back with any movement. A click on the music scene never pauses: it brings the controls back (pause with the bar's button, the space bar, a media key, the taskbar buttons or the phone); a double click is still full screen. **Spectrum only** stands the equalizer where the cover stands, with the same title, artist and album beside it and the same list.
 
 For music the control bar is narrower and shows previous track · play · next track instead of the 15-second steps, and the subtitles button only when the song has lyrics. A song opened on its own brings its folder: the folder's music becomes the queue, in name order, starting from that song, so previous and next walk the album and it plays on. A queue you built yourself is never replaced. Songs always start from the beginning; Cue does not remember where a song stopped.
 
@@ -66,6 +66,8 @@ The **…** menu is grouped in four parts: the file (open, close), ambient light
 
 Ambient lighting follows scene colors and fades in after playback starts. It is hidden on the home screen and in fullscreen or maximized mode.
 
+With music, the same switch turns on a light show inside the window instead of the halo outside it: a soft light around the cover, in the colours of the cover's own edges, that breathes in and out on a slow cycle, a soft glow that leaves the spectrum's dots as they rise, deeper and a little quicker when the music is full and shallow in quiet passages, and a pool of light in each corner of the window that breathes with it, barely touched by each beat in turn. With **spectrum only**, the same light sits round and soft behind the equalizer and its dots take the light's colours. A louder stretch such as a chorus turns the colours half way round, and the spectrum's dots take the colour of the cover beside them. It stays quiet: the light adds to the picture, never covers the cover or the words, and settles while paused. With Windows' **Show animations** off, only a slow breath remains. The ambient light's strength sets how bright it is.
+
 Cue supports Brazilian Portuguese, English, Spanish, French, Simplified Chinese, Russian, German, and Japanese. Automatic mode follows Windows display-language preferences, then falls back to English. Change the language in **… → language**, or the **…** beside Recent on the home screen. Changes apply immediately and are saved.
 
 ## Phone remote
@@ -85,6 +87,9 @@ The first time, Windows may ask whether Cue can use the network: allow it on **p
 | menu | Subtitles (on/off, timing, size, position), audio track, sleep timer |
 | Folder button | Browse the shared folders and open a file on the computer |
 | The bar | Tap or drag to seek (or to set the volume, in volume mode) |
+| The time on the right | Tap to switch between what is left (−12:34) and the whole length. Films start with what is left, songs with their length; the phone remembers the choice for each |
+
+With music, the phone shows the song's title and artist (as the computer does) and wears its cover; turning the wheel turns the cover into a little record that spins with your thumb.
 
 In menus and folders the « button becomes a back arrow; **menu** closes. Subtitle position is dragged on a small screen on the phone, or nudged with the wheel and the − / + buttons.
 
@@ -95,6 +100,10 @@ In menus and folders the « button becomes a back arrow; **menu** closes. Subtit
 **Privacy and pairing.** Cue listens on the local network only (port 7878, or the next free one) and answers only addresses of private networks. The code is accepted only while the pairing screen is open; several wrong codes lock pairing for a minute. A paired phone keeps a token in its browser; Cue remembers the last eight. **Turn off** on the pairing screen stops the server and tells connected phones; it stays off until the remote is opened again.
 
 The phone's browser cannot use its volume buttons for the film, and only Android phones vibrate with the wheel (Safari gives web pages no access to the iPhone's motor); every phone gets the soft tick.
+
+## Lock screen and media keys
+
+What plays shows in Windows' own media card: on the lock screen and in the flyout over the volume keys, with the song's title, artist and cover (a film shows its name), the timeline, and previous, play/pause and next. Those buttons, and keyboard media keys, act like Cue's own.
 
 ## Files and settings
 
@@ -134,8 +143,8 @@ In short, wide windows (ultrawide video), menus that would not fit above the
 control bar open beside it instead, level with its edge, so the controls stay
 visible. About moves above the bar when centring it would cover the controls.
 
-The panel opens from its button: its list icon sits right over the button's icon,
-on the side of the bar that has room. In roomy windows it shows about ten rows; in
+The panel opens over its button, like the bar's other menus (centred on it, or stopped at the
+bar's edge), on the side of the bar that has room. In roomy windows it shows about ten rows; in
 small windows it compacts.
 
 The panel has three parts: the title with the entry count, the complete

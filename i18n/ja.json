@@ -339,6 +339,7 @@
   "queue.add_tracks": "曲を追加",
   "queue.or_drag": "またはここにドラッグ",
   "queue.drop_to_add": "ドロップしてリストに追加",
+  "queue.skipped": "{name} を開けません · スキップしました",
   "queue.up_next": "次",
   "toast.email_copied": "メールアドレスをコピーしました",
   "queue.add_files_short": "ファイル",
