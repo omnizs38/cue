@@ -107,6 +107,9 @@ inline constexpr const char* kBlurCloudShader = R"CUE(
 //!PARAM edge_on
 //!TYPE DYNAMIC float
 0
+//!PARAM mono
+//!TYPE DYNAMIC float
+0
 //!PARAM edge_l
 //!TYPE DYNAMIC float
 0
@@ -548,6 +551,39 @@ vec4 hook() {
     if (edge_t > 0.0) k *= smoothstep(0.0, edge_t, p.y);
     if (edge_b > 0.0) k *= smoothstep(0.0, edge_b, 1.0 - p.y);
     return vec4(o.rgb * k, o.a);
+}
+
+//!HOOK OUTPUT
+//!WHEN mono 0 >
+//!BIND HOOKED
+//!DESC Cue music in black and white: its spectrum and its light, as their own greys; the cover keeps its colours
+// A choice for music (colour stays the default); mono eases 0..1 so the colour drains away and
+// comes back instead of switching. Rec. 709 luma: each colour keeps its own brightness. The cover
+// itself stays in colour: where it is drawn (as the cover pass turns it under the pointer, the
+// same camera, so a tilted cover keeps every coloured pixel and nothing around it does).
+float mono_box(vec2 q, float h, float r) {
+    vec2 d = abs(q) - vec2(h - r);
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+vec4 hook() {
+    vec4 o = HOOKED_tex(HOOKED_pos);
+    float k = clamp(mono, 0.0, 1.0);
+    if (cov_on > 0.5) {
+        vec2 sz = HOOKED_size;
+        float h = cov_hw * sz.x;
+        vec2 q = HOOKED_pos * sz - vec2(cov_x, cov_y) * sz;
+        if (max(abs(q.x), abs(q.y)) < h * 1.4) {
+            float cx = cos(cov_rx), sx = sin(cov_rx), cy = cos(cov_ry), sy = sin(cov_ry);
+            vec3 e1 = vec3(cy, 0.0, -sy), e2 = vec3(sy * sx, cx, cy * sx), n = vec3(sy * cx, -sx, cy * cx);
+            float d = 4.0 * h;
+            float t = d * n.z / (n.x * q.x + n.y * q.y + n.z * d);
+            vec3 P = vec3(t * q.x, t * q.y, t * d - d);
+            vec2 uv = vec2(dot(P, e1), dot(P, e2)) / (1.0 + 0.025 * clamp(cov_k, 0.0, 1.0));
+            k *= 1.0 - clamp(0.5 - mono_box(uv, h, h * 0.02), 0.0, 1.0);
+        }
+    }
+    float luma = dot(o.rgb, vec3(.2126, .7152, .0722));
+    return vec4(mix(o.rgb, vec3(luma), k), o.a);
 }
 
 //!HOOK OUTPUT

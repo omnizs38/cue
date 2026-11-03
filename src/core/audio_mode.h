@@ -31,6 +31,10 @@ struct MusicScene {
   int side = 520, x = 406, y = 237;  // the cover
   int wing_w = 220, wing_h = 528, wing_gap = 36;
   int text_x = 1262, text_w = 540;    // the words' column, centred on the cover's middle
+  // the cover's own picture inside flat black bars (a video's frame boxed into the file's
+  // picture, see core/image_trim.h), as shares of the picture; all of it when there are none
+  double crop_x = 0, crop_y = 0, crop_w = 1, crop_h = 1;
+  bool cropped() const { return crop_x > 0 || crop_y > 0 || crop_w < 1 || crop_h < 1; }
   int wing_y() const { return y + side / 2 - wing_h / 2; }
   int left_x() const { return x - wing_gap - wing_w; }
   int right_x() const { return x + side + wing_gap; }
@@ -166,6 +170,11 @@ inline std::string audio_cover_tail(int64_t cover, const MusicScene& S = MusicSc
   auto n = [](int v) { return std::to_string(v); };
   // the cover: the file's own (the engine's album-art track), or Cue's tile
   std::string v = cover > 0 ? "[vid" + n((int)cover) + "]" : audio_placeholder_cover();
+  if (cover > 0 && S.cropped()) {  // the bars stay out of the cover, its wings and its light
+    char c[160];
+    std::snprintf(c, sizeof c, "crop=w=iw*%.4f:h=ih*%.4f:x=iw*%.4f:y=ih*%.4f,", S.crop_w, S.crop_h, S.crop_x, S.crop_y);
+    v += c;
+  }
   // the light gathers around the cover: its centre, as a share of the picture
   char cx[16], cy[16];
   std::snprintf(cx, sizeof cx, "%.3f", (S.x + S.side / 2.0) / S.W);
@@ -175,15 +184,21 @@ inline std::string audio_cover_tail(int64_t cover, const MusicScene& S = MusicSc
          "trim=start_frame=2,format=gray,crop=24:19:0:0,pad=24:20:0:0:color=0x262626,"
          "lagfun=decay=0.965,split=2[cue_bars][cue_pulse];"
          // the wings' cells: bars turned sideways, mirrored so the bass sits level with the cover's middle
-         "[cue_bars]transpose=clock,split=2[cue_lo][cue_hi0];[cue_hi0]vflip[cue_hi];[cue_hi][cue_lo]vstack,format=gbrp[cue_cells];" +
+         "[cue_bars]transpose=clock,split=2[cue_lo][cue_hi0];[cue_hi0]vflip[cue_hi];[cue_hi][cue_lo]vstack[cue_cells];" +
          v + "format=gbrp,split=3[cue_c1][cue_c2][cue_c3];"
          // the cover, sharp
          "[cue_c1]scale=" + n(S.side) + ":" + n(S.side) + ":force_original_aspect_ratio=increase:flags=" + (cover > 0 ? "lanczos" : "neighbor") + ","
          "crop=" + n(S.side) + ":" + n(S.side) + ",setsar=1[cue_art];"
-         // each row of cells takes the colour of the cover's row beside it, lifted to stay bright;
-         // dark cells are cut out, then the cells become dots with transparent gaps
+         // each row of cells takes the colour of the cover's row beside it, lifted to stay bright,
+         // and each cell is as opaque as it is lit: a fading cell lets the light behind it through
+         // (it never turns into a dark hole over a bright cover's light); then the cells become dots
+         // with transparent gaps
          "[cue_c2]scale=1:48:flags=area,lutrgb=r=val*0.6+100:g=val*0.6+100:b=val*0.6+100,scale=20:48:flags=neighbor[cue_tint];"
-         "[cue_cells][cue_tint]blend=all_mode=multiply,colorkey=0x000000:0.02:0,format=yuva444p,"
+         // (the music leads: both of the cells' copies end with it, so the last picture keeps its
+         // holes; an alphamerge led by the cover would paint solid wings once the song ends)
+         "[cue_cells]split=2[cue_ca][cue_cb];[cue_ca][cue_cb]alphamerge[cue_cell];[cue_tint]format=gbrap[cue_tinta];"
+         "[cue_cell][cue_tinta]blend=c0_mode=normal:c0_opacity=0:c1_mode=normal:c1_opacity=0:c2_mode=normal:c2_opacity=0:"
+         "c3_mode=normal:c3_opacity=1,format=yuva444p,"
          "scale=" + n(S.wing_w) + ":" + n(S.wing_h) + ":flags=neighbor,format=yuva420p[cue_wing];"
          // the gaps between the dots: a grid drawn once and multiplied into the wings' alpha
          // (drawing the grid on every picture cost more than everything else on the wings)

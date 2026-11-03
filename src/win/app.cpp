@@ -82,6 +82,10 @@ const char* kBindings[][2] = {
     {"Ctrl+=", "c_plus"},        {"Ctrl++", "c_plus"},   {"Ctrl+-", "c_minus"},        {"Ctrl+0", "c_zero"},
     {"Ctrl+KP_ADD", "c_plus"},   {"Ctrl+KP_SUBTRACT", "c_minus"}, {"Ctrl+KP0", "c_zero"},
     {"VOLUME_DOWN", "ignore"},     {"[", "lbracket"},      {"]", "rbracket"},            {"\\", "backslash"},
+    // the rest of the sheet's keys, so they work after a click on the picture too (the engine's
+    // window has the keyboard then): repeat, next / previous, subtitles menu, always on top, ?
+    {"l", "l"}, {"L", "l"}, {"n", "n"}, {"N", "n"}, {"p", "p"}, {"P", "p"}, {"c", "c"}, {"C", "c"},
+    {"Ctrl+t", "c_t"}, {"Ctrl+T", "c_t"}, {"?", "qmark"},
 };
 
 COLORREF cref(Rgb c) { return RGB(c.r, c.g, c.b); }
@@ -1361,6 +1365,26 @@ void App::music_album_queue() {
   queue_refresh();
 }
 
+// Colour (the default) or black and white: saved for all music. Only the picture's last pass
+// changes (the mono shader pass), so the song never reopens: the colour drains away in 0.3 s.
+void App::set_music_mono(bool on) {
+  store_.music_mono = on;
+  play_.in.music_mono = on;
+  save_state();
+  play_.changed(now());
+  ensure_anim();
+}
+
+bool App::step_mono(double dt) {
+  const double want = store_.music_mono && audio_only_ && cover_scene_ && mode_ == Mode::Play ? 1.0 : 0.0;
+  if (mono_k_ == want) return false;
+  // a song opened in black and white is grey from its first picture; a change is eased
+  if (dt <= 0 || reduce_motion() || !first_frame_) mono_k_ = want;
+  else mono_k_ = want > mono_k_ ? std::min(want, mono_k_ + dt / 0.3) : std::max(want, mono_k_ - dt / 0.3);
+  update_blur_cloud();
+  return mono_k_ != want;
+}
+
 // Cover and spectrum, or the spectrum alone: saved for all music, and applied to the file playing
 // now by rebuilding its picture (the sound's own branch is rebuilt with it, like a track change).
 void App::set_music_look(int look) {
@@ -1632,6 +1656,7 @@ void App::configure_audio_mode() {
   play_.in.cover_art = false;
   play_.in.has_cover = cover_vid_ > 0;
   play_.in.music_look = store_.music_look;
+  play_.in.music_mono = store_.music_mono;
   play_.in.cover_scene = false;
   // File-local options are restored by mpv on unload: a following film must
   // never inherit the waveform, low-resolution scaler or audio clock.
@@ -1654,6 +1679,19 @@ void App::configure_audio_mode() {
     const int look = cover_fallback_ ? 1 : store_.music_look;
     const bool cover = look == 0;
     music_scene_ = MusicScene::wide();  // one picture; the window frames it (music_fit_window)
+    if (cover && cover_vid_ > 0 && cover_trim_job_) {
+      // the bars were looked for since the song was opened (usually done by now); the engine is
+      // waiting for this graph, so not for long. Only when it is the same picture the engine has.
+      const ULONGLONG until = GetTickCount64() + 60;
+      while (!cover_trim_job_->done.load() && GetTickCount64() < until) Sleep(2);
+      const auto& j = *cover_trim_job_;
+      int tw = 0, th = 0;
+      for (auto& t : tracks) if (t.id == cover_vid_) { tw = t.demux_w; th = t.demux_h; }
+      if (j.done.load() && j.found && tw > 0 && th > 0 && j.full_w > 0 && j.full_h > 0 &&
+          std::fabs((double)tw / th - (double)j.full_w / j.full_h) < 0.01) {
+        music_scene_.crop_x = j.x; music_scene_.crop_y = j.y; music_scene_.crop_w = j.w; music_scene_.crop_h = j.h;
+      }
+    }
     play_.in.music_scene = music_scene_;
     framing_sent_ = {1e9, 0, 0};          // file-local: the engine starts every file unframed
     music_frame_ = music_frame_for(cw_, ch_, s_);
@@ -1689,6 +1727,7 @@ void App::configure_audio_mode() {
     if (waveform_active_ && !mix.empty()) { amix_ = play_.in.amix = true; play_.in.amix_ids = mix; }
     if (!waveform_active_) log("audio waveform filter unavailable; keeping audio controls");
     cover_scene_ = waveform_active_;  // both looks are a scene: the words, the list, the framing
+    mono_k_ = store_.music_mono && cover_scene_ ? 1.0 : 0.0;  // grey from the song's first picture
     cover_art_ = waveform_active_ && cover;
     music_look_on_ = look;
     play_.in.cover_scene = cover_scene_;
@@ -1726,6 +1765,7 @@ void App::on_client_message(const mpv_event_client_message* m) {
   if (name == "lbracket") name = "[";
   else if (name == "rbracket") name = "]";
   else if (name == "backslash") name = "\\";
+  else if (name == "qmark") name = "?";
   bool both=name.rfind("cs_",0)==0;
   bool shift = both||name.rfind("s_", 0) == 0, ctrl = both||name.rfind("c_", 0) == 0;
   std::string k = both?name.substr(3):(shift || ctrl) ? name.substr(2) : name;
@@ -2002,6 +2042,8 @@ void App::open(std::string path, std::vector<std::string> subs) {
   // looked at the new one, so nothing jumps between them
   const bool song_to_song = play_.in.audio_only && remote::is_audio_name(path) && mode_ == Mode::Play;
   play_.in.audio_only = remote::is_audio_name(path);
+  // a song's cover may be a video's frame boxed in black bars: found while the engine opens it
+  cover_trim_job_ = play_.in.audio_only ? request_cover_trim(path) : nullptr;
   if (!song_to_song) play_.in.has_cover = play_.in.cover_scene = play_.in.cover_art = false;
   play_.in.file_info.clear();
   ++play_.in.file_info_revision;
@@ -2384,6 +2426,7 @@ void App::run_actions() {
         ensure_anim();
         break;
       case PA::MusicLook: set_music_look((int)a.v); break;
+      case PA::MusicMono: set_music_mono(a.v > 0.5); break;
       case PA::ControlsFree:
         store_.controls_free = a.v > 0;
         play_.in.controls_free = store_.controls_free;
@@ -2528,12 +2571,22 @@ void App::update_blur_cloud() {
     }
   }
   if (!edge && edge_sent_) options += ",edge_on=0";
+  // music in black and white (eased by step_mono)
+  bool mono = mono_k_ > 0.001 && audio_only_ && mode_ == Mode::Play;
+  if (mono) {
+    char f4[32];
+    std::snprintf(f4, sizeof f4, ",mono=%.3f", std::min(1.0, mono_k_));
+    options += f4;
+  } else if (mono_sent_) {
+    options += ",mono=0";
+  }
   cloud_pending_ = false;
   if (options == cloud_options_) return;
-  if ((cloud.alpha > 0 || fx || cov || lit || edge) && !cloud_cadence_.ready(tn, .0015)) { cloud_pending_ = true; return; }
+  if ((cloud.alpha > 0 || fx || cov || lit || edge || mono) && !cloud_cadence_.ready(tn, .0015)) { cloud_pending_ = true; return; }
   cov_sent_ = cov;
   lit_sent_ = lit;
   edge_sent_ = edge;
+  mono_sent_ = mono;
   snap_.was_on = fx;
   cloud_cadence_.mark(tn);
   cloud_options_ = options;
@@ -2643,6 +2696,7 @@ void App::frame() {
   moving |= step_audio_switch(t);
   if (view_t0_ >= 0) moving |= step_music_view(t);
   moving |= step_sub_fx(t, dt);
+  moving |= step_mono(dt);
   step_geom(t);
   if (mode_ == Mode::Home && onboarding_) {
     moving = ob_.tick(t, dt);
@@ -3209,6 +3263,7 @@ void App::apply_language(bool relayout) {
   if (!relayout) return;
   if (engine_failed_) home_.engine_problem = engine_text(engine_err_);
   show_update_state();  // its labels are words too
+  refresh_recents(false);  // the recent list's lines ("25 min left", "3 episodes") are written here
   if (cw_ > 0 && ch_ > 0) {
     home_.relayout();
     ob_.set_size(cw_, ch_, s_);
@@ -3360,25 +3415,39 @@ void App::adapt_window(double ar) {
   if (ar <= 0) return;
   if (fullscreen_) { pending_ar_ = ar; return; }  // fullscreen just letterboxes; adapt on the way out
   if (IsIconic(hwnd_)) return;
-  if (IsZoomed(hwnd_)) ShowWindow(hwnd_, SW_RESTORE);
   pending_ar_ = 0;
-  RECT wr = window_rect(), cr;
-  GetClientRect(hwnd_, &cr);
-  int cw = cr.right, ch = cr.bottom;
-  int fx = (wr.right - wr.left) - cw, fy = (wr.bottom - wr.top) - ch;  // invisible resize borders
   MONITORINFO mi{sizeof(mi)};
   GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
   RECT wa = mi.rcWork;
   int aw = wa.right - wa.left, ah = wa.bottom - wa.top;
-  auto fitted = video_window_size(ar, aw-fx, ah-fy, dpi_, s_);
-  int tw=fitted.w, th=fitted.h;
   auto_portrait_ = ar < 0.95;
-  // grow from where the window is (its centre), kept inside the work area
-  int cx = (wr.left + wr.right) / 2, cy = (wr.top + wr.bottom) / 2;
-  int W = tw + fx, H = th + fy;
-  int x = std::clamp(cx - W / 2, (int)wa.left - fx / 2, (int)wa.right - W + fx / 2);
-  int y = std::clamp(cy - H / 2, (int)wa.top, (int)wa.bottom - H + fy);
-  animate_window_to(RECT{x, y, x + W, y + H});
+  if (IsZoomed(hwnd_)) {
+    // Maximized stays maximized (a new file, the next song, back home): the new shape becomes the
+    // place the window restores to. The placement is in workspace coordinates: the screen's,
+    // moved by the taskbar when it sits on the left or the top. A restored window's borders are
+    // inside its rectangle (the content goes edge to edge), so none are added.
+    WINDOWPLACEMENT wp{sizeof(wp)};
+    if (!GetWindowPlacement(hwnd_, &wp)) return;
+    int dx = wa.left - mi.rcMonitor.left, dy = wa.top - mi.rcMonitor.top;
+    RECT n = wp.rcNormalPosition;
+    WinRect from{n.left + dx, n.top + dy, n.right + dx, n.bottom + dy};
+    // the remembered place may be on another monitor: it is kept there only if it touches this one
+    if (from.right <= wa.left || from.left >= wa.right || from.bottom <= wa.top || from.top >= wa.bottom)
+      from = {wa.left, wa.top, wa.right, wa.bottom};
+    auto r = video_window_rect(from, {wa.left, wa.top, wa.right, wa.bottom}, video_window_size(ar, aw, ah, dpi_, s_), 0, 0);
+    wp.rcNormalPosition = {r.left - dx, r.top - dy, r.right - dx, r.bottom - dy};
+    wp.showCmd = SW_SHOWMAXIMIZED;
+    wp.flags &= ~WPF_SETMINPOSITION;
+    SetWindowPlacement(hwnd_, &wp);
+    return;
+  }
+  RECT wr = window_rect(), cr;
+  GetClientRect(hwnd_, &cr);
+  int cw = cr.right, ch = cr.bottom;
+  int fx = (wr.right - wr.left) - cw, fy = (wr.bottom - wr.top) - ch;  // invisible resize borders
+  auto r = video_window_rect({wr.left, wr.top, wr.right, wr.bottom}, {wa.left, wa.top, wa.right, wa.bottom},
+                             video_window_size(ar, aw - fx, ah - fy, dpi_, s_), fx, fy);
+  animate_window_to(RECT{r.left, r.top, r.right, r.bottom});
 }
 
 void App::animate_window_to(const RECT& r) {
@@ -4293,6 +4362,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         ensure_anim();
       }
       return 0;
+    case WM_CHAR:
+      // ? is wherever the keyboard layout puts it: read as the character it types
+      if (w == L'?') { key("?", false, false); return 0; }
+      break;
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN: {
       if (m == WM_SYSKEYDOWN && w != VK_RETURN) break;

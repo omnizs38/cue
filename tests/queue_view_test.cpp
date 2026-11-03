@@ -89,5 +89,19 @@ int main() {
     assert(centred||at_edge||beside||(r.w>=d.w&&std::abs(r.cx()-d.cx())<=2*s));
     for(auto& h:p.hots_) {Rect b=h.r;b.x+=p.dock_rect().x;b.y+=p.dock_rect().y;assert(b.r()<=r.x||b.x>=r.r()||b.b()<=r.y||b.y>=r.b());}
   }
+  // Issue #10: the window's own buttons (pin, minimize, maximize, close) are drawn above every
+  // menu; up next never opens up under them, in a window of any size, video or music.
+  int under=0;
+  for(bool music:{false,true})for(double scale:{1.,1.5,2.,3.})
+    for(auto size:{std::pair{320,240},std::pair{480,320},std::pair{640,360},std::pair{760,420},std::pair{1000,560},std::pair{1280,720},std::pair{1530,853},std::pair{1920,1080},std::pair{540,960},std::pair{2560,1080}}) {
+      PlayView p;p.in.dur=100;p.in.queue_active=true;p.in.queue=entries;p.in.audio_only=music;
+      p.resize(size.first,size.second,scale);p.reset(1);p.key("q",false,false,1);
+      for(int n=0;n<80;++n)p.tick(1+n/60.,1./60);
+      Rect r=p.panel_rect(),c=p.chrome_rect();
+      if(size.second-r.h<p.chrome_room())continue;  // a window too short for both
+      ++under;
+      assert(r.r()<=c.x||r.y>=c.b());
+    }
+  assert(under>60);
   puts("Queue sheet: complete 512-item list, drag/drop, cancellation, scroll, keyboard, image bounds, 96 adaptive layouts and panels anchored to their button and clear of the controls passed");
 }

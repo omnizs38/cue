@@ -462,7 +462,7 @@ void PlayView::render_dock() {
 
 // ── panel ───────────────────────────────────────────────────────────
 bool PlayView::selectable(const Row& r) const {
-  return r.k != RK::Hint && r.k != RK::Separator && r.k != RK::Brand && r.k != RK::Credit && r.k != RK::Info;
+  return r.k != RK::Hint && r.k != RK::Separator && r.k != RK::Brand && r.k != RK::Credit && r.k != RK::Info && r.k != RK::Keys;
 }
 
 void PlayView::set_speed(double v) {
@@ -643,6 +643,7 @@ void PlayView::build_rows() {
     // contact, as one row of pixel icons: profile (LinkedIn), code (GitHub), mail
     R(RK::Contacts, R_CONTACTS)->segs = {"LinkedIn", "GitHub", CUE_CONTACT_EMAIL};
     R(RK::Profile, R_LICENSES, tr(str::about_licenses));
+    R(RK::Profile, R_KEYS, tr(str::keys_title))->right = "?";  // the sheet, and the key that opens it
     if (!in.update_label.empty()) R(RK::Profile, R_UPDATE, in.update_label);
   } else if (panel_ == Panel::Speed) {
     // Keep the value on the title line, at the same scale as the dock.
@@ -666,6 +667,12 @@ void PlayView::build_rows() {
       look->seg_icons = {"look-cover", "look-bars"};
       look->icons_only = true;  // two icons at the end; the row says which one is on (or pointed at)
       look->seg = in.music_look;
+      // and in colour (the default) or black and white: the cover, its spectrum and its light
+      Row* tone = R(RK::Segmented, R_MUSIC_COLOR);
+      tone->segs = {tr(str::music_color), tr(str::music_mono)};
+      tone->seg_icons = {"look-color", "look-mono"};
+      tone->icons_only = true;
+      tone->seg = in.music_mono ? 1 : 0;
       R(RK::Separator, R_NONE);
     }
     if (!in.audio_only) {
@@ -675,6 +682,8 @@ void PlayView::build_rows() {
     R(RK::Action, R_CLOSE, tr(in.audio_only ? str::more_close_audio : str::more_close_video))->icon = "cue:close-video";
     R(RK::Separator, R_NONE);  // every entry stands on its own, like the ones above
     R(RK::Submenu,R_QUEUE,tr(str::queue_title))->icon="queue";
+  } else if (panel_ == Panel::Keys) {
+    build_keys();
   } else if (panel_ == Panel::FileInfo) {
     R(RK::CloseHeader, R_DISMISS, tr(str::info_title));
     if (in.file_info.empty()) R(RK::Info, R_NONE, tr(str::info_loading));
@@ -710,7 +719,7 @@ int PlayView::slider_label_w() const {
 }
 
 void PlayView::layout_rows() {
-  double s = s_;
+  double s = panel_ == Panel::Keys ? keys_s_ : s_;
   if(panel_==Panel::Queue&&scene_list()) {
     // music: the list beside the cover, as tall as the room under the captions allows
     Rect r=scene_list_rect();
@@ -731,9 +740,12 @@ void PlayView::layout_rows() {
     s=roomy?s_:std::min({s_,w_/240.,h_/200.});
     pw_=std::min((int)std::lround((roomy?kQueueRoomyPanelW:360)*s),std::max(1,w_-(int)std::lround(16*s)));
     bool low=dock.cy()>h_/2;
-    int room=low?dock.y-(int)std::lround((roomy?kQueueTop:4)*s):h_-dock.b()-(int)std::lround(12*s);
+    // never up under the window's own buttons (minimize, maximize, close): below their row
+    // whenever they are shown, in a window of any size (issue #10)
+    int top=in.fullscreen?(int)std::lround((roomy?kQueueTop:4)*s):std::max(chrome_room(),(int)std::lround((roomy?kQueueTop:4)*s));
+    int room=low?dock.y-top:h_-dock.b()-(int)std::lround(12*s);
     room-=(int)std::lround(8*s);
-    int available=room>=168*s?room:h_-(int)std::lround(16*s);
+    int available=room>=168*s?room:h_-top-(int)std::lround(12*s);
     ph_=std::max(1,std::min(available,(int)std::lround(QueueView::natural_height(in.queue.size(),roomy?10:6)*s)));
     queue_s_=s;
     queue_view_.layout(pw_,ph_,s);ph_=queue_view_.height();
@@ -779,13 +791,14 @@ void PlayView::layout_rows() {
     W=std::max(W,text_w("v" CUE_VERSION_SHORT " · "+std::string(CUE_OFFICIAL_BUILD?CUE_DISTRIBUTOR:tr(str::about_unofficial)),1)+12);
     W=std::max(W,text_w(tr(str::about_original),1)+12);
     if(CUE_OFFICIAL_BUILD)W=std::max(W,text_w(i18n::format(str::about_credit,{{"heart",""}}),1)+19);
-    for (auto& r : rows_) if (r.k == RK::Profile) W = std::max(W, text_w(r.label, 1) + 24 + (r.icon ? 14 : 0));
+    for (auto& r : rows_) if (r.k == RK::Profile) W = std::max(W, text_w(r.label, 1) + 24 + (r.icon ? 14 : 0) + (r.right.empty() ? 0 : key_cap_w(r.right) + 5));
   }
   if (panel_ == Panel::FileInfo) {
     info_label_w_ = 68;
     for (auto& r : rows_) if (r.k == RK::Info && !r.checked && !r.right.empty()) info_label_w_ = std::max(info_label_w_, text_w(r.label, 1) + 10);
   }
   if (panel_ == Panel::FileInfo) W = std::max(150, std::min(264, (int)(w_ / s) - 16));
+  if (panel_ == Panel::Keys) W = std::min(keys_cols_ * keys_col_w_ + (keys_cols_ - 1) * 10 + 4, std::max(120, (int)(w_ / s) - 8));
   pw_ = W * s;
   int air = 3;  // a section starts: a little air above its name
   auto row_h = [&](const Row& r, int breath) {
@@ -804,22 +817,36 @@ void PlayView::layout_rows() {
     if (r.k == RK::Contacts) rh = about_compact_ ? 30 : 36;
     if (r.k == RK::Info) rh = 13;
     if (r.k == RK::CloseHeader) rh = 18;
+    if (r.k == RK::Keys) rh = keys_compact_ ? (r.kh.section ? 13 : 11) : (r.kh.section ? 17 : 13);  // a group's name: air above it
     return rh;
   };
   // menus breathe when the window has room (the same rhythm in ···, CC and audio), but only as
   // much as still lets the whole menu fit
   int breath = (panel_ == Panel::More || panel_ == Panel::CC || panel_ == Panel::Audio || panel_ == Panel::AudioMix || panel_ == Panel::Language) && h_ / s_ >= 230 ? 5 : 0;
   auto fits = [&] {
-    int total = 8;
-    for (auto& r : rows_) total += row_h(r, breath);
+    int total = 8, col[2] = {0, 0};
+    for (auto& r : rows_) {
+      if (r.k == RK::Keys) col[r.kcol] += row_h(r, breath);
+      else total += row_h(r, breath);
+    }
+    total += std::max(col[0], col[1]);
     return total * s <= h_ - 12 * s;
   };
   while (breath > 0 && !fits()) --breath;
   if (!fits()) air = 0;  // the smallest window at the largest size: the sections close up
   double y = 4 * s;
+  double keys_top = -1, keys_y[2] = {0, 0};  // the shortcut sheet's two columns
   for (auto& r : rows_) {
     int rh = row_h(r, breath);
     r.r = {2 * s, y, pw_ - 4 * s, rh * s};
+    if (r.k == RK::Keys) {
+      if (keys_top < 0) keys_top = keys_y[0] = keys_y[1] = y;
+      const int cw = keys_cols_ == 2 ? (int)std::lround(keys_col_w_ * s) : pw_ - 4 * (int)s;
+      r.r = {2 * s + (int)std::lround(r.kcol * (keys_col_w_ + 10) * s), keys_y[r.kcol], cw, rh * s};
+      keys_y[r.kcol] += rh * s;
+      y = std::max(keys_y[0], keys_y[1]);
+      continue;
+    }
     r.parts.clear();
     int x0 = r.r.x, x1 = r.r.r();
     if (r.k == RK::Slider) {
@@ -883,7 +910,10 @@ void PlayView::layout_rows() {
     y += rh * s;
   }
   ph_ = y + 4 * s;
-  if (panel_ == Panel::About && ph_ > h_ && !about_compact_) {
+  // (or one that cannot sit clear of the control bar, above or below it)
+  const Rect dock_now = dock_rect();
+  const int beside_dock = std::max(dock_now.y - 8 * (int)s_, h_ - dock_now.b() - 8 * (int)s_);
+  if (panel_ == Panel::About && (ph_ > h_ || ph_ > beside_dock) && !about_compact_) {
     // a small window at a large size: the centred card tightens its rhythm to stay whole
     about_retry_ = true;
     layout_rows();
@@ -896,14 +926,16 @@ void PlayView::layout_rows() {
 Rect PlayView::panel_rect() const {
   Rect d{(int)std::lround(px_.x), (int)std::lround(py_.x), dw_, dh_};
   if(panel_==Panel::Queue&&scene_list()) {Rect r=scene_list_rect();return {r.x,r.y,pw_,ph_};}
-  if (panel_ == Panel::About) {
+  if (panel_ == Panel::About || panel_ == Panel::Keys) {
     // centred, unless that would cover the bar: then it rises to sit above (or below) it
     int y = (h_ - ph_) / 2, gap = (int)(8 * s_);
     if (y + ph_ > d.y - gap && y < d.b() + gap) {
       int up = d.y - gap - ph_, down = d.b() + gap;
       if (up >= 0) y = up; else if (down + ph_ <= h_) y = down;
     }
-    return {(w_ - pw_) / 2, std::clamp(y, 0, std::max(0, h_ - ph_)), pw_, ph_};
+    // under the window's buttons when it would reach them
+    const int top = !in.fullscreen && h_ - ph_ >= chrome_room() && (w_ + pw_) / 2 > chrome_rect().x ? chrome_room() : 0;
+    return {(w_ - pw_) / 2, std::clamp(y, top, std::max(top, h_ - ph_)), pw_, ph_};
   }
   if (panel_ == Panel::FileInfo) {
     int margin = 8 * s_;
@@ -961,7 +993,7 @@ Rect PlayView::panel_rect() const {
   // Short, wide windows (ultrawide video): when the menu is taller than the room above (or
   // below) the bar, it opens beside the bar instead, on its button's side, level with the bar's
   // outer edge, so it never covers the controls.
-  const int top_room = (int)(26 * s_);  // the window buttons' row
+  const int top_room = in.fullscreen ? 0 : chrome_room();  // the window buttons' row
   bool cramped = above ? y < top_room : y + ph_ > h_;
   if (cramped && panel_btn_ != B_NONE) {
     bool right_side = bx >= d.cx();
@@ -973,15 +1005,23 @@ Rect PlayView::panel_rect() const {
       return {x / (int)s_ * (int)s_, y / (int)s_ * (int)s_, pw_, ph_};
     }
   }
-  y = std::clamp(y, 0, std::max(0, h_ - ph_));
+  // nothing opens up under the window's buttons: they are drawn above every menu
+  int ymin = 0;
+  if (!in.fullscreen && h_ - ph_ >= chrome_room() && x + pw_ > chrome_rect().x) ymin = chrome_room();
+  y = std::clamp(y, ymin, std::max(ymin, h_ - ph_));
   x = x / s_ * s_; y = y / s_ * s_;
+  if (y < ymin) y += (int)s_;
   return {x, y, pw_, ph_};
 }
+
+// The row the window's own buttons take at the top (and a little air under them).
+int PlayView::chrome_room() const { return chrome_rect().b() + (int)std::lround(4 * s_); }
+Rect PlayView::chrome_rect() const { WindowChrome c = chrome; c.s = s_; return c.area(w_); }
 
 void PlayView::render_panel() {
   if(panel_==Panel::Queue) {queue_view_.draw(panel_base_,in.paused);panel_dirty_=false;++panel_gen_;return;}
   const Palette& p = P();
-  double s = panel_==Panel::CC?cc_scale_:s_;
+  double s = panel_==Panel::CC?cc_scale_:panel_==Panel::Keys?keys_s_:s_;
   Canvas& c = panel_base_;
   c.resize(pw_, ph_);
   draw_panel(c, 0, 0, pw_ / s, ph_ / s, s, kPanelProfile, p.bg, kPanelFill, p.edge, 0.95);
@@ -998,6 +1038,26 @@ void PlayView::render_panel() {
         if (ha > 0) c.cornered(r.r, s, p.hover, ha);
         text(c, r.label, r.r.x + 6 * s, ty, s, p.fg);
         c.bitmap(bmp("x-small"), r.r.r() - 12 * s, r.r.y + 6 * s, s, p.dim);
+        break;
+      case RK::Keys:
+        {
+          const Row::KeyHalf& kh = r.kh;
+          const int cx = r.r.x, cw = r.r.w;
+          if (kh.section) { text(c, kh.label, cx + 6 * s, r.r.b() - 12 * s, s, p.dim); break; }
+          // the keys, right-aligned: small filled caps, the key's name in them
+          int x = cx + cw - 4 * s;
+          const int kh_ = 11 * s, ky = r.r.y + (r.r.h - kh_) / 2;
+          for (int j = (int)kh.caps.size() - 1; j >= 0; --j) {
+            const std::string& cap = kh.caps[j];
+            int kw = key_cap_w(cap) * s;
+            x -= kw;
+            c.cornered({x, ky, kw, kh_}, s, p.press, 1.0);
+            text(c, cap, x + (kw - text_w(cap, s)) / 2 / s * s, ky, s, p.fg);
+            x -= 2 * s;
+          }
+          std::string label = fit_middle(kh.label, std::max(0, (int)(x - cx - 12 * s)), s);
+          text(c, label, cx + 6 * s, ty, s, mix(p.dim, p.fg, 0.7));
+        }
         break;
       case RK::Info: {
         int label_width = r.checked || r.right.empty() ? 0 : info_label_w_ * s;
@@ -1032,9 +1092,16 @@ void PlayView::render_panel() {
       case RK::Profile: {
         if (ha > 0) c.cornered(r.r, s, p.hover, ha);
         Rgb ink = mix(r.checked ? p.fg : p.dim, p.pixel, ha);
-        const int tw = text_w(r.label, s), x = (pw_ - tw) / 2;
+        // a key beside the words (the shortcut sheet's link and its "?"): a small cap, as in the sheet
+        const int capw = r.right.empty() ? 0 : key_cap_w(r.right) * s;
+        const int tw = text_w(r.label, s), x = (pw_ - tw - (capw ? capw + 5 * s : 0)) / 2 / s * s;
         text(c, r.label, x, ty, s, ink);
         if (hot) c.fill(x, ty + 10 * s, tw, s, p.dim);
+        if (capw) {
+          int kx = x + tw + 5 * s, ky = r.r.y + (r.r.h - 11 * s) / 2;
+          c.cornered({kx, ky, capw, 11 * s}, s, p.press, 1.0);
+          text(c, r.right, kx + (capw - text_w(r.right, s)) / 2 / s * s, ky, s, ink);
+        }
         break;
       }
       case RK::Contacts: {
@@ -1412,6 +1479,7 @@ void PlayView::panel_adjust(int row, int dir, double now) {
     case R_CONTROLS_FREE: act(PA::ControlsFree, dir > 0 ? 1 : 0); break;
     case R_UISCALE: act(PA::UiScale, next_ui_size(in.ui_scale, dir)); break;
     case R_MUSIC_LOOK: if ((dir > 0 ? 1 : 0) != in.music_look) act(PA::MusicLook, dir > 0 ? 1 : 0); break;
+    case R_MUSIC_COLOR: if ((dir > 0) != in.music_mono) { act(PA::MusicMono, dir > 0 ? 1 : 0); in.music_mono = dir > 0; } break;
     case R_SPEED_BAR: set_speed(in.speed + 0.05 * dir); break;
     case R_SPEED_CHIPS: {
       int i = r.seg;
@@ -1508,6 +1576,7 @@ void PlayView::panel_click(int row, int part, int x, double now) {
     case R_FILE_INFO: act(PA::FileInfo); open_panel(Panel::FileInfo, B_NONE, now); break;
     case R_DISMISS: close_panel(); break;
     case R_LICENSES: act(PA::OpenLicenses); break;
+    case R_KEYS: open_panel(Panel::Keys, panel_btn_, now); break;
     case R_UPDATE: act(PA::Update); break;
     case R_AUDIO_ROW: open_panel(Panel::Audio, panel_btn_, now); break;
     case R_SPEED_OPT: act(PA::Speed, r.opt); in.speed = r.opt; layout_dock(); dock_dirty_ = true; close_panel(); break;
@@ -1520,6 +1589,7 @@ void PlayView::panel_click(int row, int part, int x, double now) {
     case R_CONTROLS_FREE: if (part >= 0) act(PA::ControlsFree, part == 1 ? 1 : 0); break;
     case R_UISCALE: if (part >= 0) act(PA::UiScale, ui_size_choice(part)); break;
     case R_MUSIC_LOOK: if (part >= 0 && part != in.music_look) act(PA::MusicLook, part); break;
+    case R_MUSIC_COLOR: if (part >= 0 && (part == 1) != in.music_mono) { act(PA::MusicMono, part); in.music_mono = part == 1; } break;
     case R_FRAME: act(PA::SaveFrame, 0); close_panel(); break;
     case R_QUEUE: activity(now); open_panel(Panel::Queue,B_QUEUE,now); break;
     case R_OPEN: act(PA::OpenFile); close_panel(); break;
@@ -2006,6 +2076,10 @@ void PlayView::compose(double now) {
                            : hover_ == B_FS ? (in.fullscreen ? str::tip_exit_fullscreen : str::tip_fullscreen)
                            : hover_ == B_VOL ? (in.muted ? str::tip_unmute : str::tip_mute)
                            : names[hover_]);
+      // its key, a shade dimmer after the name (no box: a hint, not another control)
+      std::string hint = volbar ? "" : hover_ == B_PLAY ? tr(str::keys_space) : hover_ == B_VOL ? "m" : hover_ == B_CC ? "c"
+                       : hover_ == B_QUEUE ? "q" : hover_ == B_LOOP ? "l" : hover_ == B_FS ? "f"
+                       : hover_ == B_NEXT ? "n" : hover_ == B_PREV ? "p" : "";
       double k = ease_out((still - tok::tip_delay) / tok::tip_in);
       Rect d = dock_rect(), br;
       for (auto& hb : hots_) if (hb.id == (volbar ? B_VOLBAR : hover_)) br = hb.r;
@@ -2013,17 +2087,19 @@ void PlayView::compose(double now) {
         int bw = br.w - 4 * s, fw = (int)std::lround(bw * std::clamp((in.muted ? 0 : in.volume) / kVolMax, 0.0, 1.0) / s) * s;
         br = {br.x + 2 * s + fw - s, br.y, s, br.h};
       }
-      int W = text_w(label, s) + 10 * s, H = 16 * s;
+      const int hint_gap = 7 * s;
+      int W = text_w(label, s) + 10 * s + (hint.empty() ? 0 : hint_gap + text_w(hint, s)), H = 16 * s;
       int nx = std::clamp(d.x + br.cx() - W / 2, 0, std::max(0, w_ - W)) / s * s;
       bool top = d.y + d.h / 2 < h_ / 2;
       int ny = top ? d.b() + 3 * s : d.y - H - 3 * s;
       ny += (int)std::lround((1 - k) * 2 * s) * (top ? -1 : 1);  // slides 2 px of art into place
-      std::string sig = label + "|" + std::to_string((int)(k * 20));
+      std::string sig = label + "|" + hint + "|" + std::to_string((int)(k * 20));
       if (sig != tip_text_ || nx != TP.x || ny != TP.y) {
         tip_text_ = sig;
         TP.c.resize(W, H);
         draw_panel(TP.c, 0, 0, W / s, H / s, s, {1}, p.tip_bg, 0.95, p.edge, 1.0);
         text(TP.c, label, 5 * s, 2 * s, s, p.fg);
+        if (!hint.empty()) text(TP.c, hint, 5 * s + text_w(label, s) + hint_gap, 2 * s, s, mix(p.faint, p.dim, 0.6));
         TP.c.scale_alpha(k);
         TP.x = nx; TP.y = ny;
         TP.visible = true;
@@ -2204,6 +2280,7 @@ Rect PlayView::scene_list_rect() const {
   int w = std::min((int)std::lround(S.text_w * V.f + 20 * qs), (int)std::lround(340 * qs));
   w = std::min(w, w_ - x - (int)std::lround(8 * qs));
   int top = cr.y + music_base_.h + (int)std::lround(12 * s_);
+  if (!in.fullscreen && x + w > chrome_rect().x) top = std::max(top, chrome_room());
   int bottom = cr.b();
   Rect d = dock_rect();
   if (vis_.v > 0 && d.y < bottom + (int)std::lround(8 * s_) && d.r() > x && d.x < x + w) bottom = d.y - (int)std::lround(8 * s_);
@@ -2279,6 +2356,7 @@ void PlayView::changed(double /*now*/) {
                      std::to_string((int)in.kind) + (in.style == in.default_style ? "d" : "") +
                      (in.controls_free ? "F" : "B") + (in.ambient ? "A" : "") + (in.audio_only ? "a" : "v") + std::to_string(in.ui_scale) + speed_label(in.speed);
     ps+="|tracks:"+std::to_string(in.tracks_revision);
+    ps += "|look:" + std::to_string(in.music_look) + (in.music_mono ? "m" : "c");  // the picture menu's choices
     if (panel_ == Panel::FileInfo) ps += "|info:" + std::to_string(in.file_info_revision);
     if(panel_==Panel::Queue)ps+="|q:"+std::to_string(in.queue_revision)+(in.paused?"p":"r");
     ps += "|up:" + in.update_label + (in.update_ready ? "!" : "");
@@ -2492,6 +2570,13 @@ double PlayView::wanted_subtitle_lift() const {
 }
 
 bool PlayView::tick(double now, double dt) {
+  // another interface language: every cached picture of words is drawn again at once (the
+  // song's captions and "N tracks", up next, menus, names of buttons), not when next touched
+  if (uint32_t rev = i18n::revision(); rev != lang_rev_) {
+    lang_rev_ = rev;
+    music_key_.clear(); next_key_.clear(); panel_sig_.clear(); tip_text_.clear(); chrome_sig_.clear(); back_sig_.clear();
+    dock_dirty_ = panel_dirty_ = toast_dirty_ = true;
+  }
   bool moving = viewport_vis_.step(dt);
   if (!in.cover_scene && cov_hot_) pointer_left();
   moving |= cov_rx_.step(dt);
@@ -3089,6 +3174,120 @@ void PlayView::open_panel_for_preview(int which, double now) {
   open_panel(pn, btn, now);
 }
 
+// ── keyboard shortcuts ─────────────────────────────────────────────
+// The sheet that ? opens (and About's link): every key Cue answers to, in four groups. Two
+// columns when the window is wide enough, one otherwise; rows close up in a short window. Keys
+// are small filled caps on the right of each entry, so the eye runs down a column of keys.
+namespace {
+struct KeyEntry { str::Id label; std::vector<const char*> caps; };
+struct KeyGroup { str::Id title; std::vector<KeyEntry> entries; };
+// "@ctrl" and friends are the keys' own names in the interface language (strg, maj, espace...)
+const std::vector<KeyGroup>& key_groups() {
+  static const std::vector<KeyGroup> g = {
+      {str::keys_playback, {{str::keys_play_pause, {"@space"}},
+                            {str::keys_seek, {"\xe2\x86\x90", "\xe2\x86\x92"}},
+                            {str::keys_seek_long, {"@shift", "\xe2\x86\x90", "\xe2\x86\x92"}},
+                            {str::keys_volume, {"\xe2\x86\x91", "\xe2\x86\x93"}},
+                            {str::keys_mute, {"m"}},
+                            {str::keys_speed, {"[", "]"}},
+                            {str::keys_speed_reset, {"\\"}},
+                            {str::keys_repeat, {"l"}}}},
+      {str::keys_subtitles, {{str::keys_sub_menu, {"c"}}, {str::keys_sub_toggle, {"s"}}, {str::keys_sub_delay, {"z", "x"}}}},
+      {str::keys_files, {{str::keys_prev_next, {"p", "n"}},
+                         {str::keys_up_next, {"q"}},
+                         {str::keys_open, {"@ctrl", "o"}},
+                         {str::keys_open_folder, {"@ctrl", "@shift", "o"}},
+                         {str::keys_paste, {"@ctrl", "v"}}}},
+      {str::keys_window, {{str::keys_fullscreen, {"f"}},
+                          {str::keys_back, {"@esc"}},
+                          {str::keys_pin, {"@ctrl", "t"}},
+                          {str::keys_ui_size, {"@ctrl", "+", "-"}},
+                          {str::keys_these, {"?"}}}},
+  };
+  return g;
+}
+std::string key_name(const char* cap) {
+  std::string c = cap;
+  if (c == "@ctrl") return tr(str::keys_ctrl);
+  if (c == "@shift") return tr(str::keys_shift);
+  if (c == "@esc") return tr(str::keys_esc);
+  if (c == "@space") return tr(str::keys_space);
+  return c;
+}
+}  // namespace
+
+int PlayView::key_cap_w(const std::string& cap) { return std::max(11, text_w(cap, 1) + 6); }
+
+void PlayView::build_keys() {
+  auto& g = key_groups();
+  using Half = Row::KeyHalf;
+  auto lines = [&](size_t from, size_t to, bool titles = true) {
+    std::vector<Half> out;
+    for (size_t i = from; i < to; ++i) {
+      if (titles) out.push_back({tr(g[i].title), {}, true});
+      for (auto& e : g[i].entries) {
+        Half h{tr(e.label), {}, false};
+        for (auto* c : e.caps) h.caps.push_back(key_name(c));
+        out.push_back(h);
+      }
+    }
+    return out;
+  };
+  // a column is as wide as its longest entry plus its widest keys
+  auto width = [&](const std::vector<Half>& col) {
+    int lw = 0, kw = 0;
+    for (auto& h : col) {
+      if (h.section) { lw = std::max(lw, text_w(h.label, 1)); continue; }
+      int k = 0;
+      for (auto& c : h.caps) k += key_cap_w(c) + 2;
+      lw = std::max(lw, text_w(h.label, 1));
+      kw = std::max(kw, k);
+    }
+    return 6 + lw + 12 + kw + 4;
+  };
+  auto R = [&](RK k, RowId id, std::string label = "") { Row r; r.k = k; r.id = id; r.label = std::move(label); rows_.push_back(r); return &rows_.back(); };
+  auto a = lines(0, 2), b = lines(2, g.size()), all = lines(0, g.size());
+  int two = std::max(width(a), width(b)), one = width(all);
+  // the whole sheet, never cut: two columns where the width allows, rows closing up, then a
+  // smaller scale in half steps (as up next does in a small window); clear of the window's buttons
+  auto tall = [&](const std::vector<Half>& col, bool compact) {
+    int h = 0;
+    for (auto& x : col) h += compact ? (x.section ? 13 : 11) : (x.section ? 17 : 13);
+    return h;
+  };
+  const int room_h = h_ - (in.fullscreen ? 8 * (int)s_ : chrome_room()) - 8 * (int)s_;
+  bool done = false;
+  for (double sc = s_; sc >= 1 && !done; sc -= 0.5) {
+    for (int cols : {2, 1}) {
+      int colw = cols == 2 ? two : one, W = cols * colw + (cols - 1) * 10 + 4;
+      if (W * sc > w_ - 8 * sc) continue;
+      for (bool compact : {false, true}) {
+        int H = 8 + 18 + (cols == 2 ? std::max(tall(a, compact), tall(b, compact)) : tall(all, compact));
+        if (H * sc <= room_h) {
+          keys_s_ = sc; keys_cols_ = cols; keys_col_w_ = colw; keys_compact_ = compact; done = true;
+          break;
+        }
+      }
+      if (done) break;
+    }
+  }
+  if (!done) {
+    // the smallest window at the smallest size: two narrow columns (long names shortened, every
+    // key kept), and without the groups' names if even that is too tall
+    keys_s_ = 1; keys_cols_ = 2; keys_compact_ = true;
+    keys_col_w_ = std::max(60, std::min(two, (w_ - 8 - 10 - 4) / 2));
+    if (8 + 18 + std::max(tall(a, true), tall(b, true)) > room_h) { a = lines(0, 2, false); b = lines(2, g.size(), false); }
+  }
+  R(RK::CloseHeader, R_DISMISS, tr(str::keys_title));
+  // each column flows on its own (layout_rows starts the second one at the top again)
+  if (keys_cols_ == 2) {
+    for (auto& h : a) { Row* r = R(RK::Keys, R_NONE); r->kh = h; r->kcol = 0; }
+    for (auto& h : b) { Row* r = R(RK::Keys, R_NONE); r->kh = h; r->kcol = 1; }
+  } else {
+    for (auto& h : all) { Row* r = R(RK::Keys, R_NONE); r->kh = h; }
+  }
+}
+
 void PlayView::key(const std::string& k, bool shift, bool ctrl, double now) {
   if (viewport_transition_ && k=="esc") return; // never close media during a pending fullscreen change
   pending_click_ = P_NONE;
@@ -3101,8 +3300,14 @@ void PlayView::key(const std::string& k, bool shift, bool ctrl, double now) {
     queue_event(queue_view_.key(k,shift,ctrl),now);panel_dirty_=true;
     if(k=="esc"||k=="q"||k=="tab"||k=="up"||k=="down"||k=="left"||k=="right"||k=="home"||k=="end"||k=="pageup"||k=="pagedown"||k=="enter"||k=="delete"||(ctrl&&k=="o"))return;
   }
+  if (k == "?") {  // the shortcut sheet, from anywhere in playback; ? again closes it
+    activity(now);
+    if (panel_ == Panel::Keys) close_panel(); else open_panel(Panel::Keys, B_NONE, now);
+    return;
+  }
   if (k == "esc") {
-    if (panel_ == Panel::About || panel_ == Panel::Language) open_panel(Panel::More, B_MORE, now);
+    if (panel_ == Panel::Keys && panel_btn_ == B_MORE) open_panel(Panel::About, B_MORE, now);
+    else if (panel_ == Panel::About || panel_ == Panel::Language) open_panel(Panel::More, B_MORE, now);
     else if (panel_ == Panel::Style) open_panel(Panel::CC, panel_btn_, now);
     else if (panel_ == Panel::AudioMix) open_panel(Panel::Audio, panel_btn_, now);
     else if (panel_ == Panel::Speed && panel_btn_ == B_MORE) open_panel(Panel::More, panel_btn_, now);

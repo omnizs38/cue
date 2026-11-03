@@ -36,6 +36,7 @@ struct Track {
   std::string lang, title, codec;
   bool selected = false, external = false, forced = false, is_default = false;
   bool albumart = false;
+  int demux_w = 0, demux_h = 0;  // a picture's own size, when the file says
   bool hearing_impaired = false;
 };
 

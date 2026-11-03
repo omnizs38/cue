@@ -1,6 +1,6 @@
-# Validation · Cue 1.2.1
+# Validation · Cue 1.2.2
 
-Validation date: 2026-11-02. Environment: Linux x86_64, GCC, MinGW-w64 GCC 13
+Validation date: 2026-11-03. Environment: Linux x86_64, GCC, MinGW-w64 GCC 13
 cross-compiler and Chromium Headless Shell 134 through Playwright 1.51.1.
 The engine DLL is unchanged (SHA-256
 `26fa28434e30aa319a8ab39fba76dbc4a84757b89349c1fc69b5e55ea6c02bca`).
@@ -307,6 +307,25 @@ Run these on Windows with the release build:
    in a very wide one the scene fades softly into black at its sides, never over the cover or
    wings; a long title ends with "..." at the window's edge; when the interface changes size on
    letting go, the cover glides to its place; a film still letterboxes in black.
+55. **Maximized stays maximized.** Maximize Cue on a song of an album, press next and previous,
+   open a film from the home, go back home. Expected: the window stays maximized every time;
+   restoring it gives a window shaped for the file playing.
+56. **Up next in a small window.** Make the window small (about 500 x 320) and open up next,
+   with a film and with a song. Expected: the list never reaches the pin, minimize, maximize
+   and close buttons.
+57. **Black and white.** Right-click a song with a colourful cover, choose black and white,
+   then colour. Expected: the spectrum and the light lose their colour (the cover keeps it, also
+   when it tilts under the pointer) and get it back in a moment, without the song stopping; the next song opens in the chosen one; a film stays in colour.
+58. **Shortcuts.** Press ? while something plays, at a few window sizes and languages, then ?
+   again; open it from About and press Esc. Expected: the whole sheet, nothing cut, clear of
+   the window's buttons; ? closes it; Esc from About's link goes back to About. Click the
+   picture, then press l, n and Ctrl+T: they work. Pointing at a button shows its key, dimmer.
+59. **Cover in black bars.** Play a song whose cover is a video frame with black bars above and
+   below. Expected: the cover is the picture alone, square, and its light has its colours.
+60. **A square window.** Play a 1:1 video in a square window. Expected: the control bar about
+   two thirds of the width; a 16:9 window of the same width keeps its usual size.
+61. **Language, live.** With a song playing and its list (N tracks) showing, switch the language
+   in ··· → language. Expected: "N tracks" and the home's recent list change at once.
 
 ## Native release checks not covered by portable tests
 

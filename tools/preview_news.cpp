@@ -7,6 +7,7 @@
 
 #include "../src/core/i18n.h"
 #include "../src/ui/news_view.h"
+#include "../src/core/version.h"
 
 static void save(const Canvas& c, const std::string& name) {
   std::string raw = "/tmp/preview_news.rgba";
@@ -36,7 +37,7 @@ int main(int argc, char** argv) {
       {1280, 720, 2, "news-1280"}, {1920, 1080, 2, "news-1920"}, {800, 520, 2, "news-small"}, {560, 640, 1, "news-narrow"}};
   for (auto& z : sizes) {
     NewsView v;
-    v.version = "1.1";
+    v.version = CUE_NEWS_VERSION;
     v.set_size(z.w, z.h, z.s);
     Canvas c;
     double now = 100;

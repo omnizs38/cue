@@ -11,33 +11,20 @@ namespace {
 struct Item { str::Id title, line; };
 constexpr int kItemCount = 3;
 const Item kItems[kItemCount] = {
-    {str::news_remote_title, str::news_remote_line},
-    {str::news_audio_title, str::news_audio_line},
+    {str::news_mono_title, str::news_mono_line},
+    {str::news_keys_title, str::news_keys_line},
     {str::news_fixes_title, str::news_fixes_line},
 };
 constexpr int kCols = 18, kRows = 14;  // icon cells, 1.5 art px each (like the welcome's)
 inline int icon_cell(double s) { return std::max(1, (int)std::lround(1.5 * s)); }
-// '#' drawing; '*' a sparkle that blinks. Icon 0 (the queue) is drawn entirely in code.
+// '#' drawing; '*' a sparkle that blinks. Icons 0 (black and white: a cover and its wings) and 1 (a key) are drawn in code.
 const char* kIcons[kItemCount][kRows] = {
     {"..................", "..................", "..................", "..................", "..................",
      "..................", "..................", "..................", "..................", "..................",
      "..................", "..................", "..................", ".................."},
-    {  // a speech bubble; the letter inside changes language
-        "..##############..",
-        ".#..............#.",
-        "#................#",
-        "#................#",
-        "#................#",
-        "#................#",
-        "#................#",
-        "#................#",
-        "#................#",
-        ".#..............#.",
-        "..###..#########..",
-        "....#.#...........",
-        "....##............",
-        "..................",
-    },
+    {"..................", "..................", "..................", "..................", "..................",
+     "..................", "..................", "..................", "..................", "..................",
+     "..................", "..................", "..................", ".................."},
     {  // a gear, and a sparkle: things that work better
         "........##......*.",
         ".....#.####.#..***",
@@ -201,40 +188,40 @@ void NewsView::draw_icon(Canvas& c, int which, int x, int y, Rgb ink, double a, 
       c.fill(x + xx * ic, y + yy * ic, ic, ic, ink, a * ca);
     }
   if (which == 0) {
-    // up next: four rows (a thumbnail and a title bar) climbing one step at a time; the top one
-    // is playing (bright, with a marker), a new row arrives at the bottom. Positions move in
-    // whole cells, like the pixel interface: a pose, a short rest, the next pose.
-    double cycle = reduce_motion() ? 0.0 : std::fmod(std::max(0.0, now), 1.8) / 1.8;
-    double step = cycle < 0.72 ? 0.0 : ease_out((cycle - 0.72) / 0.28);  // rest, then move
-    static const int bars[5] = {11, 8, 12, 7, 10};
-    int turn = reduce_motion() ? 0 : (int)(std::max(0.0, now) / 1.8);
-    for (int i = 0; i < 4; ++i) {
-      int row = (int)std::lround((1 + 4 * i - 4 * step));  // in cells
-      if (row < -1 || row > kRows - 2) continue;
-      double ra = a;
-      if (row < 1) ra *= clamp01(row + 1.0) * 0.5;               // leaving at the top
-      if (i == 3) ra *= step;                                      // arriving at the bottom
-      if (ra <= 0) continue;
-      bool playing = (i == 0 && step < 0.5) || (i == 1 && step >= 0.5);
-      Rgb col = playing ? p.pixel : ink;
-      double ca = playing ? 1.0 : 0.55;
-      int ry = y + row * ic;
-      if (playing) c.fill(x, ry, ic, 3 * ic, col, ra);              // the now-playing bar
-      c.fill(x + 2 * ic, ry, 4 * ic, 3 * ic, col, ra * ca);        // thumbnail
-      int len = bars[(i + turn) % 5];
-      c.fill(x + 7 * ic, ry + ic / 2, std::min(len, 11) * ic, ic, col, ra * ca);
-      c.fill(x + 7 * ic, ry + 2 * ic, (len / 2) * ic, ic, col, ra * ca * 0.6);
+    // black and white: a little cover (a sky in bands, a sun) that keeps its colours, between two
+    // spectrum wings whose colour drains away row by row and comes back
+    static const Rgb band[4] = {{255, 150, 90}, {236, 96, 128}, {132, 88, 210}, {58, 150, 220}};
+    auto grey = [](Rgb c) { auto l = (uint8_t)std::lround(c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722); return Rgb{l, l, l}; };
+    for (int yy = 3; yy < 11; ++yy)
+      for (int xx = 5; xx < 13; ++xx) {
+        bool sun = (xx - 10) * (xx - 10) + (yy - 5) * (yy - 5) <= 2;
+        c.fill(x + xx * ic, y + yy * ic, ic, ic, sun ? Rgb{255, 236, 170} : band[std::min(3, (yy - 3) / 2)], a);
+      }
+    double cyc = reduce_motion() ? 0.5 : std::fmod(std::max(0.0, now), 4.0) / 4.0;
+    double sweep = cyc < 0.5 ? ease_out(clamp01(cyc / 0.35)) : 1 - ease_out(clamp01((cyc - 0.5) / 0.35));
+    int drained = (int)std::lround(sweep * 12);  // rows from the top that have lost their colour
+    static const int lens[12] = {1, 2, 2, 3, 4, 4, 4, 3, 3, 2, 1, 1};  // each row's bar, out from the cover
+    for (int yy = 1; yy < 13; ++yy) {
+      Rgb col = band[std::min(3, (yy - 1) / 3)];
+      if (yy - 1 < drained) col = grey(col);
+      for (int k = 0; k < lens[yy - 1]; ++k) {
+        c.fill(x + (3 - k) * ic, y + yy * ic, ic, ic, col, a);   // the left wing grows to the left
+        c.fill(x + (14 + k) * ic, y + yy * ic, ic, ic, col, a);  // the right one to the right
+      }
     }
   } else if (which == 1) {
-    // the letter inside the bubble changes language: Latin, Cyrillic, kana, German
-    static const char* letters[4] = {"A", "\xd0\xaf", "\xe3\x81\x82", "\xc3\x9c"};
-    double t = reduce_motion() ? 0.0 : std::max(0.0, now) / 1.1;
-    int k = (int)t % 4;
-    double in = reduce_motion() ? 1.0 : ease_out(clamp01((t - std::floor(t)) / 0.22));
-    const char* g = letters[k];
-    int gw = text_w(g, s), gx = x + 9 * ic - gw / 2;
-    int gy = y + (int)std::lround(5.5 * ic - 6 * s) + (int)std::lround((1 - in) * 2 * s);
-    text(c, g, gx, gy, s, p.pixel, a * in);
+    // a key with a question mark on it, pressed now and then (it springs back)
+    double t = reduce_motion() ? 0.0 : std::fmod(std::max(0.0, now), 1.7);
+    int down = t > 1.25 && t < 1.43 ? 1 : 0;
+    int kx = x + 3 * ic, ky = y + (1 + down) * ic, kw = 12 * ic, kh = 10 * ic;
+    c.fill(kx + ic, ky, kw - 2 * ic, ic, ink, a);                // the cap's outline, corners cut
+    c.fill(kx + ic, ky + kh - ic, kw - 2 * ic, ic, ink, a);
+    c.fill(kx, ky + ic, ic, kh - 2 * ic, ink, a);
+    c.fill(kx + kw - ic, ky + ic, ic, kh - 2 * ic, ink, a);
+    if (!down) c.fill(kx + ic, ky + kh, kw - 2 * ic, ic, ink, a * 0.35);  // its depth, gone when pressed
+    const char* q = "?";
+    int gw = text_w(q, s);
+    text(c, q, kx + (kw - gw) / 2, ky + (kh - (int)std::lround(12 * s)) / 2 + (int)std::lround(0.5 * s), s, p.pixel, a);
   }
 }
 
