@@ -348,6 +348,8 @@
   "lic.thanks": "謝辞",
   "music.cover": "ジャケット + スペクトラム",
   "music.spectrum": "スペクトラムのみ",
+  "music.still": "ジャケットのみ",
+  "music.tilt": "ジャケットを傾ける",
   "music.color": "カラー",
   "music.mono": "白黒",
   "keys.title": "キーボードショートカット",

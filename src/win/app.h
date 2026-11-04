@@ -109,6 +109,7 @@ class App {
   double last_tick_ = 0, home_paint_at_ = -1;
   FrameCadence animation_cadence_;
   VsyncPacer pacer_;              // display-locked ticks (SetTimer only as a fallback)
+  double click_activated_t_ = 0;  // when a mouse click last activated the window (0: not by a click)
   double play_interval_ = 1.0 / 60;  // overlay uploads: a divisor of the refresh rate, at most ~90 Hz
   void refresh_display_rate();
   void arm_animation_timer();
@@ -169,6 +170,13 @@ class App {
   bool covered() const;
   void set_hidden(bool h);
   bool hidden_now() const { return hidden_ || IsIconic(hwnd_); }
+  void update_music_idle();  // a film under a full-screen window: frames timed by the sound
+  bool poll_slow_ = false;    // minimized: the poll at 4 Hz
+  bool film_idle_ = false;    // a film under a full-screen window: video-sync=audio
+  // a song opened again (a new look): its sound fades out and back in through the engine's own
+  // gain (volume-gain, dB), never the person's volume, so the reopen is a breath, not a cut
+  double switch_gain_ = 1;
+  void set_switch_gain(double g);
   void reopen_music();
   void reopen_song();           // the same song opened again at the same moment (behind pixels)
   bool cover_graph_live() const { return audio_only_ && waveform_active_ && cover_art_ && cover_vid_ > 0; }
@@ -278,8 +286,17 @@ class App {
   // music's light show: the engine's loudness for each audio frame (an astats filter on the
   // song's own filter chain), the cover's colours, and the motion they make
   MusicLight music_light_;
-  std::shared_ptr<CoverColorsJob> light_cover_job_;
-  std::shared_ptr<CoverTrimJob> cover_trim_job_;
+  std::shared_ptr<CoverJob> light_cover_job_;
+  double bg_ready_t_ = -1;  // when the cover's colours arrived (the room's light fades in from then)
+  bool bg_sent_ = false;
+  std::shared_ptr<CoverJob> cover_job_;
+  // The playing file's folder, listed on a worker (a network share or a sleeping disk can take
+  // seconds): up next and a song's album wait for it, the window never does.
+  struct FolderList { std::wstring dir; std::vector<std::wstring> names; std::atomic<bool> done{false}; };
+  std::shared_ptr<FolderList> folder_list_;
+  bool folder_wait_ = false;  // up next / the album asked before the folder was read
+  void list_folder(const std::wstring& dir);
+  bool folder_names(const std::wstring& dir, std::vector<std::string>& out);
   double mono_k_ = 0;         // music in black and white: 0 colour .. 1 grey, eased
   bool mono_sent_ = false;
   bool step_mono(double dt);
@@ -301,10 +318,10 @@ class App {
   MediaControls media_controls_;
   bool media_attached_ = false;
   std::string media_key_;        // the file and words last sent
-  std::shared_ptr<CoverColorsJob> media_cover_job_;
+  std::shared_ptr<CoverJob> media_cover_job_;
   std::shared_ptr<CardStillJob> media_still_job_;
   std::string media_title_, media_sub_;
-  double media_still_due_ = -1, media_still_read_ = -1;  // a film: when to take its still, when to read it
+  double media_still_due_ = -1;  // a film: when to take its still (in memory, see kReplyStill)
   int media_still_tries_ = 0;
   void media_sync();
   PlaybackWarmup background_warmup_;

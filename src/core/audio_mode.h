@@ -175,17 +175,13 @@ inline std::string audio_cover_tail(int64_t cover, const MusicScene& S = MusicSc
     std::snprintf(c, sizeof c, "crop=w=iw*%.4f:h=ih*%.4f:x=iw*%.4f:y=ih*%.4f,", S.crop_w, S.crop_h, S.crop_x, S.crop_y);
     v += c;
   }
-  // the light gathers around the cover: its centre, as a share of the picture
-  char cx[16], cy[16];
-  std::snprintf(cx, sizeof cx, "%.3f", (S.x + S.side / 2.0) / S.W);
-  std::snprintf(cy, sizeof cy, "%.3f", (S.y + S.side / 2.0) / S.H);
   return "[cue_wave]aresample=24000,volume=3,"
          "showfreqs=s=24x20:r=60:mode=bar:ascale=sqrt:fscale=log:win_size=4096:overlap=0.92:averaging=1:colors=white,"
          "trim=start_frame=2,format=gray,crop=24:19:0:0,pad=24:20:0:0:color=0x262626,"
-         "lagfun=decay=0.965,split=2[cue_bars][cue_pulse];"
+         "lagfun=decay=0.965,split=2[cue_bars][cue_beat];"
          // the wings' cells: bars turned sideways, mirrored so the bass sits level with the cover's middle
          "[cue_bars]transpose=clock,split=2[cue_lo][cue_hi0];[cue_hi0]vflip[cue_hi];[cue_hi][cue_lo]vstack[cue_cells];" +
-         v + "format=gbrp,split=3[cue_c1][cue_c2][cue_c3];"
+         v + "format=gbrp,split=2[cue_c1][cue_c2];"
          // the cover, sharp
          "[cue_c1]scale=" + n(S.side) + ":" + n(S.side) + ":force_original_aspect_ratio=increase:flags=" + (cover > 0 ? "lanczos" : "neighbor") + ","
          "crop=" + n(S.side) + ":" + n(S.side) + ",setsar=1[cue_art];"
@@ -206,13 +202,11 @@ inline std::string audio_cover_tail(int64_t cover, const MusicScene& S = MusicSc
          "drawgrid=w=11:h=11:t=2:c=black@0:replace=1[cue_grid];"
          "[cue_wing][cue_grid]blend=c0_mode=normal:c1_mode=normal:c2_mode=normal:c3_mode=multiply,"
          "split=2[cue_wr][cue_wl0];[cue_wl0]hflip[cue_wl];"
-         // the light: the cover's colours, blurred and dimmed, plus the music's energy in them
-         "[cue_c3]scale=32:18:flags=area,gblur=sigma=3,lutrgb=r=val*0.55:g=val*0.55:b=val*0.55,split=2[cue_g1][cue_g2];"
-         "[cue_g2]lutrgb=r=val*2:g=val*2:b=val*2[cue_gb];"
-         "[cue_pulse]scale=32:18:flags=area,gblur=sigma=2,format=gbrp[cue_p];"
-         "[cue_p][cue_gb]blend=all_mode=multiply[cue_pt];"
-         "[cue_pt][cue_g1]blend=all_mode=addition:all_opacity=0.6,vignette=angle=0.9:x0=w*" + std::string(cx) + ":y0=h*" + cy + ","
-         "format=yuv420p,scale=" + n(S.W) + ":" + n(S.H) + ":flags=fast_bilinear[cue_bg];"
+         // the room: black, led by the music (so it ends with the song) and made by padding a few
+         // pixels, not by scaling a picture to the full size 60 times a second. The soft light
+         // around the cover is drawn by the video shader, centred on the cover (blur_shader.h)
+         "[cue_beat]crop=2:2:0:0,format=yuv420p,lutyuv=y=16:u=128:v=128,"
+         "pad=" + n(S.W) + ":" + n(S.H) + ":0:0:black[cue_bg];"
          "[cue_bg][cue_wl]overlay=" + n(S.left_x()) + ":" + n(S.wing_y()) + ":format=yuv420[cue_o1];"
          "[cue_o1][cue_wr]overlay=" + n(S.right_x()) + ":" + n(S.wing_y()) + ":format=yuv420[cue_o2];"
          "[cue_o2][cue_art]overlay=" + n(S.x) + ":" + n(S.y) + ":format=yuv420,setsar=1[vo]";
@@ -243,8 +237,31 @@ inline std::string audio_spectrum_tail(const MusicScene& S = MusicScene{}) {
 
 // The visual for this file. look 0: the cover with its wings (the file's cover, or Cue's tile
 // when cover is 0); look 1: the spectrum alone.
+// The cover alone, for the lightest music: the same scene (the cover sharp where it always stands,
+// the words beside it) over the soft, still light the shader draws around it; no spectrum and no
+// light show. The picture changes only twice a second (it is led by the music, so it ends with
+// the song): the cover is drawn once and repeated.
+inline std::string audio_still_tail(int64_t cover, const MusicScene& S = MusicScene{}) {
+  auto n = [](int v) { return std::to_string(v); };
+  std::string v = cover > 0 ? "[vid" + n((int)cover) + "]" : audio_placeholder_cover();
+  if (cover > 0 && S.cropped()) {
+    char c[160];
+    std::snprintf(c, sizeof c, "crop=w=iw*%.4f:h=ih*%.4f:x=iw*%.4f:y=ih*%.4f,", S.crop_w, S.crop_h, S.crop_x, S.crop_y);
+    v += c;
+  }
+  // the room: black, two pictures a second led by the music (it ends with the song), padded from
+  // a few pixels; the soft still light around the cover is the video shader's
+  return "[cue_wave]aresample=8000,showwaves=s=2x2:r=2:mode=point,format=yuv420p,lutyuv=y=16:u=128:v=128,"
+         "pad=" + n(S.W) + ":" + n(S.H) + ":0:0:black[cue_base];" +
+         v + "format=gbrp,"
+         "scale=" + n(S.side) + ":" + n(S.side) + ":force_original_aspect_ratio=increase:flags=" + (cover > 0 ? "lanczos" : "neighbor") + ","
+         "crop=" + n(S.side) + ":" + n(S.side) + ",setsar=1[cue_art];"
+         "[cue_base][cue_art]overlay=" + n(S.x) + ":" + n(S.y) + ":format=yuv420,setsar=1[vo]";
+}
+
+// look: 0 cover and spectrum, 1 spectrum only, 2 cover only (the lightest)
 inline std::string audio_visual_tail(int64_t cover, const MusicScene& scene = MusicScene{}, int look = 0) {
-  return look == 1 ? audio_spectrum_tail(scene) : audio_cover_tail(cover, scene);
+  return look == 1 ? audio_spectrum_tail(scene) : look == 2 ? audio_still_tail(cover, scene) : audio_cover_tail(cover, scene);
 }
 
 inline std::string audio_waveform_graph(int64_t track, int64_t cover = 0, const MusicScene& scene = MusicScene{}, int look = 0) {

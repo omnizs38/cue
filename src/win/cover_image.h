@@ -16,31 +16,31 @@ bool decode_image(const std::string& data, std::vector<uint32_t>& px, int& w, in
 
 #include "../ui/atmosphere.h"
 
-// The cover's colours around its border (as a film frame's), read on a background thread for
-// music's light show. found is false for a song without a cover.
-struct CoverColorsJob {
-  std::atomic<bool> done{false};
-  bool found = false;
-  FrameColors colors;
-  std::string bytes;  // the cover as found (encoded), for Windows' media card
-};
-std::shared_ptr<CoverColorsJob> request_cover_colors(std::string path);
-
-// Where a song's cover sits inside flat black bars (a video's frame boxed into the picture), read
-// on a background thread as the song opens, for the engine's picture of it. x, y, w, h are shares
-// of the picture; full_w and full_h its own size, to check it is the picture the engine shows.
-struct CoverTrimJob {
+// Everything a song's cover gives the player, read once on a background thread as the song
+// opens (one read of the file, one decode, small): where the cover sits inside flat black bars
+// (a video's frame boxed into the picture; x, y, w, h are shares of the picture, full_w and
+// full_h its own size, to check it is the picture the engine shows), the colours around its
+// border for music's light, and the cover as found (encoded) for Windows' media card.
+// The last few songs are kept in memory (never on disk), so going back to one is instant.
+struct CoverJob {
   std::atomic<bool> done{false};
   bool found = false;  // a cover, bars or not
   double x = 0, y = 0, w = 1, h = 1;
   int full_w = 0, full_h = 0;
+  bool lit = false;    // the colours were read
+  FrameColors colors;
+  std::string bytes;
 };
-std::shared_ptr<CoverTrimJob> request_cover_trim(std::string path);
+std::shared_ptr<CoverJob> request_cover(const std::string& path);
 
-// A still the engine saved for Windows' media card (a film has no cover): read, checked that it
-// is not a black frame, and removed from disk. bytes stay empty for a dark or missing still.
+// A film's still for Windows' media card, from a small picture of the frame on screen (taken in
+// memory, never written to disk): checked that it is not a black frame, then encoded as a JPEG on
+// a worker. bytes stay empty for a dark frame.
 struct CardStillJob {
   std::atomic<bool> done{false};
   std::string bytes;
 };
-std::shared_ptr<CardStillJob> request_card_still(std::wstring file);
+std::shared_ptr<CardStillJob> request_card_still(std::vector<uint32_t> px, int w, int h);
+// The engine's raw screenshot (bgr0, `stride` bytes a row) reduced to at most max_w x max_h,
+// each pixel the average of a 2x2 sample. Quick enough for the UI thread at any film size.
+std::vector<uint32_t> shrink_bgr0(const uint8_t* data, int w, int h, int stride, int max_w, int max_h, int& out_w, int& out_h);

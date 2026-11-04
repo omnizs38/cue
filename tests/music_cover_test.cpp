@@ -33,7 +33,11 @@ int main(){
     const MusicScene S=MusicScene::wide();
     assert(S.left_x()>=0 && S.right_x()+S.wing_w<=S.W && S.wing_y()>=0 && S.wing_y()+S.wing_h<=S.H);
     assert(S.text_x>=S.right_x()+S.wing_w && S.text_x+S.text_w<=S.W);
-    assert(audio_waveform_graph(1,2,S).find("scale=1920:1080")!=std::string::npos);
+    // the room is black and padded around a few pixels, led by the music; nothing is scaled to the
+    // full size each picture (the soft light around the cover is the shader's)
+    { std::string g1=audio_waveform_graph(1,2,S);
+      assert(g1.find("pad=1920:1080:0:0:black[cue_bg]")!=std::string::npos && g1.find("scale=1920:1080")==std::string::npos);
+      assert(g1.find("[cue_beat]crop=2:2")!=std::string::npos && g1.find("vignette")==std::string::npos); }
     assert(music_frame_for(1280,720,1)==MusicFrame::Scene && music_frame_for(2560,1440,2)==MusicFrame::Scene);
     assert(music_frame_for(720,1000,1)==MusicFrame::Tall && music_frame_for(600,450,1)==MusicFrame::Cover);
     // the engine's zoom and pan put the cover exactly where the view says
@@ -68,6 +72,34 @@ int main(){
   // the choice is saved for all music
   auto file=std::filesystem::temp_directory_path()/"cue-music-look.json";
   Store st; st.music_look=1; assert(st.save(file)); Store back; assert(back.load(file)&&back.music_look==1);
+  { Store st2; st2.music_look=2; assert(st2.save(file)); Store b2; assert(b2.load(file)&&b2.music_look==2); }
+  { Store t0; assert(t0.cover_tilt); t0.cover_tilt=false; assert(t0.save(file)); Store t1; assert(t1.load(file)&&!t1.cover_tilt); }
+  {
+    // the cover's tilt is a choice in the picture's menu, on by default; off, the cover stays still
+    PlayView p;p.in.dur=200;p.in.audio_only=true;p.in.has_cover=true;p.in.cover_scene=true;p.in.cover_art=true;p.in.music_title="Song";
+    p.in.music_scene=MusicScene::wide();p.resize(1280,720,2);double t=1;p.reset(t);p.changed(t);settle(p,t,40);
+    Rect c=p.cover_screen_rect();assert(c.w>0);
+    p.right_click(c.cx(),c.cy(),t);settle(p,t);
+    int row=-1;for(int i=0;i<(int)p.rows_.size();++i)if(p.rows_[i].id==PlayView::R_COVER_TILT)row=i;
+    assert(row>=0&&p.rows_[row].checked);
+    p.take_actions();p.panel_click(row,-1,0,t);
+    bool off=false;for(auto& a:p.take_actions())off|=a.a==PA::CoverTilt&&a.v==0;assert(off&&!p.in.cover_tilt);
+    p.close_panel();settle(p,t);
+    p.mouse_move(c.x+4,c.y+4,t);settle(p,t,40);auto k=p.cover_tilt();
+    assert(std::abs(k.rx)<0.01&&std::abs(k.ry)<0.01);
+    // the spectrum alone has no cover to tilt: no such row
+    p.in.music_look=1;p.changed(t);p.right_click(c.cx(),c.cy(),t);settle(p,t);
+    for(auto& r:p.rows_)assert(r.id!=PlayView::R_COVER_TILT);
+  }
+  {
+    // the cover alone, the lightest look: no spectrum and no light show, two pictures a second led
+    // by the music (so it ends with the song), the cover and its still light drawn once
+    std::string g2=audio_waveform_graph(1,2,MusicScene::wide(),2);
+    assert(g2.find("[aid1]asplit=2[ao][cue_wave];")==0 && g2.find("[vid2]")!=std::string::npos && g2.find("[vo]")!=std::string::npos);
+    assert(g2.find("showfreqs")==std::string::npos && g2.find("lagfun")==std::string::npos && g2.find("drawgrid")==std::string::npos);
+    assert(g2.find("showwaves=s=2x2:r=2")!=std::string::npos && g2.find("r=60")==std::string::npos && g2.find("pad=1920:1080:0:0:black")!=std::string::npos);
+    assert(audio_waveform_graph(1,0,MusicScene::wide(),2).find("color=c=0x0e0e0e")!=std::string::npos);  // Cue's tile
+  }
   std::filesystem::remove(file); std::filesystem::remove(file.string()+".bak");
   for(double scale:{1.,2.,2.5})for(bool tall:{false,true}){
     PlayView p;p.in.dur=200;p.in.time=10;p.in.audio_only=true;p.in.has_cover=true;p.in.cover_scene=true;p.in.cover_art=true;p.in.music_title="Song";p.in.music_artist="Artist";
@@ -85,10 +117,10 @@ int main(){
     p.compose(t);auto& M=p.layers[PlayView::L_MUSIC];assert(M.visible&&M.x>=0&&M.x+M.c.w<=W);
     if(tall) assert(M.y>=c.b());
     else assert(M.x>=c.r()&&M.y>=c.y&&M.y+M.c.h<=c.b());
-    // the right-click menu offers both looks, with icons; choosing one asks for it
+    // the right-click menu offers the three looks, with icons; choosing one asks for it
     p.right_click(c.cx(),c.cy(),t);settle(p,t);assert(p.panel_open());
     int row=-1;for(int i=0;i<(int)p.rows_.size();++i)if(p.rows_[i].id==PlayView::R_MUSIC_LOOK)row=i;
-    assert(row>=0&&p.rows_[row].segs.size()==2&&p.rows_[row].seg_icons.size()==2&&p.rows_[row].seg==0);
+    assert(row>=0&&p.rows_[row].segs.size()==3&&p.rows_[row].seg_icons.size()==3&&p.rows_[row].seg==0);
     p.take_actions();p.panel_click(row,1,0,t);
     bool asked=false;for(auto& a2:p.take_actions())asked|=a2.a==PA::MusicLook&&a2.v==1;assert(asked);
     p.close_panel();
@@ -121,9 +153,9 @@ int main(){
     // music's bar rests like a film's once the pointer is still (a song with its scene)
     p.in.cover_scene=true;p.in.next_title.clear();p.changed(t);settle(p,t,60*3);assert(!p.dock_visible());
     p.mouse_move(200,200,t);p.mouse_move(260,260,t);settle(p,t,20);assert(p.dock_visible());
-    // the look control is two icons; the row names the look that is on
+    // the look control is three icons; the row names the look that is on
     p.right_click(640,300,t);settle(p,t);
-    for(auto& r:p.rows_)if(r.id==PlayView::R_MUSIC_LOOK)assert(r.icons_only&&r.parts.size()==2&&r.parts[0].w<=20*1+1);
+    for(auto& r:p.rows_)if(r.id==PlayView::R_MUSIC_LOOK)assert(r.icons_only&&r.parts.size()==3&&r.parts[0].w<=20*1+1);
     p.close_panel();settle(p,t);
     // a click on the music scene never pauses (it only wakes the controls); a double click is
     // still full screen
@@ -190,7 +222,7 @@ int main(){
     // a song without a cover wears Cue's tile in the cover look; the spectrum look stands in the
     // cover's place, so the words and the list sit beside it the same way
     std::string ph=audio_waveform_graph(1,0,MusicScene::wide(),0),sp=audio_waveform_graph(1,0,MusicScene::wide(),1);
-    assert(ph.find("[vid")==std::string::npos&&ph.find("drawbox")!=std::string::npos&&ph.find("scale=1920:1080")!=std::string::npos);
+    assert(ph.find("[vid")==std::string::npos&&ph.find("drawbox")!=std::string::npos&&ph.find("pad=1920:1080")!=std::string::npos);
     assert(sp.find("pad=1920:1080:282:297")!=std::string::npos&&sp.find("[vid")==std::string::npos);
     assert(audio_waveform_graph(1,2,MusicScene::wide(),1).find("[vid")==std::string::npos);  // the spectrum never waits on a cover
     // the spectrum look: no tilt, but the words beside it
@@ -225,7 +257,7 @@ int main(){
     std::string a=audio_waveform_graph(1,2,plain,0),b=audio_waveform_graph(1,2,boxed,0);
     assert(a.find("crop=w=iw*")==std::string::npos);
     auto at=b.find("[vid2]crop=w=iw*1.0000:h=ih*0.6600:x=iw*0.0000:y=ih*0.1700,");
-    assert(at!=std::string::npos&&b.find("format=gbrp,split=3",at)!=std::string::npos);
+    assert(at!=std::string::npos&&b.find("format=gbrp,split=2",at)!=std::string::npos);
     // Cue's own tile and the spectrum alone have nothing to cut
     assert(audio_waveform_graph(1,0,boxed,0).find("crop=w=iw*")==std::string::npos);
     assert(audio_waveform_graph(1,2,boxed,1).find("crop=w=iw*")==std::string::npos);

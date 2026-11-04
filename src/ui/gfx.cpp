@@ -43,6 +43,8 @@ const BitmapDef* bmp(std::string_view name) {
         {"dock-bg",9,5,".#######." "#########" "#.#.#.#.#" "#########" ".#######."},
         // music looks: the cover with its note, and the spectrum's bars
         {"look-cover",7,7,"#######" "#.....#" "#..##.#" "#..#..#" "#.##..#" "#.....#" "#######"},
+        // the cover between two small wings of the spectrum
+        {"look-both",13,7,"...#######..." ".#.#.....#.#." "##.#.....#.##" "##.#.....#.##" "##.#.....#.##" ".#.#.....#.#." "...#######..."},
         {"look-bars",9,6,"....#...." "....#...." "..#.#.#.." "..#.#.#.." "#.#.#.#.#" "#.#.#.#.#"},
         // in colour (a rainbow's arcs) or black and white (a disc half dark, half light)
         {"look-color",9,6,"..#####.." ".#.....#." "#..###..#" "#.#...#.#" "#.#...#.#" "#.#...#.#"},

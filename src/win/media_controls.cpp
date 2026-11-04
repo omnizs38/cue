@@ -190,6 +190,7 @@ struct MediaControls::Impl {
   ITimeline* timeline = nullptr;
   Token token{};
   bool active = false, playing = false, prev = false, next = false;
+  bool playback_valid = false;
   double last_pos = -1, last_dur = -1;
 };
 
@@ -239,6 +240,7 @@ void MediaControls::detach() {
 void MediaControls::set_active(bool active) {
   if (!d_->smtc || active == d_->active) return;
   d_->active = active;
+  d_->playback_valid = false;
   d_->smtc->put_IsEnabled(active ? 1 : 0);
   if (!active) {
     d_->smtc->put_PlaybackStatus(0);  // closed
@@ -248,9 +250,11 @@ void MediaControls::set_active(bool active) {
 }
 
 void MediaControls::set_playing(bool playing) {
-  if (!d_->smtc || !d_->active || playing == d_->playing) return;
-  d_->playing = playing;
-  d_->smtc->put_PlaybackStatus(playing ? 3 : 4);  // playing, paused
+  if (!d_->smtc || !d_->active || (d_->playback_valid && playing == d_->playing)) return;
+  if (SUCCEEDED(d_->smtc->put_PlaybackStatus(playing ? 3 : 4))) {  // playing, paused
+    d_->playing = playing;
+    d_->playback_valid = true;
+  }
 }
 
 void MediaControls::set_buttons(bool has_prev, bool has_next) {

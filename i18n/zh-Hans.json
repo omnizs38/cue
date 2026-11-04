@@ -349,6 +349,8 @@
   "lic.thanks": "致谢",
   "music.cover": "封面 + 频谱",
   "music.spectrum": "仅频谱",
+  "music.still": "仅封面",
+  "music.tilt": "倾斜封面",
   "music.color": "彩色",
   "music.mono": "黑白",
   "keys.title": "键盘快捷键",

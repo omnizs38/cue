@@ -116,6 +116,41 @@ struct PolishedMotion {
   }
 };
 
+// A move that answers at once and lands softly (a quadratic ease-out), for things that must
+// travel with something already moving, like the subtitle with the control bar. It keeps its
+// speed through a change of target (a reversal turns, it never jumps), and a long way is not
+// rushed: the time grows so the speed never passes max_speed (units a second).
+struct EaseOutMotion {
+  double x = 0, v = 0, target = 0, start = 0, slope = 2, elapsed = 0, duration = .2;
+  bool active = false;
+  void snap(double value) { x = target = start = value; v = 0; active = false; elapsed = 0; }
+  bool settled() const { return !active; }
+  void to(double value, double seconds, double max_speed) {
+    if (std::abs(value - target) < 1e-7) return;
+    const double d = value - x;
+    start = x; target = value; elapsed = 0; active = true;
+    duration = std::max({.001, seconds, std::abs(d) > 1e-9 ? 2 * std::abs(d) / std::max(1e-6, max_speed) : 0.0});
+    // the speed it already has, as a share of the way per duration: kept when it helps
+    // (at most 3, so it never overshoots); from rest, or turning back, it starts at 2
+    const double carried = std::abs(d) > 1e-9 ? v * duration / d : 0;
+    slope = carried < 0 ? carried : std::clamp(carried, 2.0, 3.0);
+    if (reduce_motion()) snap(target);
+  }
+  bool step(double dt) {
+    if (!active) return false;
+    if (reduce_motion()) { snap(target); return false; }
+    elapsed = std::min(duration, elapsed + std::max(0., dt));
+    const double k = elapsed / duration, k2 = k * k, k3 = k2 * k;
+    // cubic Hermite from (0, slope) to (1, 0): slope 2 is exactly 1 - (1 - k)^2
+    const double h = -2 * k3 + 3 * k2 + slope * (k3 - 2 * k2 + k);
+    const double dh = -6 * k2 + 6 * k + slope * (3 * k2 - 4 * k + 1);
+    x = start + (target - start) * h;
+    v = (target - start) * dh / duration;
+    if (elapsed >= duration - 1e-9) snap(target);
+    return active;
+  }
+};
+
 // Fade toward a 0/1 target with separate in/out durations. Consumers draw
 // `ease_out(v)`: entrances ease out, and exits now ease out too (see eased_fall).
 struct Fade {

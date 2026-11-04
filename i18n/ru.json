@@ -354,6 +354,8 @@
   "lic.thanks": "Благодарности",
   "music.cover": "обложка + спектр",
   "music.spectrum": "только спектр",
+  "music.still": "только обложка",
+  "music.tilt": "наклон обложки",
   "music.color": "цвет",
   "music.mono": "чёрно-белое",
   "keys.title": "сочетания клавиш",

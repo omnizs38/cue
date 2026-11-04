@@ -350,6 +350,8 @@
   "lic.thanks": "Danksagung",
   "music.cover": "Cover + Spektrum",
   "music.spectrum": "nur Spektrum",
+  "music.still": "nur Cover",
+  "music.tilt": "Cover neigen",
   "music.color": "Farbe",
   "music.mono": "Schwarzweiß",
   "keys.title": "Tastenkürzel",

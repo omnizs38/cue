@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.2.3 — 2026-11-03
+
+- Music is lighter to draw all the time: the room around the cover (its soft light) is no longer
+  a full-size picture the processor scales 60 times a second. The music's picture is the cover and
+  its wings on black, padded from a few pixels, and the soft light is drawn by the graphics card,
+  centred on the cover in the colours of its own border (the old light was the whole cover
+  blurred and stretched, so its bright parts glowed off to one side). About a fifth less work for
+  the processor with cover + spectrum.
+- A third music look, **cover only**, the lightest: the cover and its still light, no spectrum and
+  no light show, two pictures a second.
+- The cover's tilt under the pointer is a choice in the song's right-click menu (on by default).
+- Changing the look no longer cuts the sound: it breathes out with the picture and back in after
+  the song reopens, through the engine's own gain (the volume you set is never touched).
+- Minimizing and restoring Cue no longer shakes playback (music or film): nothing in the engine's
+  sound or picture is rebuilt any more when the window goes to the taskbar and back. Minimized,
+  Cue's own poll runs 4 times a second instead of 30.
+- A song always starts from its first sample (the engine no longer trims the start of the sound to
+  meet the picture's first frame, which the cover alone, at two pictures a second, could delay).
+- Portrait and square windows: the control bar stays big, the menus, the subtitle list and the
+  shortcut sheet take a size half way between it and the window's own, and up next is exactly as
+  wide as the bar in a portrait window.
+- A song opens faster: its cover is read once (one read of the file, one small decode) for the
+  picture's crop, the light's colours and Windows' media card, instead of three times, starting
+  the moment the song is chosen. The last few songs' covers are kept in memory, never on disk, so
+  going back to one is instant. The room's light fades in faster (0.3 s).
+- A click that brings an inactive Cue window forward only wakes it (the controls appear); it no
+  longer pauses. The next click pauses as always; a button on the control bar acts on that first
+  click, and a double click is still full screen.
+- The timeline's preview follows the pointer closely (it glided a little behind) and appears a
+  touch sooner.
+- The subtitle moves with the control bar: it starts rising or settling on the same frame the
+  bar appears or leaves, and lands with it (a long way takes a little longer, never a jump). A
+  new line that appears as the bar leaves is placed straight where it belongs, instead of
+  sliding down from above.
+- Up next, without a list of your own, offers only the next episode of the same series (by episode
+  number, or the same name with the next number). A film no longer offers whatever file sits next
+  to it in the folder (a song in Downloads, another film). Music still brings its folder's songs.
+- A film's place is written to disk at most once a minute while it plays, instead of every 10
+  seconds (pausing, closing, the end and Windows shutting down still save it at once).
+- Windows' media card shows a film's picture without writing anything to disk: the frame is taken
+  in memory (the engine no longer encodes a full-size JPEG into the temporary folder, which could
+  also nudge playback), shrunk at once and turned into the card's small picture on a worker.
+- The playing file's folder is read on a worker (one listing with the attributes Windows already
+  returns, not a look-up per file): a network share, a sleeping disk or a Downloads folder of
+  thousands of files never freezes the window or its animations; up next and a song's album
+  appear as soon as it is read.
+- The hand that moves the subtitle is about as tall as Windows' arrow (it was drawn the full size
+  of the cursor's box, about twice the arrow).
+- The installer (from omni38's pull request #13): an update is written to a staging folder beside
+  the installed files and swapped in by renaming, with rollback if anything fails, so an
+  interrupted update leaves the previous version whole; renames are retried for a moment when an
+  antivirus holds a fresh file; folders left by an interrupted update are removed without ever
+  following a link out of them; a damaged installer can no longer be mistaken for the
+  uninstaller. The same number of bytes is written as before.
+- Playing several audio tracks at once is remembered for the file again, and Windows' media card
+  shows the right play / pause state after it comes back (also omni38's).
+
 ## 1.2.2 — 2026-11-03
 
 - Music in black and white (issue #11): a second choice in the song's right-click menu, beside
