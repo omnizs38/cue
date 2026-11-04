@@ -36,6 +36,7 @@
 #include "../src/ui/anim.h"
 #include "lzma/LzmaDec.h"
 #include "payload.h"
+#include "file_transaction.h"
 #include "setup_ui.h"
 
 namespace fs = std::filesystem;
@@ -106,6 +107,23 @@ const wchar_t* kMediaExts[] = {L".mkv", L".mp4", L".m4v", L".mov", L".avi", L".w
                                L".aif", L".aiff", L".wma", L".mka"};
 
 // ── payload ─────────────────────────────────────────────────────────
+constexpr char kUninstallerMarker[] = "CUEUNINS";
+bool is_uninstaller(const std::wstring& exe) {
+  std::ifstream in(fs::path(exe), std::ios::binary | std::ios::ate);
+  if (!in || in.tellg() < (std::streamoff)8) return false;
+  in.seekg(-8, std::ios::end);
+  char marker[8]{};
+  return in.read(marker, sizeof marker) && std::equal(marker, marker + 8, kUninstallerMarker);
+}
+bool safe_relative(const fs::path& path) {
+  if (path.empty() || path.has_root_path()) return false;
+  for (const auto& part : path) {
+    auto s = part.wstring();
+    if (s.empty() || s == L"." || s == L".." || s.find(L':') != std::wstring::npos ||
+        s.find(L'\0') != std::wstring::npos || s.back() == L'.' || s.back() == L' ') return false;
+  }
+  return true;
+}
 struct Payload {
   bool ok = false;
   PayloadFooter footer{};
@@ -123,7 +141,8 @@ Payload read_footer(const std::wstring& exe) {
     DWORD got = 0;
     if (SetFilePointerEx(f, at, nullptr, FILE_BEGIN) && ReadFile(f, &p.footer, sizeof p.footer, &got, nullptr) &&
         got == sizeof p.footer && std::equal(kPayloadMagic, kPayloadMagic + 8, p.footer.magic) &&
-        p.footer.offset + p.footer.size + sizeof(PayloadFooter) == (uint64_t)size.QuadPart)
+        p.footer.offset <= (uint64_t)size.QuadPart - sizeof(PayloadFooter) &&
+        p.footer.size == (uint64_t)size.QuadPart - sizeof(PayloadFooter) - p.footer.offset)
       p.ok = true;
   }
   CloseHandle(f);
@@ -195,6 +214,21 @@ bool write_file(const std::wstring& path, const unsigned char* data, size_t n, D
   return false;
 }
 
+// Removes staging folders left behind by an interrupted update.
+void remove_stale_staging(const std::wstring& dir) {
+  std::error_code ec;
+  for (const auto& entry : fs::directory_iterator(fs::path(dir), ec)) {
+    if (ec) break;
+    std::error_code dec;
+    if (!entry.is_directory(dec)) continue;
+    std::wstring folded = entry.path().filename().wstring();
+    if (!folded.empty()) CharLowerBuffW(folded.data(), (DWORD)folded.size());
+    if (folded.rfind(L".cue-install-", 0) != 0) continue;
+    std::error_code rmec;
+    fs::remove_all(entry.path(), rmec);
+  }
+}
+
 std::vector<std::wstring> read_manifest(const std::wstring& dir) {
   std::vector<std::wstring> out;
   std::ifstream f(fs::path(dir) / L"install.txt", std::ios::binary);
@@ -259,6 +293,7 @@ void install(Job& job) {
   HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   auto done = [&] { if (SUCCEEDED(com)) CoUninitialize(); };
   job.say(tr(str::setup_preparing));
+  remove_stale_staging(job.dir);
   close_running_cue(job);
 
   // the folder, and whether we may write there
@@ -331,69 +366,94 @@ void install(Job& job) {
     }
   }
 
-  // write the files (55 .. 90%)
-  std::vector<std::wstring> previous = read_manifest(job.dir);
-  std::vector<std::wstring> written;
+  // Stage the entire payload on the destination volume before touching any installed file.
+  fs::path work;
+  for (unsigned attempt = 0; attempt < 100; ++attempt) {
+    work = fs::path(job.dir) / (L".cue-install-" + std::to_wstring(GetCurrentProcessId()) + L"-" +
+                               std::to_wstring(GetTickCount64()) + L"-" + std::to_wstring(attempt));
+    if (CreateDirectoryW(work.c_str(), nullptr)) break;
+    if (GetLastError() != ERROR_ALREADY_EXISTS || attempt == 99) {
+      job.fail(tr(str::setup_no_write)); done(); return;
+    }
+  }
+  FileTransaction transaction(job.dir, work);
+  auto stage = [&](const fs::path& rel, const unsigned char* data, size_t size) {
+    std::error_code ec;
+    fs::create_directories(transaction.staged(rel).parent_path(), ec);
+    DWORD err = ec ? (DWORD)ec.value() : 0;
+    if (ec || !write_file(transaction.staged(rel).wstring(), data, size, &err)) {
+      job.fail(i18n::format(str::setup_write_failed, {{"file", narrow(rel.wstring())}, {"code", std::to_string(err)}}));
+      return false;
+    }
+    transaction.add(rel);
+    return true;
+  };
+  std::vector<std::wstring> previous = read_manifest(job.dir), written;
+  std::set<std::wstring> now_set{L"uninstall.exe", L"install.txt"};
   size_t at = 0, bytes_done = 0;
   auto u16 = [&](size_t i) { return (size_t)plain[i] | ((size_t)plain[i + 1] << 8); };
   auto u64 = [&](size_t i) { uint64_t v = 0; for (int k = 7; k >= 0; --k) v = (v << 8) | plain[i + k]; return v; };
   for (uint64_t n = 0; n < ft.files; ++n) {
-    if (at + 2 > plain.size()) break;
+    if (plain.size() - at < 2) { job.fail(tr(str::setup_invalid)); done(); return; }
     size_t plen = u16(at);
     at += 2;
-    if (at + plen + 8 > plain.size()) break;
+    if (plain.size() - at < plen + 8) { job.fail(tr(str::setup_invalid)); done(); return; }
     std::string rel((const char*)plain.data() + at, plen);
     at += plen;
     uint64_t size = u64(at);
     at += 8;
-    if (at + size > plain.size() || rel.find("..") != std::string::npos || rel.find(':') != std::string::npos) {
-      job.fail(tr(str::setup_invalid));
-      done();
-      return;
-    }
     std::wstring wrel = widen(rel);
     std::replace(wrel.begin(), wrel.end(), L'/', L'\\');
-    std::wstring dst = job.dir + L"\\" + wrel;
-    SHCreateDirectoryExW(nullptr, fs::path(dst).parent_path().c_str(), nullptr);
-    job.say(i18n::format(str::setup_copying, {{"file", rel.substr(rel.find_last_of('/') == std::string::npos ? 0 : rel.find_last_of('/') + 1)}}));
-    DWORD err = 0;
-    if (!write_file(dst, plain.data() + at, (size_t)size, &err)) {
-      if (err == ERROR_ACCESS_DENIED && !is_elevated()) { job.result = 3; done(); return; }
-      job.fail(i18n::format(str::setup_write_failed, {{"file", rel}, {"code", std::to_string(err)}}));
-      done();
-      return;
+    std::wstring folded = wrel;
+    if (!folded.empty()) CharLowerBuffW(folded.data(), (DWORD)folded.size());
+    if (size > plain.size() - at || !safe_relative(fs::path(wrel)) || !now_set.insert(folded).second ||
+        folded.rfind(L".cue-install-", 0) == 0) {
+      job.fail(tr(str::setup_invalid)); done(); return;
     }
+    job.say(i18n::format(str::setup_copying, {{"file", rel.substr(rel.find_last_of('/') == std::string::npos ? 0 : rel.find_last_of('/') + 1)}}));
+    if (!stage(wrel, plain.data() + at, (size_t)size)) { done(); return; }
     written.push_back(wrel);
-    at += size;
-    bytes_done += size;
+    at += (size_t)size;
+    bytes_done += (size_t)size;
     job.progress = 0.55 + 0.35 * bytes_done / (double)std::max<size_t>(1, plain.size());
   }
+  if (at != plain.size()) { job.fail(tr(str::setup_invalid)); done(); return; }
   plain.clear();
   plain.shrink_to_fit();
 
-  // what the previous version had and this one does not
-  std::set<std::wstring> now_set;
-  for (auto& w : written) { std::wstring l = w; CharLowerW(l.data()); now_set.insert(l); }
-  for (auto& old : previous) {
-    std::wstring l = old;
-    CharLowerW(l.data());
-    if (!now_set.count(l) && l != L"uninstall.exe") DeleteFileW((job.dir + L"\\" + old).c_str());
-  }
-
-  // the uninstaller: this same program, without the archive
+  // The uninstaller and manifest participate in the same transaction as the application.
   job.say(tr(str::setup_registering));
   {
     std::ifstream in(fs::path(job.self), std::ios::binary);
-    std::vector<char> stub((size_t)ft.offset);
-    in.read(stub.data(), (std::streamsize)stub.size());
-    DWORD err = 0;
-    if (in) write_file(job.dir + L"\\uninstall.exe", (const unsigned char*)stub.data(), stub.size(), &err);
+    std::vector<unsigned char> stub((size_t)ft.offset + 8);
+    in.read((char*)stub.data(), (std::streamsize)ft.offset);
+    std::copy(kUninstallerMarker, kUninstallerMarker + 8, stub.begin() + (size_t)ft.offset);
+    if (!in || !stage(L"uninstall.exe", stub.data(), stub.size())) {
+      if (!in) job.fail(tr(str::setup_incomplete));
+      done(); return;
+    }
   }
   {
-    std::ofstream m(fs::path(job.dir) / L"install.txt", std::ios::binary | std::ios::trunc);
-    m << "# Cue " << CUE_VERSION << " - files installed here (the uninstaller reads this list)\n";
-    for (auto& w : written) m << narrow(w) << "\n";
-    m << "uninstall.exe\n";
+    std::string manifest = "# Cue " CUE_VERSION " - files installed here (the uninstaller reads this list)\n";
+    for (const auto& w : written) manifest += narrow(w) + "\n";
+    manifest += "uninstall.exe\n";
+    if (!stage(L"install.txt", (const unsigned char*)manifest.data(), manifest.size())) { done(); return; }
+  }
+  // Obsolete files are backed up too, so a failure can restore the complete old version.
+  for (const auto& old : previous) {
+    std::wstring folded = old;
+    if (!folded.empty()) CharLowerBuffW(folded.data(), (DWORD)folded.size());
+    if (safe_relative(fs::path(old)) && folded.rfind(L".cue-install-", 0) != 0 && now_set.insert(folded).second)
+      transaction.add(old, true);
+  }
+  std::error_code commit_error;
+  if (!transaction.commit(commit_error)) {
+    if (commit_error == std::errc::permission_denied && transaction.recovered() && !is_elevated()) {
+      job.result = 3; done(); return;
+    }
+    job.fail(i18n::format(str::setup_write_failed, {{"file", narrow(transaction.recovery_path().wstring())},
+                                                {"code", std::to_string(commit_error.value())}}));
+    done(); return;
   }
   job.progress = 0.93;
 
@@ -437,6 +497,7 @@ void install(Job& job) {
 // ── uninstall ───────────────────────────────────────────────────────
 void uninstall(Job& job) {
   HRESULT com = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  remove_stale_staging(job.dir);
   job.say(tr(str::setup_closing));
   close_running_cue(job);
   job.progress = 0.1;
@@ -798,7 +859,14 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
                     windows_ui_languages());
   ui.job.self = self_path();
   ui.job.payload = read_footer(ui.job.self);
-  if (!ui.job.payload.ok) want_uninstall = true;  // the plain uninstall.exe, double-clicked
+  if (!ui.job.payload.ok && !want_uninstall) {
+    if (is_uninstaller(ui.job.self)) want_uninstall = true;
+    else {
+      if (!silent) MessageBoxW(nullptr, widen(tr(str::setup_corrupt)).c_str(), L"Cue", MB_OK | MB_ICONERROR);
+      if (SUCCEEDED(com)) CoUninitialize();
+      return 2;
+    }
+  }
 
   std::wstring registered = reg_read(HKEY_CURRENT_USER, kUninstallKey, L"InstallLocation");
   std::string old_version = narrow(reg_read(HKEY_CURRENT_USER, kUninstallKey, L"DisplayVersion"));
