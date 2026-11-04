@@ -349,6 +349,8 @@ enum Id : uint16_t {
   lic_thanks,
   music_cover,
   music_spectrum,
+  music_still,
+  music_tilt,
   music_color,
   music_mono,
   keys_title,

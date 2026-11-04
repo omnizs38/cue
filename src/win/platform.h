@@ -12,6 +12,10 @@ std::wstring widen(const std::string& s);
 std::string narrow(const std::wstring& s);
 std::wstring exe_dir();
 std::wstring data_dir();  // %APPDATA%\tinyoffice\Cue (created)
+// The names of the files (not folders) directly in `dir`, at most `max`, read in one pass with
+// the attributes Windows already returns (no per-file look-up: a Downloads folder of thousands
+// of files lists in a few milliseconds).
+std::vector<std::wstring> folder_files(const std::wstring& dir, size_t max);
 
 enum class DialogKind { Video, Subtitle };
 std::vector<std::string> open_file_dialog(HWND owner, DialogKind kind);

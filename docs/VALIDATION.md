@@ -1,6 +1,6 @@
-# Validation · Cue 1.2.2
+# Validation · Cue 1.2.3
 
-Validation date: 2026-11-03. Environment: Linux x86_64, GCC, MinGW-w64 GCC 13
+Validation date: 2026-11-03 (1.2.3). Environment: Linux x86_64, GCC, MinGW-w64 GCC 13
 cross-compiler and Chromium Headless Shell 134 through Playwright 1.51.1.
 The engine DLL is unchanged (SHA-256
 `26fa28434e30aa319a8ab39fba76dbc4a84757b89349c1fc69b5e55ea6c02bca`).
@@ -326,6 +326,39 @@ Run these on Windows with the release build:
    two thirds of the width; a 16:9 window of the same width keeps its usual size.
 61. **Language, live.** With a song playing and its list (N tracks) showing, switch the language
    in ··· → language. Expected: "N tracks" and the home's recent list change at once.
+62. **Minimize and back.** Play a song (and later a film), minimize Cue, wait, restore it a few
+   times. Expected: the sound never stalls or pauses for a moment, the picture is live at once.
+63. **A new look.** Switch cover + spectrum → spectrum only → cover only while a song plays.
+   Expected: the sound dips softly and comes back, never cut; the volume slider never moves.
+64. **Cover only.** Right-click a song, choose the third icon. Expected: the cover over a still
+   light, no spectrum; Task Manager shows Cue clearly lighter than with cover + spectrum.
+65. **Vertical video menus.** In a portrait window open ···, CC and up next. Expected: each
+   about as wide as the control bar, not covering most of the picture.
+66. **The cover's light.** A song whose cover is bright on one side. Expected: the soft light is
+   centred around the cover, in its colours, not off to one side.
+67. **Cover only from the start.** Choose cover only, skip to the next song. Expected: it starts
+   at 0:00, from its first note.
+68. **Tilt off.** Right-click a song, turn off "tilt the cover", point at the cover. Expected: it
+   stays flat; the choice is kept after reopening Cue.
+69. **An update over an update.** Install 1.2.3 over 1.2.2 while Cue plays. Expected: Cue closes,
+   updates, opens; no `.cue-install-*` folder is left in Cue's folder.
+70. **Back to Cue.** Play a film, click another window, then click the picture of Cue once.
+   Expected: the controls appear and it keeps playing; a second click pauses; clicking the
+   play button on the bar while Cue is in the background acts at once.
+71. **A song opening.** Open a song, then the next, then go back. Expected: the cover, its light
+   and the media card's picture come together and quickly; going back is instant. In cue.log,
+   "first video frame (open N ms)" is no longer than before.
+72. **Preview and subtitles with the bar.** Sweep the pointer along the timeline: the preview
+   stays under it. With a subtitle on screen, move and then rest the pointer: the subtitle rises
+   and settles together with the bar, never after it.
+73. **Up next, only the series.** Play a film in Downloads beside songs and other films. Expected:
+   no up next. Play *Show S01E01* beside *Show S01E02*: up next offers it.
+74. **The media card's picture.** Play a film for 10 seconds, press a media key. Expected: the
+   card shows a frame of the film; nothing named `cue-media-card-*` appears in %TEMP%.
+75. **A slow folder.** Open a film from a network share or a sleeping external disk. Expected:
+   the window opens without freezing; up next appears a moment later.
+76. **The subtitle's hand.** Point at a subtitle with the style panel open. Expected: the hand
+   is about the size of the arrow.
 
 ## Native release checks not covered by portable tests
 

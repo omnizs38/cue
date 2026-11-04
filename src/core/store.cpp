@@ -76,8 +76,9 @@ bool SettingsStore::parse(const std::string& text) {
   if (schema < 4 && ui_scale == 0) ui_scale = -1; // migrate the former default once
   if (schema < 5 && ui_scale == -1) ui_scale = 2; // 1.0: médio became the default, small is a choice
   controls_free = pf["controls_free"].boolean(false);
-  music_look = std::clamp(pf["music_look"].integer(0), 0, 1);
+  music_look = std::clamp(pf["music_look"].integer(0), 0, 2);
   music_mono = pf["music_mono"].boolean(false);
+  cover_tilt = pf["cover_tilt"].boolean(true);
   loop = pf["loop"].boolean(false);
   loop_all = pf["loop_all"].boolean(false) && !loop;
   ambient = pf["ambient"].boolean(true);
@@ -169,6 +170,7 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
   o += std::string("    \"controls_free\": ") + (controls_free ? "true" : "false") + ",\n";
   o += "    \"music_look\": " + std::to_string(music_look) + ",\n";
   o += std::string("    \"music_mono\": ") + (music_mono ? "true" : "false") + ",\n";
+  o += std::string("    \"cover_tilt\": ") + (cover_tilt ? "true" : "false") + ",\n";
   o += std::string("    \"loop\": ") + (loop ? "true" : "false") + ",\n";
   o += std::string("    \"loop_all\": ") + (loop_all ? "true" : "false") + ",\n";
   o += std::string("    \"onboarded\": ") + (onboarded ? "true" : "false") + ",\n";

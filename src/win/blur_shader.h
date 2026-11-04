@@ -110,6 +110,21 @@ inline constexpr const char* kBlurCloudShader = R"CUE(
 //!PARAM mono
 //!TYPE DYNAMIC float
 0
+//!PARAM bg_on
+//!TYPE DYNAMIC float
+0
+//!PARAM bg_x
+//!TYPE DYNAMIC float
+0.5
+//!PARAM bg_y
+//!TYPE DYNAMIC float
+0.5
+//!PARAM bg_hw
+//!TYPE DYNAMIC float
+0.1
+//!PARAM bg_k
+//!TYPE DYNAMIC float
+0
 //!PARAM edge_l
 //!TYPE DYNAMIC float
 0
@@ -309,6 +324,43 @@ vec4 hook() {
     if(mask<.0001) return original;
     vec3 softened=CLOUD_V_tex(CLOUD_V_pos).rgb;
     return vec4(mix(original.rgb,softened*.95,mask),original.a);
+}
+
+//!HOOK OUTPUT
+//!WHEN bg_on 0 >
+//!BIND HOOKED
+//!DESC Cue music room light: a soft glow around the cover, centred on it, in its own colours
+// The music's picture is the cover (and its wings) on black; the room's light is drawn here, on
+// the graphics card, instead of a full-size picture made 60 times a second by the processor. The
+// eight colours of the cover's border (lit_p*, from the left, clockwise) face their own side; the
+// glow is strongest at the cover's edge and fades into the room. The cover keeps its picture.
+vec3 bg_p(int i) {
+    if (i == 0) return vec3(lit_p0r, lit_p0g, lit_p0b);
+    if (i == 1) return vec3(lit_p1r, lit_p1g, lit_p1b);
+    if (i == 2) return vec3(lit_p2r, lit_p2g, lit_p2b);
+    if (i == 3) return vec3(lit_p3r, lit_p3g, lit_p3b);
+    if (i == 4) return vec3(lit_p4r, lit_p4g, lit_p4b);
+    if (i == 5) return vec3(lit_p5r, lit_p5g, lit_p5b);
+    if (i == 6) return vec3(lit_p6r, lit_p6g, lit_p6b);
+    return vec3(lit_p7r, lit_p7g, lit_p7b);
+}
+vec4 hook() {
+    vec4 o = HOOKED_tex(HOOKED_pos);
+    vec2 sz = HOOKED_size;
+    vec2 c = vec2(bg_x, bg_y) * sz;
+    float h = bg_hw * sz.x;
+    vec2 q = HOOKED_pos * sz - c;
+    if (max(abs(q.x), abs(q.y)) < h - 1.0) return o;
+    // distance from a rounded square inside the cover, in half-sides of the cover
+    float d = length(max(abs(q) - vec2(h * 0.55), 0.0)) / h;
+    float u = fract(atan(q.y, q.x) / 6.2831853 + 0.5) * 8.0;
+    int i = int(floor(u));
+    vec3 col = mix(bg_p(i), bg_p(i == 7 ? 0 : i + 1), smoothstep(0.0, 1.0, u - floor(u)));
+    float g = 0.42 * exp(-(d / 2.1) * (d / 2.1)) + 0.07 * exp(-(d / 5.5) * (d / 5.5));
+    vec3 light = col * g * clamp(bg_k, 0.0, 1.0);
+    // a whisper of noise: no banding in the soft gradient
+    light += (fract(sin(dot(HOOKED_pos * sz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+    return vec4(1.0 - (1.0 - o.rgb) * (1.0 - clamp(light, 0.0, 1.0)), o.a);
 }
 
 //!HOOK OUTPUT

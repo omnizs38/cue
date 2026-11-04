@@ -101,6 +101,12 @@ int main() {
     // and follows a change made elsewhere (the saved choice, another window of the menu)
     p.in.music_mono = false; p.changed(t); settle(p, t);
     for (auto& r : p.rows_) if (r.id == PlayView::R_MUSIC_COLOR) assert(r.seg == 0);
+    // the cover alone has no spectrum or light to grey: no such row, and three looks to choose from
+    { PlayView c; c.in.dur = 200; c.in.audio_only = true; c.in.cover_scene = true; c.in.music_look = 2; c.resize(1280, 720, 2); double tc = 1; c.reset(tc);
+      c.right_click(400, 300, tc); settle(c, tc);
+      bool looks = false;
+      for (auto& r : c.rows_) { assert(r.id != PlayView::R_MUSIC_COLOR); if (r.id == PlayView::R_MUSIC_LOOK) looks = r.segs.size() == 3 && r.seg == 2; }
+      assert(looks); }
     // a film's menu has no such row
     PlayView v; v.in.dur = 200; v.resize(1280, 720, 2); double t2 = 1; v.reset(t2);
     v.right_click(400, 300, t2); settle(v, t2);

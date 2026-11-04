@@ -551,6 +551,43 @@ std::string next_episode(std::string_view current, const std::vector<std::string
   return "";
 }
 
+namespace {
+// a name's shape with its numbers taken out: "[Sub] Show - 01 [1080p].mkv" -> "[sub] show - # [#p]"
+// (the extension dropped). Empty when the name has no number at all.
+std::string number_shape(std::string_view name) {
+  std::string stem(name);
+  if (auto dot = stem.rfind('.'); dot != std::string::npos && dot > 0 && stem.size() - dot <= 5) stem.resize(dot);
+  std::string out; bool any = false;
+  for (size_t i = 0; i < stem.size();) {
+    if (stem[i] >= '0' && stem[i] <= '9') {
+      while (i < stem.size() && stem[i] >= '0' && stem[i] <= '9') ++i;
+      out += '#'; any = true;
+    } else out += (char)std::tolower((unsigned char)stem[i++]);
+  }
+  return any ? out : std::string();
+}
+}  // namespace
+
+std::string next_in_series(std::string_view current, const std::vector<std::string>& siblings) {
+  if (!is_video_name(current)) return "";
+  std::vector<std::string> videos;
+  for (auto& s : siblings) if (is_video_name(s)) videos.push_back(s);
+  if (videos.size() < 2) return "";
+  int s = 0, e = 0;
+  if (episode_of(current, s, e)) {
+    std::string next = next_episode(current, videos);
+    return !next.empty() && same_series(current, next) ? next : "";
+  }
+  const std::string shape = number_shape(current);
+  if (shape.empty()) return "";
+  std::vector<std::string> same;
+  for (auto& v : videos) if (number_shape(v) == shape) same.push_back(v);
+  std::sort(same.begin(), same.end(), [](const std::string& a, const std::string& b) { return natural_less(a, b); });
+  const std::string cur = lower(current);
+  for (size_t i = 0; i + 1 < same.size(); ++i) if (lower(same[i]) == cur) return same[i + 1];
+  return "";
+}
+
 bool looks_like_series(const std::vector<std::string>& names) {
   int n = 0, s = 0, e = 0;
   for (auto& x : names) if (is_playable_name(x) && episode_of(x, s, e) && ++n >= 2) return true;

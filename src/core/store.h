@@ -21,8 +21,9 @@ struct SettingsStore {
   bool muted = false;
   int ui_scale = 2;           // -1 small, 2 medium (default), 0 large, 1 larger
   bool controls_free = false;  // optional controls without a card
-  int music_look = 0;          // music with a cover: 0 cover and spectrum, 1 spectrum only
-  bool music_mono = false;     // music in black and white (its cover, spectrum and light); colour by default
+  int music_look = 0;          // music: 0 cover and spectrum, 1 spectrum only, 2 cover only
+  bool music_mono = false;     // music in black and white (its spectrum and light); colour by default
+  bool cover_tilt = true;      // the music's cover leans under the pointer
   bool loop = false;           // repeat the file (the dock's repeat button)
   bool loop_all = false;       // repeat the queue: after its last item, the first again
   bool ambient = true;      // ambient light behind the window

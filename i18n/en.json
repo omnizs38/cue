@@ -351,6 +351,8 @@
   "lic.thanks": "Acknowledgments",
   "music.cover": "cover + spectrum",
   "music.spectrum": "spectrum only",
+  "music.still": "cover only",
+  "music.tilt": "tilt the cover",
   "music.color": "color",
   "music.mono": "black & white",
   "keys.title": "keyboard shortcuts",

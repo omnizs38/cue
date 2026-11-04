@@ -6,6 +6,7 @@
 #include <utility>
 #include <chrono>
 #include <thread>
+#include <functional>
 
 namespace detail {
 inline bool rename_retryable(const std::error_code& ec) {
@@ -43,9 +44,13 @@ class FileTransaction {
     try {
       std::error_code ec;
       if (!committed_ && !rollback(ec)) return;
-      std::filesystem::remove_all(work_, ec);
+      if (remove_tree) remove_tree(work_);
+      else std::filesystem::remove_all(work_, ec);
     } catch (...) { /* Preserve recovery files if cleanup cannot finish. */ }
   }
+  // How the staging folder is removed at the end. The installer sets one that never follows a
+  // link (a junction or symbolic link inside is removed as a link): it may run as administrator.
+  std::function<void(const std::filesystem::path&)> remove_tree;
   FileTransaction(const FileTransaction&) = delete;
   FileTransaction& operator=(const FileTransaction&) = delete;
   std::filesystem::path staged(const std::filesystem::path& rel) const { return work_ / "new" / rel; }

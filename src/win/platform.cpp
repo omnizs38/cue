@@ -416,3 +416,20 @@ bool remote_path_allowed(const std::string& root, const std::string& path) {
   if (CompareStringOrdinal(rp.data(), (int)rp.size(), pp.data(), (int)rp.size(), TRUE) != CSTR_EQUAL) return false;
   return pp.size() == rp.size() || rp.back() == L'\\' || pp[rp.size()] == L'\\';
 }
+
+std::vector<std::wstring> folder_files(const std::wstring& dir, size_t max) {
+  std::vector<std::wstring> out;
+  if (dir.empty()) return out;
+  std::wstring pattern = dir;
+  if (pattern.back() != L'\\' && pattern.back() != L'/') pattern += L'\\';
+  pattern += L'*';
+  WIN32_FIND_DATAW fd{};
+  HANDLE h = FindFirstFileExW(pattern.c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, FIND_FIRST_EX_LARGE_FETCH);
+  if (h == INVALID_HANDLE_VALUE) return out;
+  do {
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+    out.emplace_back(fd.cFileName);
+  } while (out.size() < max && FindNextFileW(h, &fd));
+  FindClose(h);
+  return out;
+}

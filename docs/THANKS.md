@@ -8,6 +8,14 @@ Cue is made by Gabriel Benzoni at .tinypeep. These people helped make it better.
   wording suggestions, contributed in pull request #3. Several of those suggestions
   are part of Cue's Russian interface since 1.2.
 
+## Code
+
+- **omni38** (GitHub: https://github.com/omnizs38): an audit of the installer and playback state,
+  contributed in pull request #13. Since 1.2.3 an update is staged and swapped in with rollback
+  (an interrupted update leaves the previous version whole), a damaged installer can no longer
+  start an uninstall, several audio tracks played at once are remembered, and Windows' media card
+  keeps the right play / pause state.
+
 ## Testing and feedback
 
 - **DetroNot74** (GitHub: https://github.com/DetroNot74): careful bug reports with

@@ -289,11 +289,35 @@ For music the ambient switch drives a pass inside the picture rather than the ha
 
 Black and white is the last pass on OUTPUT before the snap (`//!WHEN mono 0 >`): Rec. 709 luma mixed in by `mono`, everywhere but the cover (with the cover look, the pass projects each pixel through the same camera as the cover's tilt and keeps what the turned cover covers in colour), eased over 0.3 s by `App::step_mono` and set to 1 from a song's first picture when the choice is saved (`SettingsStore::music_mono`). It needs no rebuild of the engine's graph, so switching never reopens the song; films never get it.
 
-A cover boxed in black bars is found by `request_cover_trim` (`win/cover_image`): started in `App::open` for a song, it decodes the picture at 192 px with WIC on a worker and runs `trim_dark_bars` (`core/image_trim.h`). When the engine asks for the music graph it waits at most 60 ms for it (usually long done) and, only if the picture is the one the engine has (same aspect as the album-art track's `demux-w`/`demux-h`), puts the inner box in `MusicScene::crop_*`; `audio_cover_tail` then crops `[vidN]` before the cover, its wings' tint and its light are taken from it. The light's colours are read from the trimmed picture too.
+A song's cover is read once by `request_cover` (`win/cover_image`): started in `App::open` for a song, one worker reads the encoded picture (`cover_art::find`), decodes it at 192 px with WIC, finds the black bars with `trim_dark_bars` (`core/image_trim.h`), and reads the light's colours from the trimmed picture halved to ~96 px; the encoded bytes serve Windows' media card. The last four results are kept in memory, keyed by the file's path, size and last-write time (a re-tagged file is read again); an in-flight read is shared, never repeated. When the engine asks for the music graph it waits at most 60 ms for it (usually long done) and, only if the picture is the one the engine has (same aspect as the album-art track's `demux-w`/`demux-h`), puts the inner box in `MusicScene::crop_*`; `audio_cover_tail` then crops `[vidN]` before the cover, its wings' tint and its light are taken from it.
 
 The shortcut sheet is a panel (`Panel::Keys`, rows of `RK::Keys`) built from one table in `ui/play.cpp`, the keys' own names (ctrl, shift, esc, space) translated. `build_keys` picks the largest layout that fits whole and clear of the window's buttons: two columns at the interface's scale, rows closed up, then half-step smaller scales, then (the smallest window at the smallest size) two narrow columns with shortened names. `?` arrives as a character (`WM_CHAR`, any keyboard layout) or as the engine's `?` binding; the engine's bindings also cover l, n, p, c and Ctrl+T, which after a click on the picture reach the engine's window first.
 
 A maximized window keeps its state when a file asks for another shape: `adapt_window` writes the new size into the window placement's restore rectangle (workspace coordinates) instead of restoring the window, as full screen keeps `pending_ar_` for its way out.
+
+## The room's light, the look's fade, the window going away
+
+The cover looks' graph draws the cover and its wings on black: the room is padded from a 2x2 crop
+of the spectrum (`pad`), so it is led by the music and ends with it, and nothing is scaled to the
+full size per picture. The soft light around the cover is the `bg_on` pass of `win/blur_shader.h`,
+before the light show's: a glow centred on the cover (`bg_x`, `bg_y`, `bg_hw`, from the same view
+as the cover pass), strongest at its edge, in the eight border colours `lit_p*` facing their own
+side, faded in over half a second once the colours are read (`bg_k`). The cover itself is never
+painted. **Cover only** (`look 2`) is the cover on black at two pictures a second (`showwaves`
+r=2 padded), the same pass for its light, no meter and no light show.
+
+A new look reopens the song (see the audio switch): its sound fades out with the picture and in
+after the reopen through `volume-gain` (dB, the engine's own gain under the person's volume),
+`App::set_switch_gain`. Music starts with `initial-audio-sync=no`, so its first samples are never
+trimmed to meet the picture's first frame.
+
+Minimizing changes nothing in the engine: rebuilding the picture's chain (a slower `vf`) or
+switching a film's `video-sync` made the sound stall for a moment both ways. Only Cue's poll goes
+to 4 Hz; a film under a full-screen window keeps `video-sync=audio` as before.
+
+Portrait and square windows raise the control bar's scale (`portrait_scale`); the panels take
+`PlayView::panel_s()`, half way between the window's own scale (`set_base_scale`) and the bar's,
+in half steps and within about 72% of the width; up next in a portrait window is the bar's width.
 
 ## Windows media controls
 

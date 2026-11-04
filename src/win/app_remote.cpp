@@ -358,17 +358,23 @@ void App::find_next_episode() {
   play_.in.has_prev = false;
   play_.in.next_title.clear();
   if (path_.empty() || path_.find("://") != std::string::npos) return;
-  std::error_code ec;
   std::filesystem::path p(widen(path_));
   std::filesystem::path dir = p.parent_path();
   std::vector<std::string> names;
-  for (std::filesystem::directory_iterator it(dir, std::filesystem::directory_options::skip_permission_denied, ec), end;
-       !ec && it != end && names.size() < 4000; it.increment(ec)) {
-    if (it->is_regular_file(ec)) names.push_back(narrow(it->path().filename().wstring()));
+  if (!folder_names(dir.wstring(), names)) return;  // still being read: comes back here when it is
+  // Without a list of the person's own, a film is followed only by the next episode of its
+  // series (never another film or a song that happens to sit next to it in the folder), and a
+  // song only by the folder's next song (its album: see music_album_queue).
+  const std::string mine = narrow(p.filename().wstring());
+  std::string next;
+  if (audio_only_) {
+    std::vector<std::string> songs;
+    for (auto& n : names) if (remote::is_audio_name(n)) songs.push_back(n);
+    next = remote::next_file(mine, songs);
+  } else {
+    next = remote::next_in_series(mine, names);
   }
-  std::string next = remote::next_episode(narrow(p.filename().wstring()), names);
-  next_auto_ = !audio_only_ && !next.empty() && remote::same_series(narrow(p.filename().wstring()), next);
-  if (next.empty()) next = remote::next_file(narrow(p.filename().wstring()), names);
+  next_auto_ = !audio_only_ && !next.empty();
   if (!next.empty()) next_ep_ = narrow((dir / widen(next)).wstring());
   play_.set_next_details(file_name(next_ep_));
   next_thumb_job_.reset(); next_thumb_requested_ = false;

@@ -351,6 +351,8 @@
   "lic.thanks": "Agradecimientos",
   "music.cover": "portada + espectro",
   "music.spectrum": "solo espectro",
+  "music.still": "solo portada",
+  "music.tilt": "inclinar la portada",
   "music.color": "color",
   "music.mono": "blanco y negro",
   "keys.title": "atajos de teclado",

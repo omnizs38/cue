@@ -663,16 +663,21 @@ void PlayView::build_rows() {
       // music: the picture is a choice (a song without a cover wears Cue's tile), so it lives
       // where the picture's menu is
       Row* look = R(RK::Segmented, R_MUSIC_LOOK);
-      look->segs = {tr(str::music_cover), tr(str::music_spectrum)};
-      look->seg_icons = {"look-cover", "look-bars"};
+      look->segs = {tr(str::music_cover), tr(str::music_spectrum), tr(str::music_still)};
+      look->seg_icons = {"look-both", "look-bars", "look-cover"};
       look->icons_only = true;  // two icons at the end; the row says which one is on (or pointed at)
       look->seg = in.music_look;
-      // and in colour (the default) or black and white: the cover, its spectrum and its light
-      Row* tone = R(RK::Segmented, R_MUSIC_COLOR);
+      // and in colour (the default) or black and white: the spectrum and its light (the cover
+      // alone has neither, so it has no such row)
+      Row* tone = in.music_look == 2 ? nullptr : R(RK::Segmented, R_MUSIC_COLOR);
+      if (tone) {
       tone->segs = {tr(str::music_color), tr(str::music_mono)};
       tone->seg_icons = {"look-color", "look-mono"};
       tone->icons_only = true;
       tone->seg = in.music_mono ? 1 : 0;
+      }
+      // the cover leaning under the pointer: on by default, off for a cover that stays still
+      if (in.music_look != 1) R(RK::Toggle, R_COVER_TILT, tr(str::music_tilt))->checked = in.cover_tilt;
       R(RK::Separator, R_NONE);
     }
     if (!in.audio_only) {
@@ -719,7 +724,7 @@ int PlayView::slider_label_w() const {
 }
 
 void PlayView::layout_rows() {
-  double s = panel_ == Panel::Keys ? keys_s_ : s_;
+  double s = panel_ == Panel::Keys ? keys_s_ : panel_s();
   if(panel_==Panel::Queue&&scene_list()) {
     // music: the list beside the cover, as tall as the room under the captions allows
     Rect r=scene_list_rect();
@@ -736,9 +741,12 @@ void PlayView::layout_rows() {
     // A popover that comes out of its button: in wide windows it keeps the interface scale and
     // grows to about ten rows; small windows compact it. Its place is decided in panel_rect.
     Rect dock=dock_rect();
-    bool roomy=w_/s_>=kQueueRoomyW&&h_/s_>=300;
-    s=roomy?s_:std::min({s_,w_/240.,h_/200.});
+    const double ps=panel_s();
+    bool roomy=w_/ps>=kQueueRoomyW&&h_/ps>=300;
+    s=roomy?ps:std::min({ps,w_/240.,h_/200.});
     pw_=std::min((int)std::lround((roomy?kQueueRoomyPanelW:360)*s),std::max(1,w_-(int)std::lround(16*s)));
+    // a portrait window's bar is a column: the list is exactly as wide as the bar, edge to edge
+    if(compact_&&dw_>0)pw_=std::min(dw_,std::max(1,w_-(int)std::lround(8*s)));
     bool low=dock.cy()>h_/2;
     // never up under the window's own buttons (minimize, maximize, close): below their row
     // whenever they are shown, in a window of any size (issue #10)
@@ -1021,7 +1029,7 @@ Rect PlayView::chrome_rect() const { WindowChrome c = chrome; c.s = s_; return c
 void PlayView::render_panel() {
   if(panel_==Panel::Queue) {queue_view_.draw(panel_base_,in.paused);panel_dirty_=false;++panel_gen_;return;}
   const Palette& p = P();
-  double s = panel_==Panel::CC?cc_scale_:panel_==Panel::Keys?keys_s_:s_;
+  double s = panel_==Panel::CC?cc_scale_:panel_==Panel::Keys?keys_s_:panel_s();
   Canvas& c = panel_base_;
   c.resize(pw_, ph_);
   draw_panel(c, 0, 0, pw_ / s, ph_ / s, s, kPanelProfile, p.bg, kPanelFill, p.edge, 0.95);
@@ -1476,9 +1484,10 @@ void PlayView::panel_adjust(int row, int dir, double now) {
     case R_DELAY: act(PA::SubDelay, 0.1 * dir); break;
     case R_SUB_TOGGLE: if ((dir > 0) != r.checked) { act(PA::SubVisible, dir > 0 ? 1 : 0); sw_.target = dir > 0 ? 1 : 0; } break;
     case R_AMBIENT: if ((dir > 0) != r.checked) { act(PA::Ambient, dir > 0 ? 1 : 0); sw_.target = dir > 0 ? 1 : 0; } break;
+    case R_COVER_TILT: if ((dir > 0) != r.checked) { act(PA::CoverTilt, dir > 0 ? 1 : 0); in.cover_tilt = dir > 0; sw_.target = dir > 0 ? 1 : 0; } break;
     case R_CONTROLS_FREE: act(PA::ControlsFree, dir > 0 ? 1 : 0); break;
     case R_UISCALE: act(PA::UiScale, next_ui_size(in.ui_scale, dir)); break;
-    case R_MUSIC_LOOK: if ((dir > 0 ? 1 : 0) != in.music_look) act(PA::MusicLook, dir > 0 ? 1 : 0); break;
+    case R_MUSIC_LOOK: if (int v = std::clamp(in.music_look + (dir > 0 ? 1 : -1), 0, 2); v != in.music_look) act(PA::MusicLook, v); break;
     case R_MUSIC_COLOR: if ((dir > 0) != in.music_mono) { act(PA::MusicMono, dir > 0 ? 1 : 0); in.music_mono = dir > 0; } break;
     case R_SPEED_BAR: set_speed(in.speed + 0.05 * dir); break;
     case R_SPEED_CHIPS: {
@@ -1586,6 +1595,7 @@ void PlayView::panel_click(int row, int part, int x, double now) {
       break;
     case R_SPEED_CHIPS: if (part >= 0 && part < 6) set_speed(kSpeedChips[part]); break;
     case R_AMBIENT: act(PA::Ambient, r.checked ? 0 : 1); sw_.target = r.checked ? 0 : 1; break;
+    case R_COVER_TILT: act(PA::CoverTilt, r.checked ? 0 : 1); in.cover_tilt = !r.checked; sw_.target = r.checked ? 0 : 1; break;
     case R_CONTROLS_FREE: if (part >= 0) act(PA::ControlsFree, part == 1 ? 1 : 0); break;
     case R_UISCALE: if (part >= 0) act(PA::UiScale, ui_size_choice(part)); break;
     case R_MUSIC_LOOK: if (part >= 0 && part != in.music_look) act(PA::MusicLook, part); break;
@@ -2356,7 +2366,7 @@ void PlayView::changed(double /*now*/) {
                      std::to_string((int)in.kind) + (in.style == in.default_style ? "d" : "") +
                      (in.controls_free ? "F" : "B") + (in.ambient ? "A" : "") + (in.audio_only ? "a" : "v") + std::to_string(in.ui_scale) + speed_label(in.speed);
     ps+="|tracks:"+std::to_string(in.tracks_revision);
-    ps += "|look:" + std::to_string(in.music_look) + (in.music_mono ? "m" : "c");  // the picture menu's choices
+    ps += "|look:" + std::to_string(in.music_look) + (in.music_mono ? "m" : "c") + (in.cover_tilt ? "t" : "s");  // the picture menu's choices
     if (panel_ == Panel::FileInfo) ps += "|info:" + std::to_string(in.file_info_revision);
     if(panel_==Panel::Queue)ps+="|q:"+std::to_string(in.queue_revision)+(in.paused?"p":"r");
     ps += "|up:" + in.update_label + (in.update_ready ? "!" : "");
@@ -2657,7 +2667,7 @@ bool PlayView::tick(double now, double dt) {
       double v = hover_step(phov_[i], act_row == i, dt);
       if (v != phov_[i]) { phov_[i] = v; panel_dirty_ = true; moving = true; }
     }
-    if ((panel_ == Panel::CC || panel_ == Panel::More) && sw_.step(dt)) { panel_dirty_ = true; moving = true; }
+    if ((panel_ == Panel::CC || panel_ == Panel::More || panel_ == Panel::Context) && sw_.step(dt)) { panel_dirty_ = true; moving = true; }
     bool ack = now < ack_until_;
     if (ack != ack_now_) { ack_now_ = ack; panel_dirty_ = true; }
     if (ack) moving = true;
@@ -2754,8 +2764,14 @@ bool PlayView::tick(double now, double dt) {
   }
   moving |= toast_live || dragging();  // keep frames coming while something is held
   // The subtitle settles independently after the dock fades; no target-state snap.
+  // The subtitle moves with the dock: it starts on the same tick and lands with it (the
+  // dock's own times), only a long way taking a little longer so it never whips. A line that
+  // appears mid-motion is born at its final place, never sliding through the empty space
+  // the dock just left.
   double wanted_lift = wanted_subtitle_lift();
-  subtitle_lift_.to(wanted_lift,wanted_lift<subtitle_lift_.x?.36:.30);
+  subtitle_lift_.to(wanted_lift, wanted_lift < subtitle_lift_.x ? tok::dock_out : tok::dock_in + .02, 140.0);
+  if (in.sub_shown && !sub_was_shown_ && !subtitle_lift_.settled()) subtitle_lift_.snap(wanted_lift);
+  sub_was_shown_ = in.sub_shown;
   if (subtitle_lift_.step(dt)) moving = true;
   if (in.sid != 0 && in.kind != SubKind::Bitmap && !sub_settling_) {
     double lp = lifted_pos();
@@ -2822,7 +2838,7 @@ Rect PlayView::cover_screen_rect() const {
 // anywhere else (or over the bar, a menu, a drag) it settles flat.
 void PlayView::cover_hover(int x, int y) {
   Rect r = cover_screen_rect();
-  bool hot = in.cover_art && r.w > 0 && r.contains(x, y) && panel_ == Panel::None && hit_dock(x, y) == B_NONE && !dragging() &&
+  bool hot = in.cover_art && in.cover_tilt && r.w > 0 && r.contains(x, y) && panel_ == Panel::None && hit_dock(x, y) == B_NONE && !dragging() &&
              !viewport_transition_ && !reduce_motion();
   cov_hot_ = hot;
   if (!hot) { cov_rx_.target = cov_ry_.target = 0; return; }
@@ -2957,6 +2973,7 @@ void PlayView::mouse_down(int x, int y, double now) {
   swallow_up_ = false;
   press_ = P_NONE;
   second_click_ = false;
+  activation_press_ = activation_click; activation_click = false;
   if (pending_click_ != P_NONE && now - last_click_t_ >= double_click_time_) commit_click();
   Press prior_click = pending_click_;
   pending_click_ = P_NONE; // controls, menus and subtitles consume the pending gesture
@@ -3064,7 +3081,7 @@ void PlayView::mouse_up(int x, int y, double now) {
     const bool music_scene = in.audio_only && in.cover_scene;
     if (second_click_ && pending_click_ == press_) {
       pending_click_ = P_NONE;
-      if (press_ == P_VIDEO && !music_scene) {
+      if (press_ == P_VIDEO && !music_scene && click_toggled_) {  // undo the first click's pause
         in.paused=click_was_paused_; act(PA::TogglePause,in.paused);
         morph_.target=in.paused?0:1; flash_t0_=-10; dock_dirty_=true;
       }
@@ -3072,7 +3089,9 @@ void PlayView::mouse_up(int x, int y, double now) {
       last_click_t_ = -10;
     } else {
       click_was_paused_=in.paused;
-      if (press_ == P_VIDEO && !music_scene) activate(B_PLAY,now);
+      // the click that brought an inactive window forward only wakes it; the next one pauses
+      click_toggled_ = press_ == P_VIDEO && !music_scene && !activation_press_;
+      if (click_toggled_) activate(B_PLAY,now);
       pending_click_ = press_;
       last_click_t_ = now; last_click_x_ = x; last_click_y_ = y;
     }
@@ -3257,7 +3276,7 @@ void PlayView::build_keys() {
   };
   const int room_h = h_ - (in.fullscreen ? 8 * (int)s_ : chrome_room()) - 8 * (int)s_;
   bool done = false;
-  for (double sc = s_; sc >= 1 && !done; sc -= 0.5) {
+  for (double sc = panel_s(); sc >= 1 && !done; sc -= 0.5) {
     for (int cols : {2, 1}) {
       int colw = cols == 2 ? two : one, W = cols * colw + (cols - 1) * 10 + 4;
       if (W * sc > w_ - 8 * sc) continue;

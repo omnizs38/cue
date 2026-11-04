@@ -351,6 +351,8 @@
   "lic.thanks": "Remerciements",
   "music.cover": "pochette + spectre",
   "music.spectrum": "spectre seul",
+  "music.still": "pochette seule",
+  "music.tilt": "incliner la pochette",
   "music.color": "couleur",
   "music.mono": "noir et blanc",
   "keys.title": "raccourcis clavier",

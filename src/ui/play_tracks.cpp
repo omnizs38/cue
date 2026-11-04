@@ -4,7 +4,7 @@
 
 void PlayView::layout_sub_list() {
   cc_drag_=false;
-  cc_scale_=std::min({s_,w_/220.,h_/180.});
+  cc_scale_=std::min({panel_s(),w_/220.,h_/180.});
   double s=cc_scale_;
   int width=210;
   for(const auto& row:rows_)if(row.id!=R_SUB_TRACK) {

@@ -92,6 +92,11 @@ void card_words(std::string_view name, std::string& title, std::string& sub);
 std::string series_id(std::string_view name);
 std::string next_file(std::string_view current, const std::vector<std::string>& siblings);
 std::string next_episode(std::string_view current, const std::vector<std::string>& siblings);
+// What a film offers as "up next" without a list: only the next episode of the same series, a
+// video. Numbered as an episode (S01E02, 1x02, Ep 2): the next episode of the same show. Else a
+// name that differs from this one only in its numbers ("[Sub] Show - 01 [1080p]" -> "- 02"):
+// the next such name. Anything else in the folder (another film, a song) is never offered.
+std::string next_in_series(std::string_view current, const std::vector<std::string>& siblings);
 // Two or more playable files numbered as episodes: shown as a series (a stack, not a folder).
 bool looks_like_series(const std::vector<std::string>& names);
 // `path` is `root` or inside it (case-insensitive, either slash, no ".." tricks).

@@ -66,8 +66,9 @@ struct PlayInput {
   // music: the file has a cover (the right-click menu offers both looks); the cover look is on
   // screen (the cover can be tilted); which look the person chose; the captions under the cover
   bool has_cover = false, cover_scene = false;
-  int music_look = 0;  // 0 cover and spectrum, 1 spectrum only
+  int music_look = 0;  // 0 cover and spectrum, 1 spectrum only, 2 cover only
   bool music_mono = false;  // music in black and white
+  bool cover_tilt = true;   // the cover leans under the pointer (a choice; on by default)
   std::string music_title, music_artist;
   MusicScene music_scene;  // the cover look's composition (the engine's picture)
   bool cover_art = false;  // the scene shows a cover (the file's or Cue's tile): it tilts under the pointer
@@ -83,8 +84,9 @@ enum class PA {
   Language,  // v: -1 automatic, else i18n::Lang
   NextEpisode, PreviousInQueue, CancelNext, QueueAdd, QueueFolder, QueuePlay, QueueRemove, QueueMove, QueueReorder, QueueClear,
   Remote,    // the phone remote's pairing scene
-  MusicLook,  // v: 0 cover and spectrum, 1 spectrum only
-  MusicMono   // v: 0 colour, 1 black and white
+  MusicLook,  // v: 0 cover and spectrum, 1 spectrum only, 2 cover only
+  MusicMono,  // v: 0 colour, 1 black and white
+  CoverTilt   // v: 0 still, 1 leans under the pointer
 };
 struct PlayAction { PA a; double v = 0; int64_t id = 0; };
 
@@ -108,6 +110,18 @@ class PlayView {
   WindowChrome chrome;
 
   void resize(int w, int h, double s);
+  // the window's own scale, before a portrait or square window raises the bar's: menus, subtitles
+  // and up next stay at a size that suits the window's width instead of following the bar
+  void set_base_scale(double b) { base_s_ = b; }
+  double panel_s() const {
+    if (base_s_ <= 0 || base_s_ >= s_) return s_;
+    // half way between the window's own scale and the raised bar's, in half steps: a menu comes
+    // out about as wide as the bar it opens from (one silhouette), and never wider than about
+    // 72% of the window (a menu is ~230 art px)
+    double mid = std::floor((base_s_ + s_) / 2 * 2) / 2;
+    double by_width = std::floor(w_ * 0.72 / 230.0 * 2) / 2;
+    return std::max(1.0, std::min(s_, std::max(base_s_, std::min(mid, by_width))));
+  }
   void changed(double now);   // App updated `in`
   void reset(double now);     // new file
   void begin_viewport_transition(double now, bool instant = false);
@@ -124,6 +138,9 @@ class PlayView {
   CoverTilt cover_tilt() const { return {cov_rx_.x, cov_ry_.x, cov_k_}; }
   // where the music scene's cover is on screen (the scene fills the window like a 16:9 picture)
   Rect cover_screen_rect() const;
+  // set by the window just before mouse_down: the click that activated an inactive window
+  // only wakes it (controls appear), the picture never pauses on it
+  bool activation_click = false;
   void mouse_down(int x, int y, double now);
   void mouse_up(int x, int y, double now);
   void right_click(int x, int y, double now);
@@ -208,7 +225,7 @@ class PlayView {
     R_ASS, R_LINKS, R_AUDIO_TRACK, R_AUDIO_MIX, R_AUDIO_MIX_TRACK, R_AUDIO_MIX_ALL, R_BACK_AUDIO, R_STYLE_RESET, R_OPEN, R_CLOSE, R_SPEED, R_SPEED_OPT, R_BACK_MORE, R_UISCALE, R_AMBIENT,
     R_FRAME, R_FRAME_CLEAN, R_FS_ROW, R_AUDIO_ROW, R_AMBIENT_STR, R_SPEED_VALUE, R_SPEED_BAR, R_SPEED_CHIPS,
     R_ABOUT, R_LINKEDIN, R_GITHUB, R_EMAIL, R_CONTACTS, R_LICENSES, R_FILE_INFO, R_DISMISS, R_CONTROLS_FREE, R_UPDATE,
-    R_LANGUAGE, R_LANG_OPT, R_REMOTE, R_QUEUE, R_MUSIC_LOOK, R_MUSIC_COLOR, R_KEYS
+    R_LANGUAGE, R_LANG_OPT, R_REMOTE, R_QUEUE, R_MUSIC_LOOK, R_MUSIC_COLOR, R_KEYS, R_COVER_TILT
   };
   struct Row {
     RK k;
@@ -244,7 +261,7 @@ class PlayView {
   int layout_ends_=0;  // has_prev | has_next << 1, as last drawn
   size_t queue_count_seen_=0;
   Fade queue_mark_{0,0,.12,.14};
-  int w_ = 0, h_ = 0; double s_ = 2;
+  int w_ = 0, h_ = 0; double s_ = 2, base_s_ = 0;
   std::vector<PlayAction> acts_;
   void act(PA a, double v = 0, int64_t id = 0) { acts_.push_back({a, v, id}); }
 
@@ -334,6 +351,8 @@ class PlayView {
   int last_click_x_ = 0, last_click_y_ = 0;
   double double_click_time_ = 0.35;
   Press pending_click_ = P_NONE;
+  bool activation_press_ = false;
+  bool click_toggled_ = false;     // the first click of a possible double click paused or played  // this press only brought the window forward
   bool second_click_ = false;
   bool click_was_paused_ = false;
   void commit_click();
@@ -439,8 +458,8 @@ class PlayView {
   bool tip_on_ = false;
   std::string tip_text_;
   double tip_t_ = 0;
-  Spring tipx_{30, 0.95, 0.3};   // the preview glides after the cursor
-  Fade tipvis_{0, 0, 0.12, 0.09};
+  Spring tipx_{55, 1.0, 0.3};    // the preview glides after the cursor, ~35 ms behind, no wobble
+  Fade tipvis_{0, 0, 0.08, 0.09};
   std::string tip_ts_;           // last time shown, kept while it fades out
   bool tip_want() const;
   void tip_size(int& W, int& H) const;
@@ -467,7 +486,7 @@ class PlayView {
   void open_panel(Panel p, int btn, double now);
   void close_panel();
   void build_rows();
-  bool switch_on() const { return panel_ == Panel::More ? in.ambient : (in.sid != 0 && in.sub_visible); }
+  bool switch_on() const { return panel_ == Panel::More ? in.ambient : panel_ == Panel::Context ? in.cover_tilt : (in.sid != 0 && in.sub_visible); }
   void layout_rows();
   int slider_label_w() const;
   int slider_value_w() const;
@@ -494,7 +513,8 @@ class PlayView {
   void update_sub_layers();
   double snap_sub(double pos) const;
   double last_lift_ = -1;
-  PolishedMotion subtitle_lift_;
+  EaseOutMotion subtitle_lift_;  // moves with the dock: starts on the same tick, lands with it
+  bool sub_was_shown_ = false;
   double wanted_subtitle_lift() const;
   mutable bool lift_cache_valid_=false;
   mutable SubStyle lift_style_;

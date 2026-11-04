@@ -214,19 +214,43 @@ bool write_file(const std::wstring& path, const unsigned char* data, size_t n, D
   return false;
 }
 
-// Removes staging folders left behind by an interrupted update.
-void remove_stale_staging(const std::wstring& dir) {
-  std::error_code ec;
-  for (const auto& entry : fs::directory_iterator(fs::path(dir), ec)) {
-    if (ec) break;
-    std::error_code dec;
-    if (!entry.is_directory(dec)) continue;
-    std::wstring folded = entry.path().filename().wstring();
-    if (!folded.empty()) CharLowerBuffW(folded.data(), (DWORD)folded.size());
-    if (folded.rfind(L".cue-install-", 0) != 0) continue;
-    std::error_code rmec;
-    fs::remove_all(entry.path(), rmec);
+// Deletes a folder the installer made, never following a link out of it: a junction or symbolic
+// link (at the top or anywhere inside) is removed as a link, its target untouched. The installer
+// may run as administrator, and std::filesystem::remove_all can walk through a junction here.
+void remove_tree_no_follow(const std::wstring& p) {
+  DWORD a = GetFileAttributesW(p.c_str());
+  if (a == INVALID_FILE_ATTRIBUTES) return;
+  if (a & FILE_ATTRIBUTE_REPARSE_POINT) {
+    if (a & FILE_ATTRIBUTE_DIRECTORY) RemoveDirectoryW(p.c_str()); else DeleteFileW(p.c_str());
+    return;
   }
+  if (!(a & FILE_ATTRIBUTE_DIRECTORY)) {
+    if (a & FILE_ATTRIBUTE_READONLY) SetFileAttributesW(p.c_str(), a & ~FILE_ATTRIBUTE_READONLY);
+    DeleteFileW(p.c_str());
+    return;
+  }
+  WIN32_FIND_DATAW fd;
+  HANDLE h = FindFirstFileExW((p + L"\\*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, 0);
+  if (h != INVALID_HANDLE_VALUE) {
+    do {
+      if (wcscmp(fd.cFileName, L".") && wcscmp(fd.cFileName, L"..")) remove_tree_no_follow(p + L"\\" + fd.cFileName);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+  }
+  RemoveDirectoryW(p.c_str());
+}
+
+// Removes staging folders left behind by an interrupted update (only Cue's own, by their name).
+void remove_stale_staging(const std::wstring& dir) {
+  WIN32_FIND_DATAW fd;
+  HANDLE h = FindFirstFileExW((dir + L"\\.cue-install-*").c_str(), FindExInfoBasic, &fd, FindExSearchNameMatch, nullptr, 0);
+  if (h == INVALID_HANDLE_VALUE) return;
+  std::vector<std::wstring> stale;
+  do {
+    if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) stale.push_back(dir + L"\\" + fd.cFileName);
+  } while (FindNextFileW(h, &fd));
+  FindClose(h);
+  for (auto& p : stale) remove_tree_no_follow(p);
 }
 
 std::vector<std::wstring> read_manifest(const std::wstring& dir) {
@@ -377,6 +401,7 @@ void install(Job& job) {
     }
   }
   FileTransaction transaction(job.dir, work);
+  transaction.remove_tree = [](const fs::path& p) { remove_tree_no_follow(p.wstring()); };
   auto stage = [&](const fs::path& rel, const unsigned char* data, size_t size) {
     std::error_code ec;
     fs::create_directories(transaction.staged(rel).parent_path(), ec);
