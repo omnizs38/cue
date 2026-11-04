@@ -393,7 +393,7 @@ The phone remote, and more.
 First public release. The 1.1.x beta numbers below were internal builds before it; they are older than 1.1.
 
 - Five languages across the app, installer, and uninstaller: Brazilian Portuguese, English, Spanish, French, and Simplified Chinese. Automatic Windows display-language matching, saved manual selection, live switching, and pixel fallback glyphs.
-- Native installer, shortcuts, Windows uninstall integration, and GitHub update checks every 15 days with SHA-256 download verification.
+- Native installer, shortcuts, Windows uninstall integration, and GitHub update checks every 15 days with SHA-256 download verification. (Later shortened to every three days; see 1.2.)
 - Four-screen onboarding for Cue, ambient lighting, interface size, and upcoming features.
 - Four adaptive interface sizes (small, medium, large, larger), with medium selected for fresh installations; consistent width/DPI scaling and a stacked vertical-video layout.
 - Minimal playback controls with volume, speed, ±15-second seek, repeat, subtitles, conditional audio-track selection, and fullscreen.

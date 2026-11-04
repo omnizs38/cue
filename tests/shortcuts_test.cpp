@@ -16,7 +16,8 @@
 
 static void settle(PlayView& p, double& t) { for (int i = 0; i < 40; ++i) { t += 1.0 / 60; p.tick(t, 1.0 / 60); } }
 
-int main() {
+int main(int argc, char** argv) {
+  std::filesystem::path exe = argc > 0 ? argv[0] : "";
   int sheets = 0, two_cols = 0;
   for (int lang = 0; lang < i18n::kLangCount; ++lang)
     for (double scale : {1., 1.5, 2., 2.5, 3.})
@@ -116,7 +117,8 @@ int main() {
   // the engine's picture: the black and white pass, and the keys routed back from the engine's
   // window too (after a click on the picture it has the keyboard)
   {
-    std::ifstream sh("src/win/blur_shader.h"), app("src/win/app.cpp");
+    std::filesystem::path root = std::filesystem::absolute(exe).parent_path().parent_path().parent_path();
+    std::ifstream sh(root / "src/win/blur_shader.h"), app(root / "src/win/app.cpp");
     std::stringstream a, b; a << sh.rdbuf(); b << app.rdbuf();
     assert(a.str().find("//!PARAM mono") != std::string::npos && a.str().find("//!WHEN mono 0 >") != std::string::npos);
     // the cover keeps its colours: the pass leaves out what the (tilted) cover covers
