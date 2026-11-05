@@ -59,3 +59,10 @@ Cue's code is **GPL-3.0-or-later**. Fonts and third-party components retain thei
 Corresponding playback engine sources are provided as `Cue-1.2.3-Engine-Source.zip` on the [release page](https://github.com/tinypeep/cue/releases/tag/v1.2.3).
 
 Forks and modified builds: [NOTICE](NOTICE.md) · [Branding and build identity](docs/BRANDING.md).
+
+
+## Support Cue
+
+If Cue has found a place on your desktop, you can support its development with a coffee. Every contribution is optional and helps keep the project going.
+
+<a href="https://buymeacoffee.com/tinypeep"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy me a coffee" width="180"></a>
