@@ -59,3 +59,10 @@ O código do Cue usa **GPL-3.0-or-later**. Fontes e componentes de terceiros man
 As fontes correspondentes ao motor estão em `Cue-1.2.3-Engine-Source.zip`, na [página da versão](https://github.com/tinypeep/cue/releases/tag/v1.2.3).
 
 Forks e versões modificadas: [NOTICE](NOTICE.md) · [Identidade e branding](docs/BRANDING.md).
+
+
+## Apoie o Cue
+
+Se o Cue ganhou um lugar no seu desktop, você pode apoiar seu desenvolvimento com um café. Toda contribuição é opcional e ajuda a manter o projeto.
+
+<a href="https://buymeacoffee.com/tinypeep"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Apoie o Cue no Buy Me a Coffee" width="180"></a>
