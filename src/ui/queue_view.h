@@ -13,8 +13,9 @@ class QueueView {
   enum class Action { None, Close, Add, Folder, Clear, Play, Remove, Move };
   struct Event { Action action=Action::None; uint32_t id=0; int index=0; };
   static constexpr int kHeader=32, kFooter=28, kRow=46;  // art px
+  static constexpr int kRowCompact=24;  // the mini player's card: one line per song (art px)
   // The panel height (art px) that shows `count` rows, before the window clamps it.
-  static int natural_height(size_t count,size_t max_rows=6) { return kHeader+kFooter+2+(count?(int)std::max<size_t>(2,std::min(max_rows,count))*kRow:64); }
+  static int natural_height(size_t count,size_t max_rows=6) { return kHeader+kFooter+2+(count?(int)std::max<size_t>(2,std::min(max_rows,count+1))*kRow:64); }
   void sync(const std::vector<QueueEntry>& items,uint64_t revision);
   void layout(int width,int height,double scale);
   void opened();
@@ -32,7 +33,7 @@ class QueueView {
   void wheel(double direction);
   bool held() const { return pressed_!=-1; }
   bool dragging() const { return drag_id_!=0; }
-  bool over_grip() const { return mx_<int(22*s_)&&hit(mx_,my_)>=0; }
+  bool over_grip() const { return mx_<int(grip_w()*s_)&&hit(mx_,my_)>=0; }
   uint32_t thumbnail_request() const;
   void thumbnail(uint32_t id,const std::vector<uint32_t>& pixels);
   bool album() const { return album_; }
@@ -40,8 +41,20 @@ class QueueView {
   // where the song's own title stands above it)
   void set_bare(bool bare) { if(bare!=bare_) {bare_=bare;frame_s_=0;reshape();} }
   bool bare() const { return bare_; }
+  // Compact (bare only): the mini player's card. One line per song at the card's own type size: a
+  // small cover, the title, the artist dimmed beside it ("Artist - Title" file names are read as
+  // such), so the list reads like the card's words instead of a smaller copy of the full list
+  void set_compact(bool compact);
+  bool compact() const { return compact_; }
   // (one more row: the list's last line adds songs, by a click or by dropping files on it)
-  static int bare_height(size_t count,size_t max_rows) { return (int)std::max<size_t>(2,std::min(max_rows,count+1))*kRow+4; }
+  // (an empty list: its line that adds songs alone, over the footer)
+  static int bare_height(size_t count,size_t max_rows,bool compact=false) { return (int)(count==0?1:std::max<size_t>(2,std::min(max_rows,count+1)))*(compact?kRowCompact:kRow)+4+(compact?0:kFooter); }
+  // "Artist - Title" (a file name or a tag line): the title and who, when the name says; else the
+  // whole name is the title and the artist is empty
+  static void split_artist_title(const std::string& name,std::string& title,std::string& artist);
+  // a title without the uploads' labels at its end ("(audio)", "[Official Video]", "(320 Kbps)"):
+  // the card's narrow rows give the room to the song's own name (the file keeps its name)
+  static std::string plain_title(std::string title);
   // Files are being dragged over the window: the add row says "drop to add" and comes into view.
   void set_dropping(bool on) { if(on!=dropping_) {dropping_=on;if(on)scroll_.target=max_scroll();} }
   bool dropping() const { return dropping_; }
@@ -61,9 +74,13 @@ class QueueView {
   bool open_=false,last_paused_=false;
   bool album_=false;  // every row is music: square covers and a tighter text column
   bool bare_=false;
+  bool compact_=false;
   bool dropping_=false;
   double drop_k_=0,drop_t_=0;  // the drop invitation's fade and its slow breath
-  Rect add_row() const;        // bare: the row after the songs, in panel coordinates
+  Rect add_row() const;        // the row after the songs, in panel coordinates
+  bool add_row_on() const;
+  void draw_add_row(Canvas& list);
+  void draw_footer(Canvas& c,bool rules);
   double count_age_=1,empty_age_=1;
   std::string old_count_;
   void reshape();
@@ -86,7 +103,8 @@ class QueueView {
   double grab_=0,scroll_grab_=0;
   bool keyboard_=false;
   int control_=0;
-  int row_h() const { return std::max(1,(int)std::lround(kRow*s_)); }
+  int row_h() const { return std::max(1,(int)std::lround((compact_?kRowCompact:kRow)*s_)); }
+  int grip_w() const { return compact_?8:22; }  // art px from the row's left where a press only drags
   double max_scroll() const;
   int hit(int x,int y) const;
   int index(uint32_t id) const;
@@ -97,4 +115,7 @@ class QueueView {
   void scrollbar();
   Rect button(int n) const;
   void draw_item(Canvas& c,Item& item,int y,bool floating,bool paused,int current);
+  void draw_compact(Canvas& c,Item& item,int y,bool floating,bool paused,int current);
+  Rect cover_box(const QueueEntry& entry,int y) const;  // where a row's cover or preview goes
+  void draw_picture(Canvas& c,const QueueEntry& entry,const Rect& image,bool played);
 };

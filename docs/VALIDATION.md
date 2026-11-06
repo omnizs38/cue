@@ -360,6 +360,285 @@ Run these on Windows with the release build:
 76. **The subtitle's hand.** Point at a subtitle with the style panel open. Expected: the hand
    is about the size of the arrow.
 
+77. **A bar that fits.** Narrow a film's window slowly from wide to small. Expected: repeat and up
+   next go first, the volume line shortens, speed and audio leave, the volume becomes an icon
+   (a click opens a column upward), subtitles last; play never moves off the centre; nothing
+   flickers when the window stops at an edge; everything that left is in "..."'s first row.
+78. **Vertical video.** Open a phone video. Expected: two rows (controls, timeline), no third.
+79. **Mini player.** Right-click a film > mini player (or Ctrl+M). Expected: the item sits under
+   its own line in the menu; a small window in the bottom-right corner, with subtitles readable;
+   its bar holds play, volume (a click opens the column upward), the timeline, back to full size
+   and "..."; no ambient light while it is small. Drag it to the middle of the screen and let
+   go: it stays there. Let go a finger's width from a corner: it glides into it. Drag it to the
+   top or a side of the screen: Windows' Snap does not resize it. Click another app: it goes
+   behind; pin it: it stays above, and the next mini player starts pinned. Esc: back to the normal
+   window (a second Esc goes home). Play a 4K film in it for ten minutes while working in another
+   app: no stutter; cue.log says "mini player off (N late or dropped frames)" and no "engine:"
+   lines about underruns.
+80. **Super resolution.** On an RTX PC, with RTX Video Super Resolution on in the NVIDIA app,
+   play a 720p or 1080p film full screen on a larger screen. Expected: the NVIDIA app reports it
+   active; cue.log says "super resolution on". A 1440p or 4K film: never. With it off in the
+   NVIDIA app: no change at all.
+81. **Smooth motion.** A 24 fps film with a slow pan on a 60 Hz screen (also a 4K one). Expected:
+   "smooth motion" in "..." is off; turn it on: cue.log says "smooth motion on (23.976 fps on 60.00
+   Hz)" and the next "video ..." line says "sync display-resample"; the pan moves in even steps.
+   A 60 fps video, or a 144 Hz screen: the row is absent.
+82. **Music and the taskbar.** Play a song, minimize and restore Cue twenty times, quickly and
+   slowly. Expected: the sound never stops, not even for a moment.
+83. **Square music windows.** A song in a square window. Expected: the title and artist under
+   the cover; the spectrum's wings whole inside the window; no black band at any edge.
+84. **Small music windows.** Narrow a song's window. Expected: the bar shrinks to previous, play,
+   next, the timeline, volume and "...", centred, and grows with the window; full screen and
+   repeat wait in "...". A wide, short window: no dark band on the left. Resize the window, then
+   play the next song: the window keeps its size.
+85. **Moving the bar.** "Without background" on: drag the bar from a gap between its buttons to
+   the bottom-left corner: it goes there; a click in the same gap pauses. A phone video in a
+   narrow window: drag the bar left and let go, then widen the window: the bar is centred.
+87. **Into the mini player.** Ctrl+M on a 4K film and on a song, with a menu open just before.
+   Expected: the picture breaks into pixels where it is, then the small window flies into the
+   corner, sharp before it lands; never the big frame squeezed into the small window, a cut
+   picture or black edges. Ctrl+M again (and the arrow at the top-left, and from a maximized
+   window): the small window breaks up drifting toward its old place and opens there out of the
+   pixels. In the mini player F, a double-click and ? do nothing; "..." has no "back to full size".
+   Pin on: drag from the picture and from the bar's empty places: it moves.
+88. **A song's mini player.** Expected: a card about twice as wide as tall: the cover on the left,
+   no spectrum wings, the title, artist and list at the top beside it, the timeline and volume ·
+   previous · play · next · "..." at the foot, level with the cover; the song's light behind it.
+   The cover does not tilt under the pointer. "N tracks": the list opens in the column, readable,
+   on the song playing, the words stepping aside. Skip to the next song: still the card, no
+   spectrum, a light quick dissolve. Drag a corner:
+   it keeps its shape within its sizes.
+89. **Small music windows.** A song in a portrait window (600 x 1200) and a small landscape one.
+   Expected: cover, words and bar as one group a little above the middle, the bar right under the
+   words (no hole), staying up while the pointer rests.
+90. **Jumps without a pop.** A song with a steady tone: click ahead on the timeline ten times,
+   press the arrows. Expected: no pop, no stall; the sound comes back softly at the new place.
+91. **The light and the window.** Ambient light on, a film: drag the window around: the light
+   moves with it, never goes out. Drag an edge: the light goes at once, no outline of it stays;
+   let go: it comes back around the new size.
+92. **The smallest window.** A film: narrow and shorten the window as far as it goes. Expected: it
+   stops while the bar still leaves room for the picture; a song stops a little smaller.
+95. **A long title, wide window.** A song with a long title in a 16:9 window, then resize it.
+   Expected: the composition of 1.2.3 (the light all the way to the right edge, no black fade
+   beside the title); the title ends in "..." only at the window's edge.
+93. **The data folder.** Update a Cue 1.2.3 that has settings. Expected: after the first start,
+   `%APPDATA%\tinypeep\Cue` holds state.json, cue.log and the shader cache (recents, positions,
+   language kept), `%APPDATA%\tinyoffice\Cue` is gone; Cue is still the default player where it
+   was. Uninstall without keeping settings: both folders gone.
+94. **Saving under an antivirus.** Use Cue for an hour with Windows Defender on. Expected: no
+   "could not save state" in cue.log.
+86. **A small log.** Use Cue for a day. Expected: cue.log grows by a few lines per film (start,
+   video, smooth motion, mini player, bye), never past 256 KB; a log whose first line is more
+   than 5 days old is gone after the next start.
+
+96. **Into the mini player and back, one movement.** A 4K film, a 1080p film and a song, in a
+   normal and a maximized window, Ctrl+M then Esc, five times each, also quickly in and straight
+   out. Expected: in, the picture shrinks continuously from the window into its corner, still
+   playing, and lands sharp with a little settle; out, it opens out to the old place and size
+   (maximized again). Never a blink, a black or stretched picture, a frame of the big bar in the
+   small window, square corners for more than the flight, or a second window in Alt+Tab or the
+   taskbar. cue.log: no error. On a PC where it cannot (remote desktop), the plain flight.
+97. **Songs in the card.** In the card, next, previous, a song from the list, the phone's next,
+   and a song that ends, ten times quickly. Expected: the cover turns away and the next turns in;
+   never the spectrum's wings, a black room, the whole scene small, or the old cover flat for a
+   moment; the sound fades out the old song and starts the new one at once, never silent, never
+   a click; the room's light crosses to the new cover's colours. Leave the card on a song opened
+   there: the full player shows its cover without the spectrum until the next song.
+98. **The card's list and menu.** On 100%, 150% and 200% screens, open the card's list and
+   "...", move and resize the card, open them again. Expected: one line per song at the size of
+   the artist line, a click on a row's cover plays it, the dots at its left drag it; the menu as
+   big as the card's words, before and after the move.
+99. **The halo past the screen's edge.** A film with the ambient light, drag the window half past
+   the left (then right, top) edge, let go, and drag it back; also across to a second monitor.
+   Expected: the halo is whole around the window on the way back and on the other monitor, never
+   cut on a straight line inside the screen.
+
+100. **No outline in the mini player's flight.** A film into the mini player and back, on Windows 11
+   (light and dark accent colours). Expected: the flying picture has no grey 1 px frame at any
+   point; the window that lands has none either.
+101. **Opening a film in its own shape.** From the home, open a 16:9 film, then a 2.39:1 film,
+   then a vertical phone video, each from a window of another shape; also in 4K. Expected: the
+   black window takes the film's shape first, then the picture opens in its pixel ellipse,
+   centred on the picture, without a stutter; a film opened maximized or in full screen opens at
+   once.
+102. **Full screen without the L.** Enter and leave full screen (F, double-click) from a window in
+   the middle of the screen, from a maximized window and on a second monitor, with a film and with
+   music. Expected: the screen goes black in one step and the picture comes back out of the pixels;
+   no frame shows a black L over the desktop or the desktop through the new size.
+103. **Music in a strip.** A song with a cover; drag the window into a wide, short strip (about
+   4:1, and 5:1), then back to 16:9. Expected: the cover and its wings in the left half, the
+   title, artist and "N tracks" from the middle, level with the cover; no black bars beside the
+   picture (the window around it takes the room's far light, in the cover's colours, grey in
+   black and white); the change glides.
+104. **One list, everywhere.** The album's list beside the cover (a roomy window), in a strip and in
+   a small window (the popover). Expected: the same rows, the same last line ("add tracks / or
+   drag them here") and the same footer (+ files, + folder, clear) in all of them.
+105. **Settings.** "..." > settings: point at each row. Expected: the picture at the top shows that
+   setting at work (the light off and on, a pan with and without smoothing, the bar at the size
+   pointed at, the bar with and without its sheet, the language in itself) with one line that says
+   what it does; a short window shows the settings without the picture. The language list opened
+   from Settings comes back to Settings (its arrow and Esc).
+106. **Full screen, again.** As 102, with the pin on as well, on a 4K screen at 150%. Expected:
+   not one frame of the desktop or a black L between the window and full screen.
+107. **Music's Settings and list.** A song: "..." ends with settings; Settings starts with the
+   looks (pictures for each), the right-click menu has no looks. Open the list in a roomy window,
+   a strip, a small window and a tall one. Expected: never a popup; over the cover the cover dims
+   and comes back when the list closes; in a tall window the title stays about the cover's width.
+108. **The card's flip.** Next and previous in the card, several times, on 60 and 144 Hz. Expected:
+   the cover turns out and in without a jump at the start of the turn-in.
+109. **The card at 60.** A song in the card: hover the cover, open and close the list, skip songs
+   several times. Expected: every movement is smooth; the turn starts as soon as the song does.
+110. **The list in every window.** A song with a short title ("DNA") and a long one; open the list
+   in a roomy window, a wide one, a strip, small, tall, square and narrow windows. Expected: never
+   a popup; beside the words the picture slides left to make room; over the cover, no band where
+   the picture ends.
+111. **Tight subtitles.** Line spacing at -16 with two-line subtitles in each typeface, with and
+   without background. Expected: lines close, accents and descenders never cut.
+112. **The list's header.** A song with a cover and an album; open the list in a small, a tall, a
+   square and a narrow window, and close it. Expected: the cover glides into the header's thumbnail
+   (and back), its words beside it, the list under it and the bar under the list, the group centred
+   when the list is short; no wings or lit box round the thumbnail.
+113. **The turn, once more.** As 108 and 109, at 60 and 144 Hz. Expected: one continuous turn
+   through the edge, no stop at edge-on, a small overshoot as it lands.
+114. **Settings on the sheet.** Open Settings for a film and for a song, in a roomy and a short
+   window. Expected: the same black sheet as the other menus, no grey blocks; a hairline between
+   the groups; the segmented choices readable.
+115. **The spectrum back from the card.** Cover and spectrum look: a song in the full player, go to
+   the mini player, skip a few songs (and back), return to the full player; skip again. Expected:
+   no spectrum or black flash in the card at any skip; back in the full player the spectrum is
+   there at once, on the song that was playing and on the next ones; the sound never stops.
+116. **The music player.** A song with a cover in a maximized window, a 16:9 window, a wide strip and
+   a tall one, with and without the bar's background. Expected: maximized and 16:9, the cover in the
+   middle, its words under it, the bar along the foot with the timeline over the buttons; the
+   list's button shows the number of songs; opening the list glides the cover and its words to the
+   left half and the list fills the right; closing it glides them back. Strip and tall as before.
+117. **The card.** A song in the mini player at its smallest and largest sizes, at 100% and 150%.
+   Expected: the words at the cover's top, the controls at its foot; the time ends where "..."
+   ends; play/pause shows no sign over the cover; opening the list moves previous/play/next down
+   beside the volume, smoothly.
+118. **The card's turn, drawn by Cue.** Next and previous in the card, quickly and slowly, with a
+   cover and with a song without one, pinned and not, at 60 and 144 Hz. Expected: one smooth turn,
+   no step at any point, no flash of the old cover or a missing one at the start or the end, no
+   change in the shadow's darkness; the window dragged during a turn: the turn ends at once,
+   cleanly.
+119. **The film's mini player.** Expected: no bar behind the controls; two rows (volume, back, play,
+   forward, "..."; the timeline with both times); the full player's bar with its background again
+   when it comes back.
+120. **Settings, short windows.** Settings for a song and a film in a short, wide window. Expected:
+   the picture beside the settings, large, the two states one over the other, its words under it.
+121. **The room.** A song with a colourful cover in a maximized and a 16:9 window. Expected: the
+   cover's colours over the whole window, the same left and right of the cover, no band where the
+   picture ends; under the bar a little darker.
+122. **The list, level.** Open the list in a maximized window with 3 and with 20 songs. Expected: a
+   short list stands level with the cover and its words; a long one fills the height.
+123. **Settings' examples.** Open Settings: no picture. Press the i: the picture appears and
+   follows the pointer; close Cue and open it again: still on. Resize the window while Settings is
+   open, in a short window: the rows never cover the picture.
+124. **The turn's shadow.** Skip songs in the card on a light cover. Expected: the shadow turns with
+   the cover, never doubled or missing at the start or the end; skipping right after a song
+   starts and a second later both turn through the edge without stopping.
+125. **Wide, centred.** Make the music window very wide and short (split). Expected: the cover with
+   its wings and the words beside it centred together, the same margin left and right.
+126. **The card's words.** A song in the card: the title close above the artist, a size smaller
+   than before, nothing cut at the smallest card.
+127. **Mini subtitles.** A film with three subtitle tracks in the mini player: the subtitles entry
+   opens the short panel; the arrows go round the tracks; the three sizes grow the subtitles in
+   the mini player only (back in the full player: the size as before); close and reopen Cue:
+   the size is kept. The panel never covers the bar.
+128. **Home.** Hover each recent: the highlight has the same air above and below its lines, and
+   left and right. Open "···": its right edge under the "···", the icons on one column; open
+   the languages in the smallest window: every language inside the window.
+129. **Skipping songs.** In the full music player (with and without the bar's background), skip
+   songs quickly, then resize the window while skipping. Expected: the bar never moves or
+   changes between songs; after a resize it is centred again.
+130. **Music bar with background.** The compact bar like a film's, centred under the cover's
+   words, the list's count as a small tag beside its icon (also with 100 songs: "99+").
+131. **Mini player, quick look.** Right click on a film's mini player: nothing opens. Its "...":
+   no up next. Near a song's end in the card or an episode's end in the film's: no notice.
+132. **Mini subtitles.** With three subtitle tracks, the arrows change the subtitle on screen
+   each time, and the name follows.
+133. **Home, centred.** Maximized and in a small window: the eyes block and the list have the
+   same margin left and right, and both sit on the window's middle.
+134. **List count.** Music with 4 songs: "≡ 4" on the list button, the number the icon's height;
+   with 120 songs: "99+", nothing touching repeat.
+135. **Clearing music's list.** Open the list beside the cover and clear it. Expected: the list
+   closes; no popover over the cover.
+136. **Mini player, cover.** Look "spectrum alone", go to the mini player, skip a song. Expected:
+   the card shows the cover; back in the full player the next song has the spectrum alone.
+137. **Music light.** Settings for a song: no ambient light switch; the room's light is on (off
+   with the cover alone). For a film the switch and the strength are there.
+138. **About.** Settings > about Cue: it opens where Settings was, as wide, above the bar; its
+   back arrow returns to Settings.
+139. **Empty music list.** Clear the list beside the cover, close it, open it again: the same
+   place, one line "add tracks / or drop them here" (a click opens the files), "+ files", "+ folder".
+140. **Card, spectrum alone.** Look "spectrum alone", a song playing, go to the mini player:
+   the card shows the cover at once (no cut in the sound), no spectrum anywhere in the card, the
+   room's light round it; skip: it turns, still no spectrum; back to the full player: the spectrum.
+141. **Survey.** Start with `--survey` (or a week after installing): on the home, the card in the
+   corner, writing twice then resting; "responder" opens tally.so/r/8NzQZA, "não, obrigado"
+   closes it; restart: never again. A file opened straight from Explorer: no card.
+142. **Picking a song.** Music's list open beside the cover (and in the card): click another song.
+   Expected: it plays, the list stays open, its row lit; Esc closes it. A film's up next: picking
+   an episode closes the list.
+143. **Card at large sizes.** Settings > interface "maior" (and "grande"), a song in the mini
+   player: the card keeps a mini player's size, the title and the artist whole above
+   previous · play · next, nothing under the window's buttons; resize it to its smallest: the
+   same. Ctrl + / Ctrl − in the mini player: the card's window does not change.
+144. **Settings' examples.** A fresh state: Settings opens with the picture on top. At "maior"
+   (2560x1440, 1920x1080): the picture on top or beside the rows, never missing while there is
+   room; change the size with Settings open: the layout is decided again. The "i" hides and shows
+   the pictures. The music looks' pictures stay inside their frame at 2.5x, 3.5x and 4.5x.
+145. **Credits.** Settings > about Cue > credits and licenses: the first page says "Cue 1.3",
+   the release v1.3 and Cue-1.3-Engine-Source.zip.
+146. **Ambient light, paused.** A film playing with the light on: pause, turn the light off, then
+   on again. Expected: it fades back in at once, still paused.
+147. **Spectrum in the card.** Look "spectrum alone", mini player, skip ten songs quickly (both
+   ways): never the spectrum behind the cover, never a black cover.
+148. **Clearing music's list.** Beside the cover and in the card: the rows leave top to bottom,
+   the list closes up round its middle, the line that adds songs fades in.
+149. **Mini player button.** A song: the button on the bar (beside shuffle) opens the card; a film:
+   no button on the bar, right-click > mini player.
+150. **Shuffle.** A list of 10 songs, shuffle on: next ten times plays every other song once;
+   previous goes back through them; repeat-all: a new order after the round; shuffle off: next
+   is the list's order again.
+151. **Shift.** Drag the bar to a side, press Shift (pointer still): it centres; move up and down
+   with Shift held and let go: it lands centred. Without the background too.
+152. **Song picked in the list.** Music in a roomy window, list open beside the cover: pick
+   another song. Expected: the cover stays in the left half, the list on the right, no moment
+   of the cover centred under the list. In the card: no films' popover while the cover turns.
+153. **Scale while music plays.** A song playing in a big window at "maior": switch to "média"
+   (and back) in Settings and with Ctrl + / Ctrl −. Expected: the title and the artist always
+   under the cover, the composition right for the new size, at once.
+154. **Interface page.** At "maior" in a window where Settings shows "interface ›": open it and
+   pick "média". Expected: all of Settings comes back with the sizes in it (if it now fits).
+155. **Smallest window.** At "maior", shrink a film's window: it gets as small as at "média".
+156. **Shuffle never ends.** A list of 3 songs, shuffle on, repeat off: next ten times. Expected:
+   it keeps playing, every song once a round.
+157. **Style at large sizes.** A film with subtitles at "grande" and "maior" (100% and 150%), CC >
+   style: the panel under the window's buttons and the back arrow, above the bar, whole; in a
+   small window it is a size smaller. The subtitle list and up next: clear of the bar.
+158. **Mini player button, film.** The film's bar has the mini player's button; narrow the window:
+   it moves into "···" first. In the mini player, "···" > back to full size.
+
+159. **Mini player at large sizes.** "maior" and "grande", a film and a song in the mini player
+   at its first size: the same size as at "média" (controls, window buttons, menus); the menus
+   (subtitles, "···", volume) at the bar's own size, whole, under the window's buttons. Larger mini
+   window: a little larger.
+160. **Opening a film.** From the home, open a 16:9 film, a 21:9 film and a phone video (rotated):
+   the window takes the shape while it loads, the opening effect starts with the first picture,
+   smooth, no second glide. cue.log: "picture opens (open N ms)"; a song: "song plays (open N ms)".
+
+## Subtitle selection follow-up — 2026-11-06
+
+- Portable regression: `subtitle_selection_test` covers full/mini A-B-A clicks before replies,
+  delayed observer updates, obsolete replies, coalesced changes, rejected commands, panel
+  close/reopen and file replacement with reused track IDs. The existing mini subtitle and
+  subtitle-list tests remain part of the full portable suite.
+- Native checks still required: embedded SRT/ASS/bitmap and external subtitles while playing
+  and paused; rapid A-B-A and next/previous cycles in both players; changing audio and
+  entering/leaving mini/fullscreen with subtitles on/off. Confirm the displayed line matches
+  the menu, playback does not jump, and toggles during transitions stay as chosen.
+
 ## Native release checks not covered by portable tests
 
 - Native thumbnail-provider availability/latency, queue drag/capture and touchpad
@@ -379,3 +658,11 @@ The installer is a release candidate pending native release checks. No native
 Windows test, real-phone test, complete security audit or legal enforceability
 review is implied. Translation catalogs are complete and visually checked;
 native-speaker review remains useful for phrasing. The GPL text is unchanged.
+
+## Restored video audio mix transition
+
+Reopen a video with two tracks mixed: expect the fullscreen pixel fade (0.11 s out, black hold during graph restoration, 0.20 s in), without changing window mode. Check paused/resumed positions, mini/fullscreen, reduced motion and failures. Manual audio changes retain their own effect. Native visual verification remains pending.
+
+## Opening follow-up
+
+Video mixes now initialize in on_preloaded; successful preload restoration skips the runtime graph rebuild. Fallback opening waits for the audio switch to complete before starting the iris. Shader-option commands allow one in flight and recompute the latest state on completion. The iris fast path uses squared distance and avoids sampling black pixels. Mask arithmetic checked across HD, 4K, 8K and portrait; existing audio mix, startup, fullscreen and subtitle regressions passed. Native shader compilation, actual 4K GPU performance and playback with restored mixes still require Windows validation; no measured FPS improvement is claimed.

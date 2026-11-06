@@ -13,6 +13,8 @@ static bool sym(HMODULE m, const char* name, F& out) {
 }
 
 bool Mpv::load(const std::wstring& dir, std::string* err) {
+  if (dll_) return true;  // already loaded: never overwrite (and leak) the module handle
+  api_ = MpvApi{};        // no dangling pointers from a previous failed load
   const wchar_t* names[] = {L"libmpv-2.dll", L"mpv-2.dll", L"mpv-1.dll", L"mpv.dll"};
   for (auto n : names) {
     std::wstring full = dir + L"\\" + n;
@@ -35,11 +37,12 @@ bool Mpv::load(const std::wstring& dir, std::string* err) {
             sym(dll_, "mpv_set_wakeup_callback", api_.set_wakeup_callback) && sym(dll_, "mpv_free", api_.free) &&
             sym(dll_, "mpv_free_node_contents", api_.free_node_contents) && sym(dll_, "mpv_hook_add", api_.hook_add) &&
             sym(dll_, "mpv_hook_continue", api_.hook_continue) && sym(dll_, "mpv_error_string", api_.error_string);
-  if (!ok) { if (err) *err = i18n::key_name(str::engine_too_old); FreeLibrary(dll_); dll_ = nullptr; return false; }
+  if (!ok) { if (err) *err = i18n::key_name(str::engine_too_old); FreeLibrary(dll_); dll_ = nullptr; api_ = MpvApi{}; return false; }
   sym(dll_, "mpv_command_ret", api_.command_ret);  // optional
+  sym(dll_, "mpv_request_log_messages", api_.request_log_messages);  // optional
   // every symbol above exists since client API 1.100 (mpv 0.28); newer options fall back by name
   unsigned long v = api_.client_api_version();
-  if (v < ((1ul << 16) | 100)) { if (err) *err = i18n::key_name(str::engine_too_old); return false; }
+  if (v < ((1ul << 16) | 100)) { if (err) *err = i18n::key_name(str::engine_too_old); FreeLibrary(dll_); dll_ = nullptr; api_ = MpvApi{}; return false; }
   return true;
 }
 
@@ -160,6 +163,9 @@ std::vector<Track> Mpv::parse_tracks(const mpv_node* n) {
     tr.albumart = node_flag(node_get(t, "albumart"));
     tr.demux_w = (int)node_int(node_get(t, "demux-w"));
     tr.demux_h = (int)node_int(node_get(t, "demux-h"));
+    if (const mpv_node* fps = node_get(t, "demux-fps"); fps && fps->format == MPV_FORMAT_DOUBLE) tr.demux_fps = fps->u.double_;
+    if (const mpv_node* par = node_get(t, "demux-par"); par && par->format == MPV_FORMAT_DOUBLE) tr.demux_par = par->u.double_;
+    if (const mpv_node* rot = node_get(t, "demux-rotation"); rot && rot->format == MPV_FORMAT_INT64) tr.demux_rotation = (int)rot->u.int64;
     tr.hearing_impaired = node_flag(node_get(t, "hearing-impaired"));
     const auto* metadata=node_get(t,"metadata");
     if(tr.title.empty()) {tr.title=node_str(node_get(metadata,"TITLE"));if(tr.title.empty())tr.title=node_str(node_get(metadata,"title"));}

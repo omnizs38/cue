@@ -1,3 +1,5 @@
+#include <fstream>
+#include <sstream>
 #include "../src/core/ui_scale.h"
 #include "../src/core/store.h"
 #include <algorithm>
@@ -67,12 +69,19 @@ int main() {
   for (bool audio : {false,true}) for (double scale : {1.,1.5,2.,2.5,3.,3.5,4.5}) for (int chip=0;chip<kUiSizes;++chip) {
     PlayView p; p.in.audio_only=audio; p.in.dur=120; p.resize(2560,1440,scale); p.reset(1);
     const auto subtitle = p.in.style;
-    p.open_panel_for_preview(3,1);
+    p.open_panel_for_preview(11,1);  // Settings
     for(int i=1;i<=45;++i) p.tick(1+i/60.,1/60.);
     p.take_actions();
     const auto& panel=p.layers[PlayView::L_PANEL];
     assert(panel.visible && panel.x>=0 && panel.x+panel.c.w<=2560);
     auto row=std::find_if(p.rows_.begin(),p.rows_.end(),[](const auto& r){return r.id==PlayView::R_UISCALE;});
+    if(row==p.rows_.end()){  // a menu too tall for the room above the bar: the sizes are one row deeper
+      auto sub=std::find_if(p.rows_.begin(),p.rows_.end(),[](const auto& r){return r.id==PlayView::R_INTERFACE;});
+      assert(sub!=p.rows_.end()&&p.settings_fold_);
+      p.panel_click((int)(sub-p.rows_.begin()),-1,0,1);
+      for(int i=1;i<=30;++i) p.tick(1+i/60.,1/60.);
+      row=std::find_if(p.rows_.begin(),p.rows_.end(),[](const auto& r){return r.id==PlayView::R_UISCALE;});
+    }
     assert(row!=p.rows_.end()&&row->parts.size()==kUiSizes);
     Rect target=row->parts[chip];
     int x=panel.x+target.cx(),y=panel.y+target.cy();
@@ -80,6 +89,21 @@ int main() {
     bool found=false;
     for (auto& a:p.take_actions()) if(a.a==PA::UiScale) {assert((int)a.v==ui_size_choice(chip));found=true;}
     assert(found); assert(p.in.style==subtitle);
+  }
+  // the smallest windows are the medium size's at every size chosen (at "maior" a film's window
+  // could not get under 1280 x 720 px at 150%); there, the larger sizes step down to fit the canvas
+  for (unsigned dpi : {96u, 120u, 144u, 168u, 192u, 288u}) {
+    const double bm = ui_base_scale(dpi, kDefaultUiSize);
+    for (int choice : {-1, 2, 0, 3}) {
+      const int cw = (int)std::lround(320 * bm), ch = (int)std::lround(180 * bm);
+      const double sc = ui_scale(dpi, cw, ch, choice);
+      assert(sc >= 1 && 320 * sc <= cw + 1e-9 && 180 * sc <= ch + 1e-9);
+      if (choice == kDefaultUiSize) assert(sc == bm);
+    }
+  }
+  {
+    std::ifstream fa("src/win/app.cpp"); std::stringstream sa; sa << fa.rdbuf();
+    assert(sa.str().find("double bs = ui_base_scale(dpi_, kDefaultUiSize);") != std::string::npos);
   }
   std::puts("UI scale: four even choices, DPI bounds, stable resize, saved preferences, all menu hitboxes at six scales in audio/video passed");
 }

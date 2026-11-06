@@ -25,7 +25,10 @@ bool cover_image(const std::string& path, std::vector<uint32_t>& px, int& w, int
 }
 
 bool decode_image(const std::string& encoded, std::vector<uint32_t>& px, int& w, int& h, int max_side, int* full_w, int* full_h) {
-  if (encoded.empty()) return false;
+  if (encoded.empty() || max_side <= 0) return false;
+  // InitializeFromMemory takes a DWORD length: a larger input would be
+  // silently truncated and decoded as a different (prefix) image.
+  if (encoded.size() > 0xFFFFFFFFull) return false;
   std::string data = encoded;
   bool ok = false;
   IWICImagingFactory* wic = nullptr;
@@ -47,15 +50,36 @@ bool decode_image(const std::string& encoded, std::vector<uint32_t>& px, int& w,
       double k = std::min(1.0, (double)max_side / std::max(fw, fh));
       UINT tw = std::max(1u, (UINT)std::lround(fw * k)), th = std::max(1u, (UINT)std::lround(fh * k));
       IWICBitmapSource* src = frame;
-      if ((tw != fw || th != fh) && SUCCEEDED(wic->CreateBitmapScaler(&scaler)) &&
-          SUCCEEDED(scaler->Initialize(frame, tw, th, WICBitmapInterpolationModeFant)))
-        src = scaler;
-      else { tw = fw; th = fh; }
-      if (SUCCEEDED(wic->CreateFormatConverter(&conv)) &&
-          SUCCEEDED(conv->Initialize(src, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom))) {
-        px.assign((size_t)tw * th, 0);
-        if (SUCCEEDED(conv->CopyPixels(nullptr, tw * 4, (UINT)(px.size() * 4), reinterpret_cast<BYTE*>(px.data())))) {
-          w = (int)tw; h = (int)th; ok = true;
+      const bool needs_scale = (tw != fw || th != fh);
+      bool scaler_failed = false;
+      if (needs_scale) {
+        // Fail closed when scaling is required but unavailable: falling back to the
+        // full frame would allocate up to 16384x16384 pixels (~1 GiB) for one crafted cover.
+        if (!SUCCEEDED(wic->CreateBitmapScaler(&scaler)) ||
+            !SUCCEEDED(scaler->Initialize(frame, tw, th, WICBitmapInterpolationModeFant)))
+          scaler_failed = true;
+        else
+          src = scaler;
+      }
+      // Defense in depth: never assign an unbounded pixel buffer. The intended
+      // output is at most max_side px a side (k scales down to it), so the
+      // pixel count can never legitimately exceed max_side^2; the absolute
+      // 67M px (~256 MiB BGRA) ceiling additionally bounds large max_side
+      // callers.
+      const uint64_t cap = std::min<uint64_t>(1ull << 26, (uint64_t)max_side * (uint64_t)max_side);
+      if (!scaler_failed && (uint64_t)tw * th <= cap) {
+        if (SUCCEEDED(wic->CreateFormatConverter(&conv)) &&
+            SUCCEEDED(conv->Initialize(src, GUID_WICPixelFormat32bppBGRA, WICBitmapDitherTypeNone, nullptr, 0, WICBitmapPaletteTypeCustom))) {
+          try {
+            px.assign((size_t)tw * th, 0);
+          } catch (...) {
+            px.clear();
+            for (IUnknown* u : std::initializer_list<IUnknown*>{conv, scaler, frame, dec, stream, wic}) if (u) u->Release();
+            return false;
+          }
+          if (SUCCEEDED(conv->CopyPixels(nullptr, tw * 4, (UINT)(px.size() * 4), reinterpret_cast<BYTE*>(px.data())))) {
+            w = (int)tw; h = (int)th; ok = true;
+          }
         }
       }
     }
@@ -97,16 +121,26 @@ std::string cover_key(const std::string& path) {
 std::mutex g_cover_mu;
 std::deque<std::pair<std::string, std::shared_ptr<CoverJob>>> g_covers;  // newest first
 constexpr size_t kCoversKept = 4;
+// Weak entries reuse work already owned by the player/prefetch without retaining any images.
+struct ArtRequest {
+  std::weak_ptr<CoverJob> cover;
+  std::weak_ptr<CoverArtJob> job;
+  int side;
+};
+std::deque<ArtRequest> g_art_requests;
+
 }  // namespace
 
 std::shared_ptr<CoverJob> request_cover(const std::string& path) {
   if (path.empty()) return {};
   try {
     const std::string key = cover_key(path);
+    // Lookup and insertion share one lock: concurrent callers cannot start
+    // duplicate reads for the same file between the lookup and the cache insertion.
+    std::unique_lock<std::mutex> lock(g_cover_mu);
     if (!key.empty()) {
-      std::lock_guard<std::mutex> lock(g_cover_mu);
       for (size_t i = 0; i < g_covers.size(); ++i)
-        if (g_covers[i].first == key) {  // already read (or being read): shared, never read twice
+        if (g_covers[i].first == key) {
           auto job = g_covers[i].second;
           g_covers.erase(g_covers.begin() + (ptrdiff_t)i);
           g_covers.emplace_front(key, job);
@@ -115,10 +149,10 @@ std::shared_ptr<CoverJob> request_cover(const std::string& path) {
     }
     auto job = std::make_shared<CoverJob>();
     if (!key.empty()) {
-      std::lock_guard<std::mutex> lock(g_cover_mu);
       g_covers.emplace_front(key, job);
       while (g_covers.size() > kCoversKept) g_covers.pop_back();
     }
+    lock.unlock();
     std::thread([job, path] {
       HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
       try {
@@ -140,6 +174,54 @@ std::shared_ptr<CoverJob> request_cover(const std::string& path) {
           job->colors = analyze_frame(px.data(), w, h);
           job->lit = job->colors.valid;
         }
+      } catch (...) {}
+      if (SUCCEEDED(co)) CoUninitialize();
+      job->done.store(true);
+    }).detach();
+    return job;
+  } catch (...) { return {}; }
+}
+
+std::shared_ptr<CoverArtJob> request_cover_art(std::shared_ptr<CoverJob> cover, int side) {
+  if (side <= 0) return {};
+  try {
+    std::unique_lock<std::mutex> lock(g_cover_mu);
+    if (cover) for (auto it = g_art_requests.begin(); it != g_art_requests.end();) {
+      auto owner = it->cover.lock();
+      auto existing = it->job.lock();
+      if (!owner || !existing) { it = g_art_requests.erase(it); continue; }
+      if (owner == cover && it->side == side) return existing;
+      ++it;
+    }
+    auto job = std::make_shared<CoverArtJob>();
+    job->side = side;
+    if (cover) {
+      g_art_requests.push_front({cover, job, side});
+      while (g_art_requests.size() > kCoversKept) g_art_requests.pop_back();
+    }
+    lock.unlock();
+    std::thread([job, cover, side] {
+      HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+      try {
+        std::shared_ptr<const CoverArt> art;
+        if (cover) {
+          // (the song's own read, usually done by now: a little patience, never forever)
+          for (int i = 0; i < 1500 && !cover->done.load(); ++i) Sleep(2);
+          if (cover->done.load() && cover->found && !cover->bytes.empty()) {
+            std::vector<uint32_t> px;
+            int w = 0, h = 0;
+            // decoded a little larger than the card needs (scaled while decoding), then cut and
+            // brought to size in one smooth step
+            const double share = std::max(0.05, std::min(cover->w, cover->h));
+            const int max_side = std::clamp((int)std::lround(side * 2.0 / share), side, 4096);
+            if (decode_image(cover->bytes, px, w, h, max_side) && w > 0 && h > 0) {
+              auto a = std::make_shared<CoverArt>(cover_art_square(px.data(), w, h, side, cover->x, cover->y, cover->w, cover->h));
+              if (a->ok()) art = a;
+            }
+          }
+        }
+        if (!art) art = std::make_shared<CoverArt>(cover_art_tile(side));
+        job->art = std::move(art);
       } catch (...) {}
       if (SUCCEEDED(co)) CoUninitialize();
       job->done.store(true);

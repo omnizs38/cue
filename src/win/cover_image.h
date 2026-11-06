@@ -33,6 +33,17 @@ struct CoverJob {
 };
 std::shared_ptr<CoverJob> request_cover(const std::string& path);
 
+// The cover as the engine shows it in the card, `side` px a side (see core/cover_turn.h), read on a
+// worker once `cover` is read: the bars cut away, the middle square, or Cue's music tile when
+// there is no cover (cover null, or none found). For the card's turning cover.
+#include "../core/cover_turn.h"
+struct CoverArtJob {
+  std::atomic<bool> done{false};
+  std::shared_ptr<const CoverArt> art;
+  int side = 0;
+};
+std::shared_ptr<CoverArtJob> request_cover_art(std::shared_ptr<CoverJob> cover, int side);
+
 // A film's still for Windows' media card, from a small picture of the frame on screen (taken in
 // memory, never written to disk): checked that it is not a black frame, then encoded as a JPEG on
 // a worker. bytes stay empty for a dark frame.

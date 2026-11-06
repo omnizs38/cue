@@ -29,15 +29,20 @@ bool Ambient::create(HINSTANCE inst) {
   return true;
 }
 
-void Ambient::free_surfaces() {
+void Ambient::free_bitmaps() {
   for (auto& s : st_) {
     if (s.mem) DeleteDC(s.mem);
     if (s.bmp) DeleteObject(s.bmp);
     s.mem = nullptr;
     s.bmp = nullptr;
     s.bits = nullptr;
-    s.shape.clear();
+    s.w = s.h = 0;
   }
+}
+
+void Ambient::free_surfaces() {
+  free_bitmaps();
+  for (auto& s : st_) s.shape.clear();
   built_ = false;
 }
 
@@ -79,40 +84,27 @@ void Ambient::build_shape(const RECT& r, int dpi) {
   int reach = (int)std::lround(std::min(ww, wh) * 0.14);
   M_ = std::clamp(reach, MulDiv(48, dpi, 96), MulDiv(120, dpi, 96));
   C_ = corner_tuck(dpi);
-  RECT sr[4];
-  layout_strips(r, M_, sr);
-  for (int k = 0; k < 4; ++k) {
-    st_[k].x = sr[k].left; st_[k].y = sr[k].top;
-    st_[k].w = std::max(0L, sr[k].right - sr[k].left); st_[k].h = std::max(0L, sr[k].bottom - sr[k].top);
+  {
+    // the whole strips (top and bottom carry the corners and reach C_ px under the window, where
+    // Windows 11 rounds its corners; left and right sit between them, so no pixel is lit twice)
+    const int W = ww + 2 * M_, C = std::min({C_, ww / 2, wh / 2});
+    const RECT full[4] = {{0, 0, W, M_ + C}, {0, M_ + wh - C, W, M_ + wh + M_}, {0, M_ + C, M_, M_ + wh - C}, {M_ + ww, M_ + C, M_ + ww + M_, M_ + wh - C}};
+    for (int k = 0; k < 4; ++k) {
+      st_[k].fx = full[k].left; st_[k].fy = full[k].top;
+      st_[k].fw = std::max(0L, full[k].right - full[k].left); st_[k].fh = std::max(0L, full[k].bottom - full[k].top);
+      st_[k].x = st_[k].y = st_[k].w = st_[k].h = 0;
+    }
   }
   since_build_ = 0;
   rebuild_pending_ = false;
-  HDC screen = GetDC(nullptr);
-  for (auto& s : st_) {
-    if (s.w <= 0 || s.h <= 0) continue;  // entirely off screen: nothing to make
-    BITMAPINFO bi{};
-    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
-    bi.bmiHeader.biWidth = s.w;
-    bi.bmiHeader.biHeight = -s.h;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-    void* bits = nullptr;
-    s.mem = CreateCompatibleDC(screen);
-    s.bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
-    if (!s.mem || !s.bmp || !bits) { ReleaseDC(nullptr, screen); free_surfaces(); failed_ = true; return; }
-    SelectObject(s.mem, s.bmp);
-    s.bits = static_cast<uint32_t*>(bits);
-    std::memset(s.bits, 0, (size_t)s.w * s.h * 4);
-    s.shape.reserve((size_t)s.w * s.h / 2);
-  }
-  ReleaseDC(nullptr, screen);
   const double P = 2.0 * (ww + wh);
   for (int k = 0; k < 4; ++k) {
     Strip& s = st_[k];
-    for (int ly = 0; ly < s.h; ++ly)
-      for (int lx = 0; lx < s.w; ++lx) {
-        int x = s.x + lx, y = s.y + ly;
+    if (s.fw <= 0 || s.fh <= 0 || s.fw > 65535 || s.fh > 65535) continue;
+    s.shape.reserve((size_t)s.fw * s.fh / 2);
+    for (int ly = 0; ly < s.fh; ++ly)
+      for (int lx = 0; lx < s.fw; ++lx) {
+        int x = s.fx + lx, y = s.fy + ly;
         int qx = std::clamp(x, M_, M_ + ww - 1), qy = std::clamp(y, M_, M_ + wh - 1);
         double dx = x - qx, dy = y - qy;
         double u = std::sqrt(dx * dx + dy * dy) / M_;
@@ -142,25 +134,72 @@ void Ambient::build_shape(const RECT& r, int dpi) {
         else if (y >= M_ + wh) p = ww + wh + (ww - 1 - ex);
         else p = 2.0 * ww + wh + (wh - 1 - ey);
         int li = std::clamp((int)(p / P * kLut), 0, kLut - 1);
-        s.shape.push_back({(uint32_t)(ly * s.w + lx), (uint16_t)li, (uint8_t)a});
+        s.shape.push_back({(uint16_t)lx, (uint16_t)ly, (uint16_t)li, (uint8_t)a});
       }
   }
   built_ = true;
   colors_dirty_ = true;
+  RECT cut[4];
+  layout_cut(r, cut);
+  cut_surfaces(cut);
 }
 
-// Strip rects in halo coordinates (origin = player's top-left minus the reach), cut to the
-// monitor the player is on. top/bottom carry the corners and reach C_ px under the window, where
-// Windows 11 rounds its corners; left/right sit between them, so no pixel is lit twice.
-void Ambient::layout_strips(const RECT& r, int M, RECT out[4]) const {
-  int ww = r.right - r.left, wh = r.bottom - r.top, W = ww + 2 * M, C = std::min({C_, ww / 2, wh / 2});
-  RECT full[4] = {{0, 0, W, M + C}, {0, M + wh - C, W, M + wh + M}, {0, M + C, M, M + wh - C}, {M + ww, M + C, M + ww + M, M + wh - C}};
-  MONITORINFO mi{sizeof(mi)};
-  GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi);
-  RECT mon = mi.rcMonitor;
-  OffsetRect(&mon, -(r.left - M), -(r.top - M));  // into halo coordinates
-  for (int k = 0; k < 4; ++k)
-    if (!IntersectRect(&out[k], &full[k], &mon)) SetRectEmpty(&out[k]);
+// The parts of the whole strips that fall on a screen (any of them), in halo coordinates
+// (origin = the player's top-left minus the reach).
+void Ambient::layout_cut(const RECT& r, RECT out[4]) const {
+  RECT screens{GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN), 0, 0};
+  screens.right = screens.left + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+  screens.bottom = screens.top + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+  if (screens.right <= screens.left || screens.bottom <= screens.top) {  // (never: the monitor, then)
+    MONITORINFO mi{sizeof(mi)};
+    GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &mi);
+    screens = mi.rcMonitor;
+  }
+  OffsetRect(&screens, -(r.left - M_), -(r.top - M_));  // into halo coordinates
+  for (int k = 0; k < 4; ++k) {
+    const Strip& s = st_[k];
+    RECT full{s.fx, s.fy, s.fx + s.fw, s.fy + s.fh};
+    if (s.shape.empty() || !IntersectRect(&out[k], &full, &screens)) SetRectEmpty(&out[k]);
+  }
+}
+
+bool Ambient::covers(const RECT cut[4]) const {
+  for (int k = 0; k < 4; ++k) {
+    const Strip& s = st_[k];
+    if (IsRectEmpty(&cut[k])) continue;
+    if (!s.bits || cut[k].left < s.x || cut[k].top < s.y || cut[k].right > s.x + s.w || cut[k].bottom > s.y + s.h) return false;
+  }
+  return true;
+}
+
+// New surfaces for those parts of the strips; the shape (the costly part) stays as it is.
+bool Ambient::cut_surfaces(const RECT cut[4]) {
+  free_bitmaps();
+  rebuild_pending_ = false;
+  HDC screen = GetDC(nullptr);
+  for (int k = 0; k < 4; ++k) {
+    Strip& s = st_[k];
+    s.x = cut[k].left; s.y = cut[k].top;
+    s.w = std::max(0L, cut[k].right - cut[k].left); s.h = std::max(0L, cut[k].bottom - cut[k].top);
+    if (s.w <= 0 || s.h <= 0) { s.w = s.h = 0; continue; }  // entirely off screen: nothing to make
+    BITMAPINFO bi{};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = s.w;
+    bi.bmiHeader.biHeight = -s.h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    s.mem = CreateCompatibleDC(screen);
+    s.bmp = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    if (!s.mem || !s.bmp || !bits) { ReleaseDC(nullptr, screen); free_surfaces(); failed_ = true; return false; }
+    SelectObject(s.mem, s.bmp);
+    s.bits = static_cast<uint32_t*>(bits);
+    std::memset(s.bits, 0, (size_t)s.w * s.h * 4);
+  }
+  ReleaseDC(nullptr, screen);
+  colors_dirty_ = true;
+  return true;
 }
 
 // The zone colours spread around the edge, blended softly between zones (like the TV's LEDs).
@@ -231,8 +270,13 @@ void Ambient::paint(HWND owner) {
   for (auto& s : st_) {
     if (!s.bits) { if (s.wnd && IsWindowVisible(s.wnd)) ShowWindow(s.wnd, SW_HIDE); continue; }
     needs_show |= !IsWindowVisible(s.wnd);
+    // the surface is the strip's part on a screen: the shape's pixels off it are skipped
+    const int ox = s.fx - s.x, oy = s.fy - s.y;
+    const bool whole = ox == 0 && oy == 0 && s.w == s.fw && s.h == s.fh;
     for (const Px& q : s.shape) {
-      s.bits[q.idx] = tint_[(size_t)q.lut * 256 + q.a];
+      const unsigned px = (unsigned)(q.x + ox), py = (unsigned)(q.y + oy);
+      if (!whole && (px >= (unsigned)s.w || py >= (unsigned)s.h)) continue;
+      s.bits[(size_t)py * s.w + px] = tint_[(size_t)q.lut * 256 + q.a];
     }
     POINT dst{rect_.left - M_ + s.x, rect_.top - M_ + s.y}, src{0, 0};
     SIZE sz{s.w, s.h};
@@ -249,21 +293,38 @@ void Ambient::follow(HWND owner, bool defer_geometry) {
   if (alpha_ <= 0.001 || !built_) return;
   RECT r = visible_rect(owner);
   if (r.right - r.left != rect_.right - rect_.left || r.bottom - r.top != rect_.bottom - rect_.top) {
-    if (defer_geometry) { rebuild_pending_ = true; return; }
+    // a new size: the halo of the old one would stay behind as a frame around nothing, so it
+    // goes at once; it is rebuilt for the new size and fades back in when the edge is let go
+    if (defer_geometry) { alpha_ = 0; hide(); last_a_ = -1; rebuild_pending_ = true; return; }
     alpha_ = 0;
     build_shape(r, GetDpiForWindow(owner));
     paint(owner);
     return;
   }
-  // moved: same halo, just somewhere else. If the monitor now cuts it differently, it is
-  // rebuilt a moment later (never on every step of a drag)
-  RECT sr[4];
-  layout_strips(r, M_, sr);
-  for (int k = 0; k < 4; ++k)
-    if (sr[k].left != st_[k].x || sr[k].top != st_[k].y || sr[k].right - sr[k].left != st_[k].w ||
-        sr[k].bottom - sr[k].top != st_[k].h)
-      rebuild_pending_ = true;
+  // moved: same halo, just somewhere else. When the screens now show a part its surfaces do not
+  // hold (a window coming back from past an edge), new surfaces are cut at once from the shape
+  // (no recomputing it): while it is dragged, the whole strips, so the rest of the drag needs
+  // nothing more; settled, only what is on a screen. Surfaces bigger than needed are trimmed a
+  // moment after it settles (never on every step of a drag).
+  RECT cut[4];
   rect_ = r;
+  layout_cut(r, cut);
+  if (!covers(cut)) {
+    if (defer_geometry) {
+      for (int k = 0; k < 4; ++k) {
+        const Strip& s = st_[k];
+        if (s.shape.empty()) SetRectEmpty(&cut[k]);
+        else cut[k] = {s.fx, s.fy, s.fx + s.fw, s.fy + s.fh};
+      }
+    }
+    if (!cut_surfaces(cut)) return;
+    rebuild_pending_ = defer_geometry;
+    paint(owner);
+    place(owner, false);
+    return;
+  }
+  for (int k = 0; k < 4; ++k)
+    if (cut[k].right - cut[k].left != st_[k].w || cut[k].bottom - cut[k].top != st_[k].h) rebuild_pending_ = true;
   place(owner, false);
 }
 
@@ -305,15 +366,20 @@ bool Ambient::update(HWND owner, const Rgb* zones, const double* light, bool vis
   }
   rect_ = r;
   since_build_ += dt;
-  if (rebuild_pending_ && since_build_ > 0.15 && !defer_geometry) {
-    build_shape(r, GetDpiForWindow(owner));
-    paint(owner);
+  if (rebuild_pending_ && since_build_ > 0.15 && !defer_geometry && !held_) {  // (never mid-drag: when it is let go)
+    // the same shape, cut again to what the screens show now (the costly shape is not redone)
+    RECT cut[4];
+    layout_cut(r, cut);
+    since_build_ = 0;
+    if (cut_surfaces(cut)) { paint(owner); place(owner, false); }
     return moving;
   }
   int a = blend();
   // T_POLL is 33 ms: allow timer jitter rather than accidentally painting every
   // second tick when 33 ms falls just short of 33.333 ms.
-  if (colors_dirty_ && (since_paint_ >= 1.0 / 30 - 0.002 || last_a_ < 0)) paint(owner);
+  // (hidden, its colours the same: painted anyway, since painting is what shows the strips. A
+  // paused film turned the light off and on again used to keep it hidden until the next frame)
+  if ((colors_dirty_ && since_paint_ >= 1.0 / 30 - 0.002) || last_a_ < 0) paint(owner);
   else if (a != last_a_) {
     // only the fade changed: no new pixels, just the strips' overall opacity
     BLENDFUNCTION bf{AC_SRC_OVER, 0, (BYTE)a, AC_SRC_ALPHA};

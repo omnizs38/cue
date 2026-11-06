@@ -34,7 +34,7 @@ size_t App::queue_add(const std::vector<std::string>& paths,bool replace) {
 
 // A file that is gone (deleted, moved, a drive unplugged) is skipped at once with a word about
 // it, and leaves the list: nothing waits on it.
-void App::queue_play(uint32_t id) {
+void App::queue_play_now(uint32_t id) {
   for(int guard=0;guard<(int)MediaQueue::kLimit;++guard) {
     const auto* item=queue_.get(id); if(!item)return;
     const std::string path=item->path;
@@ -90,7 +90,16 @@ void App::queue_folder(const std::string& path,bool replace,bool from_remote) {
   HANDLE worker=CreateThread(nullptr,0,scan_folder,context,CREATE_SUSPENDED,nullptr);
   if(!worker) {delete context;say(tr(str::notice_open_failed));queue_notice(tr(str::notice_open_failed),3);return;}
   SetThreadPriority(worker,THREAD_PRIORITY_BELOW_NORMAL);
-  folder_scan_=job; ResumeThread(worker); CloseHandle(worker);
+  if(ResumeThread(worker)==(DWORD)-1) {
+    // The thread never ran: terminate the suspended worker, release the job
+    // it owned, and do not leave folder_scan_ waiting on a scan that cannot
+    // finish (the timer would spin on a job that never becomes done).
+    TerminateThread(worker,0);
+    CloseHandle(worker);
+    delete context;
+    say(tr(str::notice_open_failed));queue_notice(tr(str::notice_open_failed),3);return;
+  }
+  folder_scan_=job; CloseHandle(worker);
   SetTimer(hwnd_,T_FOLDER,50,nullptr); say(tr(str::queue_reading));queue_notice(tr(str::queue_reading));
 }
 

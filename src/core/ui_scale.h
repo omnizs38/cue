@@ -79,3 +79,35 @@ inline double portrait_scale(double s, int cw, int ch, int choice) {
   double ps = std::floor(want * 2) / 2;  // whole or half art px, like the medium size
   return std::max(s, std::min(ps, s + 2));
 }
+
+// Music framed close (a small or portrait window, the stacked composition): the window's own scale
+// shrinks with a small window (the 320 x 180 canvas a film's bar needs), which left a song's few
+// controls tiny. They are given back the screen's standard size (base: what a reference window
+// gets), never more (a bigger window must not get bigger words than the wide composition shows),
+// as long as the compact bar (204 px of art) fits 80% of the width and a quarter of the height.
+constexpr int kMusicCompactW = 204;
+inline double music_compact_scale(double s, int cw, int ch, int /*choice*/, double base) {
+  if (cw <= 0 || ch <= 0) return s;
+  double fit = std::floor(std::min(cw * 0.8 / kMusicCompactW, ch / 4.0 / 38.0) * 2) / 2;
+  return std::max(s, std::min(base, fit));
+}
+
+// The mini players are laid out in art px and keep a small window at every interface size: a
+// film's needs about 288 x 162 of them (its row of controls, the timeline, the menus over the
+// picture), a song's card about 250 x 130 (its title above the playback, the controls under the
+// window's buttons). Their pixels are the chosen size's (the screen's base for it, not grown with
+// the window), stepped down by half art px until that room is there: at the large sizes the
+// controls, the window's buttons and the menus were far too big for the little window, and the
+// menus came out at another size than the bar (they had to step down on their own to fit).
+constexpr int kMiniFilmW = 288, kMiniFilmH = 162, kCardMinW = 250, kCardMinH = 130;
+inline double mini_fit(int cw, int ch, bool song) {
+  if (cw <= 0 || ch <= 0) return 99;
+  const int lo = std::min(cw, ch), hi = std::max(cw, ch);  // (a portrait film: its long side is the height)
+  const double fit = song ? std::min(cw / (double)kCardMinW, ch / (double)kCardMinH)
+                          : std::min(hi / (double)kMiniFilmW, lo / (double)kMiniFilmH);
+  return std::floor(fit * 2) / 2;
+}
+inline double mini_scale(unsigned dpi, int cw, int ch, int choice, bool song) {
+  return std::max(1.0, std::min(ui_base_scale(dpi, choice), mini_fit(cw, ch, song)));
+}
+inline double card_scale(double s, int cw, int ch) { return std::max(1.0, std::min(s, mini_fit(cw, ch, true))); }

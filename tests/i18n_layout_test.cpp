@@ -38,7 +38,7 @@ static void settle(PlayView& p, double& t) { for (int i = 0; i < 40; ++i) { t +=
 
 // Every word of a panel row fits the space the layout gave it.
 static void check_rows(PlayView& p) {
-  const double s = p.panel_==PlayView::Panel::CC?p.cc_scale_:p.s_;
+  const double s = p.panel_==PlayView::Panel::CC?p.cc_scale_:p.panel_draw_s();  // (the menu's own scale: a small window steps it down)
   const int text_col = p.icon_grid() ? 23 : 6;
   for (auto& r : p.rows_) {
     const std::string tag = "row '" + r.label + "' " + R(r.r);

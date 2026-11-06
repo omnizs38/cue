@@ -11,13 +11,13 @@ namespace {
 struct Item { str::Id title, line; };
 constexpr int kItemCount = 3;
 const Item kItems[kItemCount] = {
-    {str::news_mono_title, str::news_mono_line},
-    {str::news_keys_title, str::news_keys_line},
+    {str::news_mini_title, str::news_mini_line},
+    {str::news_bar_title, str::news_bar_line},
     {str::news_fixes_title, str::news_fixes_line},
 };
 constexpr int kCols = 18, kRows = 14;  // icon cells, 1.5 art px each (like the welcome's)
 inline int icon_cell(double s) { return std::max(1, (int)std::lround(1.5 * s)); }
-// '#' drawing; '*' a sparkle that blinks. Icons 0 (black and white: a cover and its wings) and 1 (a key) are drawn in code.
+// '#' drawing; '*' a sparkle that blinks. Icons 0 (the mini player) and 1 (a bar that fits) are drawn in code.
 const char* kIcons[kItemCount][kRows] = {
     {"..................", "..................", "..................", "..................", "..................",
      "..................", "..................", "..................", "..................", "..................",
@@ -188,40 +188,34 @@ void NewsView::draw_icon(Canvas& c, int which, int x, int y, Rgb ink, double a, 
       c.fill(x + xx * ic, y + yy * ic, ic, ic, ink, a * ca);
     }
   if (which == 0) {
-    // black and white: a little cover (a sky in bands, a sun) that keeps its colours, between two
-    // spectrum wings whose colour drains away row by row and comes back
-    static const Rgb band[4] = {{255, 150, 90}, {236, 96, 128}, {132, 88, 210}, {58, 150, 220}};
-    auto grey = [](Rgb c) { auto l = (uint8_t)std::lround(c.r * 0.2126 + c.g * 0.7152 + c.b * 0.0722); return Rgb{l, l, l}; };
-    for (int yy = 3; yy < 11; ++yy)
-      for (int xx = 5; xx < 13; ++xx) {
-        bool sun = (xx - 10) * (xx - 10) + (yy - 5) * (yy - 5) <= 2;
-        c.fill(x + xx * ic, y + yy * ic, ic, ic, sun ? Rgb{255, 236, 170} : band[std::min(3, (yy - 3) / 2)], a);
-      }
-    double cyc = reduce_motion() ? 0.5 : std::fmod(std::max(0.0, now), 4.0) / 4.0;
-    double sweep = cyc < 0.5 ? ease_out(clamp01(cyc / 0.35)) : 1 - ease_out(clamp01((cyc - 0.5) / 0.35));
-    int drained = (int)std::lround(sweep * 12);  // rows from the top that have lost their colour
-    static const int lens[12] = {1, 2, 2, 3, 4, 4, 4, 3, 3, 2, 1, 1};  // each row's bar, out from the cover
-    for (int yy = 1; yy < 13; ++yy) {
-      Rgb col = band[std::min(3, (yy - 1) / 3)];
-      if (yy - 1 < drained) col = grey(col);
-      for (int k = 0; k < lens[yy - 1]; ++k) {
-        c.fill(x + (3 - k) * ic, y + yy * ic, ic, ic, col, a);   // the left wing grows to the left
-        c.fill(x + (14 + k) * ic, y + yy * ic, ic, ic, col, a);  // the right one to the right
-      }
-    }
+    // the mini player: a screen, and the picture gliding from its middle to a corner and back
+    const int sx = 1, sy = 1, sw = 16, sh = 11;
+    for (int xx = sx; xx < sx + sw; ++xx) { c.fill(x + xx * ic, y + sy * ic, ic, ic, ink, a * 0.55); c.fill(x + xx * ic, y + (sy + sh - 1) * ic, ic, ic, ink, a * 0.55); }
+    for (int yy = sy; yy < sy + sh; ++yy) { c.fill(x + sx * ic, y + yy * ic, ic, ic, ink, a * 0.55); c.fill(x + (sx + sw - 1) * ic, y + yy * ic, ic, ic, ink, a * 0.55); }
+    c.fill(x + 7 * ic, y + 12 * ic, 4 * ic, ic, ink, a * 0.55);  // its foot
+    double t = reduce_motion() ? 1.0 : std::fmod(std::max(0.0, now), 3.6) / 3.6;
+    double k = t < 0.5 ? ease_out(clamp01((t - 0.08) / 0.3)) : 1 - ease_out(clamp01((t - 0.58) / 0.3));
+    // big in the middle (10 x 6) to small in the corner (5 x 3), on whole cells
+    int pw = (int)std::lround(10 - 5 * k), ph = (int)std::lround(6 - 3 * k);
+    int px = (int)std::lround(4 + (sx + sw - 2 - pw - 4) * k), py = (int)std::lround(3 + (sy + sh - 2 - ph - 3) * k);
+    c.fill(x + px * ic, y + py * ic, pw * ic, ph * ic, p.pixel, a);
   } else if (which == 1) {
-    // a key with a question mark on it, pressed now and then (it springs back)
-    double t = reduce_motion() ? 0.0 : std::fmod(std::max(0.0, now), 1.7);
-    int down = t > 1.25 && t < 1.43 ? 1 : 0;
-    int kx = x + 3 * ic, ky = y + (1 + down) * ic, kw = 12 * ic, kh = 10 * ic;
-    c.fill(kx + ic, ky, kw - 2 * ic, ic, ink, a);                // the cap's outline, corners cut
-    c.fill(kx + ic, ky + kh - ic, kw - 2 * ic, ic, ink, a);
-    c.fill(kx, ky + ic, ic, kh - 2 * ic, ink, a);
-    c.fill(kx + kw - ic, ky + ic, ic, kh - 2 * ic, ink, a);
-    if (!down) c.fill(kx + ic, ky + kh, kw - 2 * ic, ic, ink, a * 0.35);  // its depth, gone when pressed
-    const char* q = "?";
-    int gw = text_w(q, s);
-    text(c, q, kx + (kw - gw) / 2, ky + (kh - (int)std::lround(12 * s)) / 2 + (int)std::lround(0.5 * s), s, p.pixel, a);
+    // a bar that narrows and widens: its buttons step aside, play stays in the middle
+    double t = reduce_motion() ? 0.0 : std::fmod(std::max(0.0, now), 3.2) / 3.2;
+    double k = t < 0.5 ? ease_out(clamp01((t - 0.1) / 0.3)) : 1 - ease_out(clamp01((t - 0.6) / 0.3));
+    int half = (int)std::lround(6 - 2 * k);  // 6 cells each side, wide; 4 narrow (its dots stay inside the icon)
+    const int cx = 8, top = 3, h = 7;
+    for (int xx = cx - half; xx < cx + half; ++xx) { c.fill(x + xx * ic, y + top * ic, ic, ic, ink, a * 0.55); c.fill(x + xx * ic, y + (top + h - 1) * ic, ic, ic, ink, a * 0.55); }
+    for (int yy = top; yy < top + h; ++yy) { c.fill(x + (cx - half) * ic, y + yy * ic, ic, ic, ink, a * 0.55); c.fill(x + (cx + half - 1) * ic, y + yy * ic, ic, ic, ink, a * 0.55); }
+    c.fill(x + (cx - 1) * ic, y + (top + 2) * ic, 2 * ic, 3 * ic, p.pixel, a);  // play
+    double side = clamp01(1 - k * 1.6);  // the outer buttons fade as the bar narrows
+    for (int d : {-4, -2, 2, 4}) {
+      bool outer = d == -4 || d == 4;
+      if (cx + d < cx - half + 1 || cx + d >= cx + half - 1) continue;
+      c.fill(x + (cx + (d > 0 ? d : d - 1)) * ic, y + (top + 2) * ic, ic, 3 * ic, ink, a * (outer ? side : 1.0));
+    }
+    // "...", under the bar's end, where what left the bar waits: it appears as the bar narrows
+    for (int d = 0; d < 3; ++d) c.fill(x + (cx + half - 6 + 2 * d) * ic, y + (top + h + 2) * ic, ic, ic, ink, a * k);
   }
 }
 

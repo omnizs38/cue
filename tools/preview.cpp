@@ -44,7 +44,8 @@ int main(int argc, char** argv) {
   { i18n::Lang l = i18n::Lang::PtBR; if (const char* e = std::getenv("CUE_LANG")) i18n::parse_tag(e, l); i18n::set_language(l); }
   std::string out = argc > 1 ? argv[1] : "out";
   int s = argc > 2 ? std::atoi(argv[2]) : 2;
-  int W = 480 * s, H = 270 * s;
+  // optional window size in art px (argv 3 and 4): a maximized window, an ultrawide
+  int W = (argc > 3 ? std::atoi(argv[3]) : 480) * s, H = (argc > 4 ? std::atoi(argv[4]) : 270) * s;
   HomeView hv;
   hv.set_size(W, H, s);
   hv.set_rows({{"Cena de exemplo", "faltam 41 min", 0.51, "vídeo"},
@@ -63,6 +64,37 @@ int main(int argc, char** argv) {
   hv.render(c, now); save(c, out + "/home-hover.png");
   hv.mouse_leave(now);
   run(hv, now, 0.6);
+  // the ··· menu next to Recentes
+  {
+    const Rect d = hv.dots_rect();
+    hv.mouse_move(d.x + d.w / 2, d.y + d.h / 2, now);
+    run(hv, now, 0.3);
+    hv.mouse_down(d.x + d.w / 2, d.y + d.h / 2, now);
+    run(hv, now, 0.4);
+    hv.render(c, now); save(c, out + "/home-menu.png");
+    hv.key("esc", false, now);
+    hv.mouse_leave(now);
+    run(hv, now, 0.6);
+  }
+
+  // the survey's invitation: the card in the corner, a few frames of its little scene
+  {
+    hv.survey = true;
+    run(hv, now, 0.6);
+    for (double at : {0.3, 0.9, 1.6, 2.4, 3.1}) {
+      run(hv, now, at - (at == 0.3 ? 0 : 0));
+      hv.render(c, now);
+      char nm[64]; std::snprintf(nm, sizeof nm, "/home-survey-%.1f.png", at);
+      save(c, out + nm);
+    }
+    const Rect g = hv.survey_answer_rect();
+    hv.mouse_move(g.x + g.w / 2, g.y + g.h / 2, now);
+    run(hv, now, 0.4);
+    hv.render(c, now); save(c, out + "/home-survey-hover.png");
+    hv.mouse_leave(now);
+    hv.survey = false;
+    run(hv, now, 0.6);
+  }
 
   hv.drag_over(W * 0.8, H * 0.2, now);
   run(hv, now, 0.6);

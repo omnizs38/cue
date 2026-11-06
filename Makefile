@@ -69,6 +69,12 @@ build/setup/stub.exe: $(SETUP_OBJ)
 	$(CXX) $(SETUP_OBJ) -o $@ $(LDFLAGS) $(SETUP_LIBS)
 
 setup: build/Cue/Cue.exe build/setup/stub.exe
+	@# (the documents again: they were copied only when Cue.exe was linked, so an edit to them
+	@# alone reached the installer late)
+	cp docs/LICENSES.md build/Cue/LICENSES.md && cp docs/ASSETS.md build/Cue/ASSETS.md && cp docs/SECURITY.md build/Cue/SECURITY.md
+	cp res/sources-README.txt build/Cue/sources/README.txt
+	cp LICENSE COPYRIGHT.md NOTICE.md docs/BRANDING.md docs/VALIDATION.md build/Cue/ && cp docs/*.md build/Cue/docs/
+	cp -r third_party/libmpv/README.txt third_party/libmpv/SOURCES.md build/Cue/third_party/libmpv/
 	python3 tools/make_setup.py build/Cue build/setup/stub.exe dist/Cue-$(VERSION)-Setup.exe
 
 clean:

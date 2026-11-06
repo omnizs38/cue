@@ -23,6 +23,8 @@
 #include "../ui/play.h"
 #include "../ui/atmosphere.h"
 #include "ambient.h"
+#include "flight_ghost.h"
+#include "cover_turn_window.h"
 #include "mpv.h"
 #include "thumbhost.h"
 #include "platform.h"
@@ -38,6 +40,11 @@
 #include "taskbar_buttons.h"
 #include "overlay.h"
 #include "../ui/news_view.h"
+
+// cue.log: opened (and cleared when older than 5 days) at start; buffered lines reach the disk
+// together. crashing: from the crash handler (never waits on the lock).
+void cue_log_open(const std::filesystem::path& dir);
+void cue_log_flush(bool crashing = false);
 
 class App {
  public:
@@ -109,6 +116,60 @@ class App {
   double last_tick_ = 0, home_paint_at_ = -1;
   FrameCadence animation_cadence_;
   VsyncPacer pacer_;              // display-locked ticks (SetTimer only as a fallback)
+  // the mini player: a small window in a corner of the screen, above everything; the window's
+  // place, size and pin before it are given back when it ends (and saved instead of the mini's)
+  // the picture's helpers: super resolution (decided when a film opens) and smoothing
+  double video_fps_ = 0;
+  std::string smooth_logged_;  // the last smoothing line written to cue.log
+  bool smooth_on_ = false;     // smoothing is on for this film (it needs display-resample timing)
+  bool sync_decided_ = false;  // this film's timing has been chosen (decide_window)
+  std::string sync_sent_;      // the film's timing as last sent (file-local, reset per file)
+  void send_sync();
+  bool vsr_on_ = false;
+  void apply_smooth();
+  bool mini_player_ = false;
+  bool mini_was_pinned_ = false;
+  bool wing_sent_ = false;
+  double words_w_seen_ = -2;    // the words' width the wide composition was last centred on      // the card's wings-out pass was asked for
+  bool resizing_ = false;       // an edge is held (a move alone keeps the light around the window)
+  bool mini_drag_ = false;      // the mini window is being moved by the person (size held)
+  SIZE mini_drag_size_{};
+  POINT mini_grab_{};
+  double mini_drops_ = 0;
+  int engine_warns_ = 0;        // engine warnings written to cue.log for this file       // late or dropped frames when the mini player began (cue.log)
+  RECT mini_keep_place(double ar) const;
+  SIZE mini_client(bool smallest) const;
+  void mini_settle();
+  // the flight into the mini player and back, in three steps: 0 the picture breaks into pixels
+  // where it is (and, out of the mini player, flies toward its old place), 1 out of sight while
+  // the window takes its new size, 2 back in sight, landing (into the corner) as it comes sharp
+  // ghost: the flight is a live picture of the window (FlightGhost) that shrinks or grows from
+  // where the window was to where it lands, the window already there out of sight; from, to: the
+  // picture's rects on screen. Without a ghost, the plain flight (out of sight while it changes
+  // size, then a spring into the corner)
+  struct MiniFx { bool on = false, cloaked = false, entering = false, ghost = false; int stage = 0; double t0 = 0, rise = 0.14, dur = 0.45, hold = 0.08; RECT to{}, from{}, gto{}; } mini_fx_;
+  FlightGhost ghost_;
+  StageCover stage_cover_;  // black over the screen while full screen changes the window's size
+  RECT client_screen() const;  // the client area on screen
+  bool cloaked_ = false;
+  void set_cloak(bool on);
+  struct SeekFade { int stage = 0; double t0 = 0; std::vector<std::string> cmd; } seek_fade_;  // 1 out, 2 jumped, 3 in
+  void seek_soft(std::vector<std::string> cmd);
+  bool step_seek_fade(double t);
+  bool start_mini_fx(bool entering);
+  void end_mini_fx(bool apply = true);  // apply: a switch still pending happens now (else it is dropped)
+  void mini_switch(bool entering);  // the mini player on or off, the window at its new size  // false: no pixels (Windows' animations off, another effect running)
+  bool step_mini_fx(double t);
+  bool keep_music_window_ = false;  // a song after a song: the window keeps the person's size
+  WINDOWPLACEMENT mini_restore_{sizeof(WINDOWPLACEMENT)};
+  void enter_mini();
+  void exit_mini(bool animate);
+  RECT mini_rect(double ar, int corner) const;
+  RECT mini_place(int cw, int ch, int corner) const;  // corner: 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+  int mini_corner() const;                      // the screen corner the mini window is nearest
+  double mini_aspect() const;
+  void set_pin(bool on);
+  bool was_iconic_ = false;  // the last WM_SIZE minimized the window
   double click_activated_t_ = 0;  // when a mouse click last activated the window (0: not by a click)
   double play_interval_ = 1.0 / 60;  // overlay uploads: a divisor of the refresh rate, at most ~90 Hz
   void refresh_display_rate();
@@ -124,6 +185,7 @@ class App {
   void update_blur_cloud();
   std::string cloud_options_;
   FrameCadence cloud_cadence_;
+  bool cloud_inflight_ = false;
   bool cloud_pending_ = false;
   std::array<Ov, PlayView::L_COUNT> ov_;
 
@@ -142,7 +204,7 @@ class App {
     bool muted = false, log = false;
   } engine_cfg_;
   HANDLE engine_thread_ = nullptr, engine_go_ = nullptr;
-  bool engine_log_ = false, engine_failed_ = false;
+  bool engine_log_ = false, engine_failed_ = false;  // --log: routine steps too (see trace)
   bool maintenance_started_ = false;
   double open_started_ = 0;
   static DWORD WINAPI engine_main(void* self);
@@ -165,6 +227,11 @@ class App {
   void music_album_queue();
   void music_fit_window();
   const MediaQueue::Item* queue_following() const;
+  // shuffle (music): the deck of songs still to come this round, and the way back
+  bool shuffle_on() const;
+  void shuffle_reset();
+  const MediaQueue::Item* shuffle_previous() const;
+  mutable ShuffleDeck shuffle_;
   bool hidden_ = false;   // covered by another app's full-screen window (or on another desktop)
   int hidden_poll_ = 0;
   bool covered() const;
@@ -215,7 +282,7 @@ class App {
   uint32_t queue_thumb_id_=0;
   bool queue_thumb_timer_=false;
   size_t queue_add(const std::vector<std::string>& paths, bool replace = false);
-  void queue_play(uint32_t id);
+  void queue_play(uint32_t id);  // (in the card, through the cover's turn: flip_)
   struct FolderScan {
     std::atomic<bool> cancelled{false}, done{false};
     std::string path;
@@ -310,14 +377,67 @@ class App {
   double light_kick_[4]{};       // the corners' light, kicked in turn by the beats
   int light_rings_ = 0;
   bool lit_sent_ = false;
+  // song to song: the room's light keeps the last colours and crosses to the new cover's when
+  // they are read (it used to go black and fade in again from nothing)
+  bool room_kept_ = false;
+  Rgb light_pal_from_[8]{}, light_pal_to_[8]{};
+  double pal_t0_ = -1;
+  // A song opening after a song: from the request until the engine has read the new file, the
+  // picture on screen is still the last song's. Its shader passes (the wings' mask, the room's
+  // light, the cover) and its framing stay as they were sent, instead of falling back for that
+  // moment to the bare scene: the spectrum's wings, a black room, the picture unframed.
+  bool music_gap_ = false;
+  double music_gap_t_ = 0;
+  std::string music_opts_;          // the music passes' part of the shader options, as last sent
+  void begin_music_gap();
+  void end_music_gap();
+  void frame_plain();               // no framing in the engine (a film, or a song with no picture)
+  // the last song's masked wings stay masked until the next song's own picture is up (its first
+  // frames come a moment after the engine has read it)
+  bool wing_hold_ = false;
+  double wing_hold_t_ = 0;
+  // A song's change in the card: the cover turns away edge-on as the old song breathes out, the
+  // next one opens while it is turned, then turns in from the other side as it starts playing.
+  struct CardFlip { int stage = 0; double t0 = 0, from = 0; uint32_t id = 0; } flip_;
+  double flip_ry_ = 0;               // the turn (radians), added to the cover's tilt
+  bool card_flip_ok() const;
+  bool card_drawn() const;
+  bool survey_wanted() const;  // the survey's card on the home (see answer_survey)
+  void answer_survey(bool yes);   // the card shows a cover Cue draws (the spectrum-alone look)
+  bool sync_card_art();
+  bool step_card_flip(double t);
+  // The turn drawn by Cue itself (cover_turn_window.h): stages 1 away, 2 at the edge and turning
+  // in, 3 flat and waiting for the engine's picture, 4 the engine's cover back, 5 fading out.
+  // Falls back to the engine's own turn (flip_ry_ alone) when the window cannot be made.
+  bool list_side_seen_ = false;      // Centre: the list was open beside the cover at the last frame
+  double centre_below_seen_ = -1;    // Centre: the words' height under the cover at the last frame
+  CoverTurnWindow turn_;
+  bool turn_on_ = false;             // this flip is the window's
+  double cov_hide_ = 0;              // the engine leaves the cover out (> 0) and this much of its shadow
+  double turn_restart_t_ = -1, turn_t_ = 0;
+  RECT turn_cover_{};                // the cover on screen when the turn began (a moved window ends it)
+  std::shared_ptr<CoverArtJob> card_art_, next_art_;  // the cover in the card, and the next song's
+  std::string card_art_path_;
+  uint32_t next_art_id_ = 0;
+  struct Ahead { uint32_t id = 0; std::shared_ptr<CoverArtJob> job; } ahead_next_, ahead_prev_;  // the songs either side, read ahead
+  void card_art_prefetch();
+  bool card_cover_screen(RECT& cover, RECT& clip) const;
+  bool step_card_turn(double t);
+  void end_card_flip(bool play_pending);  // at once; a song still waiting for the turn opens (or not)
+  void queue_play_now(uint32_t id);
   SingleInstance* instance_ = nullptr;
+  Rgb backdrop_sent_{0, 0, 0};  // the window's colour around the music's picture (the engine's background-color)
+  bool backdrop_known_ = false;
+  double veil_sent_ = 0;
+  Rect list_cover_seen_{};
   bool edge_sent_ = false;  // the music picture's soft edges toward the window's black
   double light_latency_ = 0.25;  // how far the meter runs ahead of the speakers
   bool step_music_light(double dt);
   // the lock screen's and the volume flyout's media card (Windows' media controls)
   MediaControls media_controls_;
   bool media_attached_ = false;
-  std::string media_key_;        // the file and words last sent
+  std::string media_key_;        // file whose card words were parsed
+  bool media_words_audio_ = false;
   std::shared_ptr<CoverJob> media_cover_job_;
   std::shared_ptr<CardStillJob> media_still_job_;
   std::string media_title_, media_sub_;
@@ -339,6 +459,8 @@ class App {
   bool geometry_query_dirty_=false;
   void request_video_geometry();
   void video_geometry_reply(const mpv_event* event);
+  bool open_timed_ = false;     // the song's opening time logged
+  VideoShape early_shape_{};  // the film's shape from its file, before its first picture (0: unknown)
   bool geom_done_ = true;          // this file's adaptation already happened (or is not wanted)
   bool user_sized_ = false;        // the person resized during this media: respect it
   bool auto_portrait_ = false;     // the current portrait shape came from us
@@ -348,6 +470,9 @@ class App {
   SIZE landscape_size_{0, 0};      // last landscape window size, to come back to
   // kind: 0 a shape change, 1 growing into fullscreen, 2 coming back out of it
   struct GeomAnim { bool on = false; RECT from{}, to{}; double t0 = 0, dur = 0.26; int kind = 0; } geom_;
+  double geom_end_t_ = -10;    // when the last window glide landed
+  double first_frame_t_ = -1;  // when this file's first frame was up
+  bool window_settled() const;  // the window has its shape for this file (the iris may open)
   void begin_fullscreen_motion();
   // fullscreen zoom, drawn by the compositor (see begin_fullscreen_motion)
   struct FullscreenZoom {
@@ -369,6 +494,9 @@ class App {
   bool sub_edit_resume_ = false;
   bool step_sub_fx(double t, double dt);
   double scale_for(int cw, int ch, int choice) const;  // DPI + window + choice
+  double play_scale(int choice) const;                 // the player's: portrait and music framed close raise it
+  void rescale();   // a new interface scale: laid out again as for a new size
+  void relayout();  // the window's size or scale changed: everything measured in them, music's framing too
   void refresh_ui_scale();
   std::pair<double, double> sub_center_out() const;
   void set_snap(double dark, double px, double gray);
@@ -463,6 +591,7 @@ class App {
     int stage = 0, retries = 0;
     double at = 0, position = 0;
     bool paused = false, dirty = false;
+    bool opening_mix = false;  // restore saved video audio with the fullscreen visual transition
     bool reopen = false;  // music: the song is opened again at the same moment, not rebuilt
     std::string graph;
     int64_t track = 0;
@@ -471,6 +600,9 @@ class App {
   void audio_switch_restart();
   void cancel_audio_switch();
   int64_t sid_reselect_ = 0;  // a subtitle track taken again after an audio change
+  void select_subtitle(int64_t id);
+  void subtitle_selection_reply(uint64_t request, int error);
+  void set_subtitle_visibility(bool visible);
   void refresh_subtitles();
   int64_t aid_reselect_ = 0;  // a track being chosen again after a mix (its passing "no" is ignored)
   void clear_audio_mix();
@@ -501,4 +633,5 @@ class App {
   void mouse_button(int which, bool down, int x, int y);  // coordinates at the event, in Play mode
   POINT cursor_client() const;
   void log(const std::string& msg);
+  void trace(const std::string& msg);  // a routine step: written only with --log
 };

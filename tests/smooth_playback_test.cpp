@@ -23,7 +23,23 @@ int main() {
   std::string size = body(s, "case WM_SIZE: {", "apply_window_corners();");
   assert(size.find("T_POLL") != std::string::npos);
   assert(size.find("vf") == std::string::npos && size.find("video-sync") == std::string::npos && size.find("update_music_idle") == std::string::npos);
-  assert(s.find("@cueidle") == std::string::npos && s.find("\"file-local-options/vf\"") == std::string::npos);
+  assert(s.find("@cueidle") == std::string::npos);
+  // music never stops: the sound keeps a generous queue, and a window back from the taskbar at
+  // its own size rebuilds nothing (no engine window resize, no overlay re-upload)
+  assert(s.find("o(\"audio-buffer\", \"0.25\");") != std::string::npos);
+  {
+    std::string restore = body(s, "if (was_iconic_) {", "apply_window_corners();");
+    assert(restore.find("return 0;") != std::string::npos && restore.find("SetWindowPos") == std::string::npos &&
+           restore.find("upload_overlays") == std::string::npos && restore.find("play_.resize") == std::string::npos);
+  }
+  // the only picture filter is super resolution, set once while the engine prepares the file
+  // (its preload hook), never while a film plays
+  {
+    size_t first = s.find("\"file-local-options/vf\"");
+    assert(first == std::string::npos || s.find("\"file-local-options/vf\"", first + 1) == std::string::npos);
+    std::string prep = body(s, "void App::configure_audio_mode() {", "if (!audio_only_) return;");
+    if (first != std::string::npos) assert(prep.find("\"file-local-options/vf\"") != std::string::npos && prep.find("@cuevsr:d3d11vpp") != std::string::npos);
+  }
   // a film switches its timing only under a full-screen window (as before 1.2.3), never minimized
   std::string idle = body(s, "void App::update_music_idle()", "void App::set_hidden(bool h)");
   assert(idle.find("hidden_now()") == std::string::npos && idle.find("&& hidden_;") != std::string::npos);

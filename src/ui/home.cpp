@@ -6,8 +6,14 @@
 #include "../core/i18n.h"
 
 namespace {
-constexpr int kRowPitch = 30;  // art px: a title, its quiet line and a progress rule
-constexpr int kRowH = 28;
+// art px: a title, its quiet line and a progress rule, with air between entries (the hover's
+// rounded box keeps 4 px around the words)
+constexpr int kRowPitch = 38;
+constexpr int kRowH = 33;
+constexpr int kTitleGap = 24;  // "Recentes" to its first entry
+// the ··· menu: the player's menus (rows of 13 px plus their breath, a hairline between groups)
+constexpr int kMenuRow = 18, kMenuRule = 9, kMenuInset = 4;
+const std::vector<int> kMenuProfile = {2, 1};
 constexpr int kMaxRows = 6;
 constexpr double kEggDur[5] = {0, 5.4, 4.6, 5.4, 3.6};
 // which surprises were seen: Christmas uses its own bits (5..7), so the old ones never count
@@ -31,38 +37,56 @@ void HomeView::set_rows(std::vector<HomeRow> r) {
 void HomeView::layout() {
   const int W = w / s, H = h / s;
   // the composition keeps its proportions on wide or huge windows: it never spreads past
-  // 700 px of art and stays centred (ultrawide, 1440p, 4K at 100% look like a poster, not a sparse grid)
-  // (756 = 700 + 8%: the home holds its own beside the player's full-window picture)
+  // 700 px of art (756 = 700 + 8%: the home holds its own beside the player's full-window picture)
   const int CW = std::min(W, 756), ox = (W - CW) / 2;
   const int split = (int)std::lround(CW * 0.42);
   double scale = std::clamp(std::min(CW, H * 16 / 9) / 180.0 * 1.08, 1.34, 3.6);
-  face.layout((ox + split * 0.56) * s, (H * 0.47) * s, s, std::round(scale * 3) / 3.0);
+  const double fscale = std::round(scale * 3) / 3.0;
+  // two blocks, the eyes with "open a file" under them and the recent files, laid out on the
+  // composition's own proportions, then centred in the window as one group: the same air left
+  // and right of the group (from the eyes or the line under them, whichever is wider, to the end
+  // of the list), each block's middle on the window's middle
+  const int iw = 11 + 6 + text_w(tr(str::home_open_file), 1);
+  const double cx0 = ox + split * 0.56;
+  const double half = std::max(11 * fscale, iw / 2.0);   // the eyes reach 8 + 3 cells of `scale`
+  int x0 = ox + (int)std::lround(CW * 0.49);
+  int x1 = ox + CW - (int)std::lround(CW * 0.09);
+  const double left = cx0 - half, right = x1;
+  const int dx = (int)std::lround(((W - right) - left) / 2.0);
+  const double cx = cx0 + dx;
+  x0 += dx; x1 += dx;
+  // the eyes and their line: from the eyes' top (6 cells above the face's centre) to the line's
+  // baseline (its text box top + 10): the face's centre 12 px above the window's middle
+  const double cy = H / 2.0 - 12;
+  face.layout(cx * s, cy * s, s, fscale);
   face.max_look = 3.0 * face.scale / 1.5;
 
   // micro-instruction button under the eyes
-  int iw = 11 + 6 + text_w(tr(str::home_open_file), 1);
-  int ix = (int)std::lround(ox + split * 0.56 - iw / 2.0);
+  int ix = (int)std::lround(cx - iw / 2.0);
   int iy = (int)std::lround(face.eye_y() / s + 9 * face.scale + 14);
   r_open_ = {(ix - 5) * s, (iy - 3) * s, (iw + 10) * s, 18 * s};
 
   // Recentes column
-  int x0 = ox + (int)std::lround(CW * 0.49);
-  int x1 = ox + CW - (int)std::lround(CW * 0.09);
   // as many entries as the window holds (two lines each); the rest wait for a larger window
-  const int fit = std::clamp((H - 64) / kRowPitch, 1, kMaxRows);
+  const int fit = std::clamp((H - 72) / kRowPitch, 1, kMaxRows);
   rows.assign(all_rows_.begin(), all_rows_.begin() + std::min((int)all_rows_.size(), fit));
   if (focus_ >= (int)rows.size() && focus_ < kOpen) focus_ = -1;
   int n = std::max(1, (int)rows.size());
-  int block = 12 + 9 + n * kRowPitch;
-  int y0 = (int)std::lround(H * 0.47 - block / 2.0 - 3);
+  int block = kTitleGap + n * kRowPitch;
+  // (seen: from the capitals of "Recentes" (2 px into its line) to the last entry's rule, or
+  // its second line where it has none, 2 px higher: the middle of the two)
+  const int seen = rows.empty() ? 21 + 10 : kTitleGap - 3 + (n - 1) * kRowPitch + 27 - 2;
+  int y0 = (int)std::lround(H / 2.0 - seen / 2.0 - 1);
   r_title_ = {x0 * s, y0 * s, (x1 - x0) * s, 12 * s};
-  r_dots_ = {(x1 - 9) * s, (y0 + 1) * s, 11 * s, 10 * s};
+  // (its dots end where the entries end, level with the middle of "Recentes")
+  r_dots_ = {(x1 - 8) * s, y0 * s, 11 * s, 10 * s};
   r_rows_.clear();
   for (int i = 0; i < (int)rows.size(); ++i)
-    r_rows_.push_back({(x0 - 5) * s, (y0 + 19 + i * kRowPitch) * s, (x1 - x0 + 10) * s, kRowH * s});
+    r_rows_.push_back({(x0 - 6) * s, (y0 + kTitleGap - 3 + i * kRowPitch) * s, (x1 - x0 + 12) * s, kRowH * s});
   r_list_ = {(x0 - 8) * s, y0 * s - 6 * s, (x1 - x0 + 16) * s, (block + 12) * s};
   layout_menu();
   layout_update();
+  layout_survey();
 }
 
 std::string HomeView::menu_label(int id) const {
@@ -89,15 +113,20 @@ void HomeView::layout_menu() {
   }
   int words = 0;
   for (int id : menu_ids_) words = std::max(words, text_w(menu_label(id), 1));
-  // like the player's menus: an icon column, 14 px rows, and the destructive entry set apart
-  const int lead = menu_lang_ ? 14 : 19, trail = menu_lang_ ? 6 : 14;  // check / icon column, chevron
-  const int rule = !menu_lang_ && !menu_ids_.empty() && menu_ids_.back() == kMenuClear ? 5 : 0;
-  const int W = std::max(96, 2 + lead + words + trail + 2), H = 4 + 14 * (int)menu_ids_.size() + rule;
+  // the player's menus: an icon column, the words on one column, rows of 18 px, the destructive
+  // entry set apart by a hairline, the same sheet and corners
+  const int lead = 23, trail = menu_lang_ ? 8 : 16;  // check / icon column, chevron
+  const int rule = !menu_lang_ && !menu_ids_.empty() && menu_ids_.back() == kMenuClear ? kMenuRule : 0;
   const int x1 = r_title_.r() / s, y0 = r_title_.y / s;
-  r_menu_ = {(x1 + 2 - W) * s, (y0 + 13) * s, W * s, H * s};
+  // a short window: the rows close up (to 14 px), then the menu rises until it fits
+  const int n = std::max(1, (int)menu_ids_.size()), room = (int)(h / s) - 6 - (y0 + 15);
+  const int row = std::clamp((room - 2 * kMenuInset - rule) / n, 14, kMenuRow);
+  const int W = std::max(150, 2 + lead + words + trail + 2), H = 2 * kMenuInset + row * n + rule;
+  const int top = std::max(4, std::min(y0 + 15, (int)(h / s) - 6 - H));
+  r_menu_ = {(x1 + 3 - W) * s, top * s, W * s, H * s};  // (its right edge under the ···'s)
   for (size_t i = 0; i < menu_ids_.size(); ++i) {
     int extra = rule && menu_ids_[i] == kMenuClear ? rule : 0;
-    r_menu_items_.push_back({r_menu_.x + 2 * s, r_menu_.y + (2 + 14 * (int)i + extra) * s, (W - 4) * s, 14 * s});
+    r_menu_items_.push_back({r_menu_.x + 2 * s, r_menu_.y + (kMenuInset + row * (int)i + extra) * s, (W - 4) * s, row * s});
   }
 }
 
@@ -106,6 +135,109 @@ void HomeView::open_menu(bool lang) {
   menu_lang_ = lang;
   layout_menu();
   if (kb_) focus_ = menu_ids_.empty() ? -1 : (lang ? kLangOpt + language + 1 : menu_ids_[0]);
+}
+
+// ── the survey's invitation ─────────────────────────────────────────
+// A small card in the bottom-right corner, the menus' own sheet: on its left a little scene (the
+// eyes over a notepad, a pencil writing three lines), the question and its two answers on the
+// right. It shows only on the home (a file opened straight away never sees it), only where it
+// covers nothing, and the scene writes twice when the card comes, then rests (and writes again
+// under the pointer): nothing moves on its own for long.
+namespace {
+constexpr int kSvPad = 10, kSvArt = 34, kSvGap = 10, kSvH = 64;  // art px
+constexpr double kSvCycle = 4.0, kSvWrite = 2.8, kSvHold = 3.4;   // a page: written, held, turned
+constexpr int kSvLines[3] = {14, 14, 9};
+bool overlaps(const Rect& a, const Rect& b) { return a.w > 0 && b.w > 0 && a.x < b.r() && b.x < a.r() && a.y < b.b() && b.y < a.b(); }
+}  // namespace
+
+void HomeView::layout_survey() {
+  r_survey_ = r_survey_go_ = r_survey_no_ = {};
+  survey_fits_ = false;
+  const int W = (int)(w / s), H = (int)(h / s);
+  const int gw = text_w(tr(str::survey_answer), 1) + 12, nw = text_w(tr(str::survey_no), 1) + 12;
+  const int tw = std::max({text_w(tr(str::survey_title), 1), text_w(tr(str::survey_body), 1), gw + nw});
+  const int cw = kSvPad + kSvArt + kSvGap + tw + kSvPad;
+  // the bottom-right corner; else the bottom-left (over the version's line, when there is one) or
+  // the middle of the foot: the first place where it covers nothing of the home's own
+  const bool line = r_update_.w > 0 || r_news_.w > 0;
+  const int ylow = H - kSvH - 14, yline = ylow - (line ? 22 : 0);
+  const std::pair<int, int> spots[] = {{W - cw - 14, ylow}, {14, yline}, {(W - cw) / 2, yline}};
+  Rect r{};
+  for (auto [x, y] : spots) {
+    if (x < 4 || y < 34) continue;
+    const Rect c{x * s, y * s, cw * s, kSvH * s};
+    // never over anything of the home's own (a short or narrow window simply goes without it)
+    const Rect room = c.grow((int)(6 * s));
+    bool clear = true;
+    for (const Rect& o : {r_list_, r_open_, face.bounds(), r_title_, r_update_, r_update_skip_, r_news_, r_news_close_})
+      if (overlaps(room, o)) { clear = false; break; }
+    if (clear) { r = c; break; }
+  }
+  if (r.w <= 0) return;
+  const int x = (int)std::lround(r.x / s), y = (int)std::lround(r.y / s);
+  r_survey_ = r;
+  const int tx = x + kSvPad + kSvArt + kSvGap;
+  r_survey_go_ = {(tx - 6) * s, (y + 41) * s, gw * s, 16 * s};
+  r_survey_no_ = {(tx - 6 + gw) * s, (y + 41) * s, nw * s, 16 * s};
+  survey_fits_ = true;
+}
+
+int HomeView::survey_step(double now) const {
+  if (survey_t0_ < 0) return -1;
+  const double e = now - survey_t0_;
+  if (e < 0 || e >= 2 * kSvCycle) return -1;
+  return (int)(e * 8);
+}
+
+void HomeView::draw_survey(Canvas& c, double now, double a) const {
+  const Palette& p = P();
+  const int S = (int)s;
+  const int rise = (int)std::lround((1 - a) * 4) * S;
+  const Rect r{r_survey_.x, r_survey_.y + rise, r_survey_.w, r_survey_.h};
+  draw_panel(c, r.x, r.y, r.w / s, r.h / s, s, {2, 1}, p.bg, a, p.edge, 0.95 * a);
+  // the scene, on the art grid: the eyes, the notepad, the pencil
+  const int bx = r.x + kSvPad * S, by = r.y + ((kSvH - kSvArt) / 2) * S;
+  auto cell = [&](int ax, int ay, int aw, int ah, Rgb col, double al = 1.0) { c.fill(bx + ax * S, by + ay * S, aw * S, ah * S, col, al * a); };
+  const int step = survey_step(now);
+  const bool writing = step >= 0;
+  const double u = writing ? std::fmod(step / 8.0, kSvCycle) : kSvWrite;  // resting: the page written
+  // the page: written up to here (the turn of a page clears it)
+  int done = 0, total = 0;
+  for (int n : kSvLines) total += n;
+  if (u < kSvWrite) done = (int)(u / kSvWrite * total); else if (u < kSvHold) done = total; else done = 0;
+  // (Cue's own eyes, square, ten apart, over a notepad half their width again)
+  cell(7, 15, 20, 17, p.pixel, 0.95);
+  cell(7, 15, 20, 1, p.dim, 0.9);  // its binding
+  int left = done, tipx = 24, tipy = 19;
+  for (int i = 0; i < 3; ++i) {
+    const int ly = 19 + 4 * i, n = std::min(left, kSvLines[i]);
+    if (n > 0) { cell(10, ly, n, 1, p.bg); tipx = 10 + n; tipy = ly; }
+    left -= n;
+  }
+  if (u >= kSvHold) { tipx = 10; tipy = 19; }
+  // the pencil: its point on the line being written, leaning up and right (a wobble as it writes)
+  const int wob = writing && u < kSvWrite && (step & 1) ? -1 : 0;
+  for (int k = 1; k <= 6; ++k) cell(tipx + k, tipy - k + wob, 1, 1, k >= 5 ? p.faint : p.dim);
+  // the eyes: on the pencil while it writes, up at the person under the pointer; a blink now and then
+  double dx = writing ? std::clamp((tipx - 17) / 5.0, -1.0, 1.0) : 0.0, dy = writing ? 1 : 0;
+  if (survey_hot_) dy = -1;
+  const bool blink = std::fmod(now, 4.6) < 0.12 || (writing && u >= kSvHold && u < kSvHold + 0.12);
+  const int ex = (int)std::lround(dx), ey = (int)std::lround(dy);
+  for (int side : {6, 22}) {
+    if (blink) cell(side + ex, 6 + ey, 6, 1, p.pixel);
+    else cell(side + ex, 3 + ey, 6, 6, p.pixel);
+  }
+  // the words and the two answers
+  const int tx = r.x + (kSvPad + kSvArt + kSvGap) * S;
+  text(c, tr(str::survey_title), tx, r.y + 9 * S, s, p.fg, a);
+  text(c, tr(str::survey_body), tx, r.y + 23 * S, s, p.dim, a);
+  const double hg = hov(kSurveyGo), hn = hov(kSurveyNo);
+  Rect go = r_survey_go_, no = r_survey_no_;
+  go.y += rise; no.y += rise;
+  if (hg > 0) c.cornered(go, s, p.hover, hg * a);
+  if (hn > 0) c.cornered(no, s, p.hover, hn * a);
+  text(c, tr(str::survey_answer), go.x + 6 * S, go.y + 3 * S, s, mix(p.fg, p.pixel, hg), a);
+  text(c, tr(str::survey_no), no.x + 6 * S, no.y + 3 * S, s, mix(p.dim, p.fg, hn), a);
 }
 
 void HomeView::layout_update() {
@@ -131,6 +263,11 @@ int HomeView::hit(int x, int y) const {
     for (size_t i = 0; i < r_menu_items_.size(); ++i)
       if (r_menu_items_[i].contains(x, y)) return menu_ids_[i];
     return kMenuPad;
+  }
+  if (survey_shown() && survey_fits_) {
+    if (r_survey_go_.contains(x, y)) return kSurveyGo;
+    if (r_survey_no_.contains(x, y)) return kSurveyNo;
+    if (r_survey_.contains(x, y)) return kSurveyPad;
   }
   if (!update_version.empty() && !update_busy) {
     if (r_update_.contains(x, y)) return kUpdate;
@@ -233,6 +370,9 @@ HomeAction HomeView::mouse_down(int x, int y, double now) {
   if (hh == kOpen) return {HomeAct::OpenDialog, -1};
   if (hh == kUpdate) return {HomeAct::Update, -1};
   if (hh == kUpdateSkip) return {HomeAct::SkipUpdate, -1};
+  if (hh == kSurveyGo) return {HomeAct::Survey, -1};
+  if (hh == kSurveyNo) return {HomeAct::SurveyClose, -1};
+  if (hh == kSurveyPad) return {};
   if (hh == kNews) return {HomeAct::News, -1};
   if (hh == kNewsClose) return {HomeAct::NewsClose, -1};
   if (hh >= 0 && hh < (int)rows.size()) return {HomeAct::OpenRecent, hh};
@@ -256,6 +396,7 @@ HomeAction HomeView::key(const std::string& k, bool shift, double now) {
   if (menu_) for (int id : menu_ids_) order.push_back(id);
   if (!update_version.empty() && !update_busy) order.push_back(kUpdate);
   if (news) { order.push_back(kNews); order.push_back(kNewsClose); }
+  if (survey_shown() && survey_fits_) { order.push_back(kSurveyGo); order.push_back(kSurveyNo); }
   auto idx = [&] { auto it = std::find(order.begin(), order.end(), focus_); return it == order.end() ? -1 : (int)(it - order.begin()); };
   if (k == "tab") {
     kb_ = true;
@@ -274,6 +415,8 @@ HomeAction HomeView::key(const std::string& k, bool shift, double now) {
     if (focus_ == kUpdate) return {HomeAct::Update, -1};
     if (focus_ == kNews) return {HomeAct::News, -1};
     if (focus_ == kNewsClose) { focus_ = -1; return {HomeAct::NewsClose, -1}; }
+    if (focus_ == kSurveyGo) { focus_ = -1; return {HomeAct::Survey, -1}; }
+    if (focus_ == kSurveyNo) { focus_ = -1; return {HomeAct::SurveyClose, -1}; }
     if (focus_ == kDots) { if (menu_) menu_ = false; else open_menu(false); }
     else if(focus_==kMenuFolder) {menu_=false;focus_=-1;return {HomeAct::OpenFolder,-1};}
     else if (focus_ == kMenuClear) { menu_ = false; focus_ = -1; return {HomeAct::ClearRecents, -1}; }
@@ -457,6 +600,28 @@ bool HomeView::tick(double now, double dt) {
   if (!notice.empty() && now > notice_until) { notice.clear(); moving = true; }
   menu_fade_.target = menu_ ? 1.0 : 0.0;
   moving |= menu_fade_.step(dt);
+  {
+    // the survey's card: in when wanted and there is room, gone as the home leaves (its place is
+    // looked at again while it is wanted: the version's line may come or go meanwhile)
+    if (survey) {
+      const Rect before = r_survey_;
+      layout_survey();
+      if (before.x != r_survey_.x || before.y != r_survey_.y) moving = true;
+    }
+    survey_vis_.target = survey && survey_fits_ && leave_t0_ <= 0 && !drag_ ? 1.0 : 0.0;
+    moving |= survey_vis_.step(dt);
+    if (survey_vis_.target > 0 && survey_t0_ < 0) survey_t0_ = now + 0.5;  // it writes once it is in
+    if (survey_vis_.target <= 0 && survey_vis_.v <= 0) survey_t0_ = -1;
+    const bool hot = survey_shown() && r_survey_.contains(mx_, my_);
+    if (hot != survey_hot_) {
+      survey_hot_ = hot;
+      moving = true;
+      if (hot && survey_step(now) < 0) survey_t0_ = now;  // resting: it writes again under the pointer
+    }
+    // (resting, a blink now and then is a frame of its own)
+    const int st = !survey_shown() ? -1 : survey_step(now) >= 0 ? survey_step(now) : std::fmod(now, 4.6) < 0.12 ? -3 : -1;
+    if (st != survey_drawn_step_) { survey_drawn_step_ = st; moving = true; }
+  }
   moving |= face.tick(now, dt);
   moving |= chrome.tick(dt);
   if (leave_t0_ > 0 && now - leave_t0_ < leave_dur() + 0.05) moving = true;
@@ -475,6 +640,15 @@ double HomeView::next_event(double now) const {
   if (egg_ || chrome.vis.v != chrome.vis.target || leave_t0_ > 0 || now - enter_t0_ < 0.45 || menu_fade_.v != menu_fade_.target || menu_fade_.v != (menu_ ? 1.0 : 0.0)) return 0;
   double t = face.next_event(now);
   if (!notice.empty()) t = std::min(t, notice_until - now);
+  if (survey_shown()) {
+    // its scene: the next of its eight frames a second while it writes; resting, the next blink
+    if (survey_vis_.v != survey_vis_.target) return 0;
+    if (survey_step(now) >= 0 || (survey_t0_ > now)) t = std::min(t, std::max(0.0, 0.125 - std::fmod(std::max(0.0, now - survey_t0_), 0.125)));
+    else {
+      const double ph = std::fmod(now, 4.6);
+      t = std::min(t, ph < 0.12 ? 0.12 - ph : 4.6 - ph);
+    }
+  }
   return std::max(0.0, t);
 }
 
@@ -658,19 +832,21 @@ void HomeView::render(Canvas& c, double now) {
     if (ha > 0) c.cornered(r, s, p.hover, ha);
     // a living entry: the title and what is left on one line, a quiet line under it (the
     // episode, or the kind of file), and the progress as a rule across the whole entry
-    int x0 = r.x + 5 * s, x1 = r.r() - 5 * s;
+    int x0 = r.x + 6 * s, x1 = r.r() - 6 * s;
     const HomeRow& row = rows[i];
-    int ty = r.y + 3 * s, sy = r.y + 14 * s;
+    // (the two lines and the rule sit in the middle of the entry: 5 px above the capitals, 5 below the rule)
+    int ty = r.y + 3 * s, sy = r.y + 15 * s;
     c.bitmap(bmp(row.audio ? "k-audio" : "k-video"), x0, ty + 2 * s, s, mix(p.dim, p.fg, ha));
     int rw = text_w(row.right, s);
     bool resumable = row.progress >= 0;
-    text(c, row.right, x1 - rw, ty, s, resumable ? mix(p.dim, p.fg, ha) : p.faint);
+    // (a line's width counts the space after its last letter: the time ends where the rule ends)
+    text(c, row.right, x1 - rw + s, ty, s, resumable ? mix(p.dim, p.fg, ha) : p.faint);
     int nx = x0 + 13 * s;
     std::string nm = fit_end(row.name, x1 - rw - 10 * s - nx, s);
     text(c, nm, nx, ty, s, mix(mix(p.dim, p.fg, 0.35), p.fg, ha));
     if (!row.sub.empty()) text(c, fit_end(row.sub, x1 - nx, s), nx, sy, s, mix(p.faint, p.dim, ha));
     if (resumable) {
-      int lw = x1 - nx, ly = r.y + 25 * s;
+      int lw = x1 - nx, ly = r.y + 27 * s;
       int pw = std::max(s, (int)std::lround(lw * std::clamp(row.progress, 0.0, 1.0) / s) * s);
       c.fill(nx, ly, lw, s, p.edge);
       c.fill(nx, ly, pw, s, on ? p.fg : p.dim);
@@ -680,20 +856,20 @@ void HomeView::render(Canvas& c, double now) {
     // it unfolds from the ···: a short fade and a 3 px drop, and leaves the same way
     double k = ease_out(menu_fade_.v);
     int dy = (int)std::lround((1 - k) * 3) * (int)s;
-    draw_panel(c, r_menu_.x, r_menu_.y - dy, r_menu_.w / s, r_menu_.h / s, s, {1}, p.sheet, k, p.edge, k);
+    draw_panel(c, r_menu_.x, r_menu_.y - dy, r_menu_.w / s, r_menu_.h / s, s, kMenuProfile, p.bg, k, p.edge, 0.95 * k);
     for (size_t i = 0; i < menu_ids_.size(); ++i) {
       int id = menu_ids_[i];
       Rect ir = r_menu_items_[i];
       ir.y -= dy;
       double ha = menu_ ? hov(id) : 0.0;
       if (ha > 0) c.cornered(ir, s, p.hover, ha * k);
-      if (id == kMenuClear && i > 0) c.fill(ir.x + 2 * s, ir.y - 3 * s, ir.w - 4 * s, s, p.edge, k);
+      if (id == kMenuClear && i > 0) c.fill(ir.x + 2 * s, ir.y - (kMenuRule / 2 + 1) * s, ir.w - 4 * s, s, p.edge, k);
       bool chosen = id >= kLangOpt && id - kLangOpt - 1 == language;
-      if (chosen) c.bitmap(bmp("check"), ir.x + 3 * s, ir.y + 4 * s, s, p.fg, k);
-      const char* ic = id == kMenuFolder ? "folder" : id == kMenuLang ? "globe" : id == kMenuRemote ? "phone" : id == kMenuClear ? "cross" : nullptr;
+      if (chosen) c.bitmap(bmp("check"), ir.x + 5 * s, ir.y + (ir.h - 5 * s) / 2 / s * s, s, p.fg, k);
+      const char* ic = id == kMenuFolder ? "cue:open-file" : id == kMenuLang ? "globe" : id == kMenuRemote ? "phone" : id == kMenuClear ? "cross" : nullptr;
       if (ic) action_icon(c, ic, {ir.x + 3 * s, ir.y, 12 * s, ir.h}, s, mix(p.dim, p.fg, ha), k);
       int ty = ir.y + (ir.h - 12 * s) / 2 + s;
-      text(c, menu_label(id), ir.x + (menu_lang_ ? 14 : 19) * s, ty, s, chosen ? p.fg : mix(p.dim, p.fg, ha), k);
+      text(c, menu_label(id), ir.x + 23 * s, ty, s, chosen ? p.fg : mix(p.dim, p.fg, ha), k);
       if (id == kMenuLang) c.bitmap(bmp("chev-right5"), ir.r() - 8 * s, ir.y + (ir.h - 5 * s) / 2 / s * s, s, mix(p.dim, p.fg, ha), k);
     }
   }
@@ -749,6 +925,9 @@ void HomeView::render(Canvas& c, double now) {
       c.bitmap(bmp("x-small"), r_news_close_.x + 5 * s, r_news_close_.y + 6 * s, s, mix(p.faint, p.fg, hs));
     }
   }
+
+  // the survey's invitation, last of the home's own (under the window's buttons and the fades)
+  if (survey_vis_.v > 0 && survey_fits_) draw_survey(c, now, ease_out(survey_vis_.v));
 
   chrome.draw(c, w);
   double ca, fa;

@@ -23,6 +23,9 @@ Cue is made by Gabriel Benzoni at .tinypeep. These people helped make it better.
   when the next file opens, keeps up next clear of the window's buttons, and brings black and
   white music and the keyboard shortcut sheet thanks to them.
 
+- **ryee123123** (GitHub): the idea of NVIDIA RTX Video Super Resolution and smoother motion,
+  in issue #14. Both arrive in Cue 1.3.
+
 ## Open-source work
 
 Cue stands on libmpv, FFmpeg and the other components, fonts and tools credited

@@ -4,6 +4,9 @@
 #include <cstdio>
 #include <cmath>
 #include <initializer_list>
+#include <fstream>
+#include <sstream>
+#include <string>
 int main() {
   MediaGeometry media;
   uint64_t stale=media.request();
@@ -31,5 +34,18 @@ int main() {
   assert(media.accept(second,{800,1200,0}));
   assert(std::abs(media.shape().aspect()-2./3)<.00001);
   assert(std::abs(VideoShape{1920,1080,270}.aspect()-9./16)<.00001);
-  puts("Media geometry: complete per-file dimensions, unchanged width/height, repeated formats, portrait/square/rotation and stale reply rejection passed");
+  // a film's window takes its shape at load, from what its file says (its size, its pixels'
+  // shape, how it is turned), not after its first picture: the picture opens with that frame
+  // instead of ~0.4 s later, and the glide is never drawn while the film plays; the engine's own
+  // measure, the same shape within rounding, changes nothing
+  {
+    std::ifstream fa("src/win/app.cpp"), fm("src/win/mpv.cpp"); std::stringstream a, m; a << fa.rdbuf(); m << fm.rdbuf();
+    const std::string s = a.str();
+    assert(m.str().find("\"demux-rotation\"") != std::string::npos && m.str().find("\"demux-par\"") != std::string::npos);
+    const size_t loaded = s.find("void App::on_file_loaded()");
+    const size_t early = s.find("decide_window();", s.find("early_shape_.width > 0", loaded));
+    assert(loaded != std::string::npos && early != std::string::npos && early < s.find("\n}\n", loaded));
+    assert(s.find("if(geom_done_ && previous>0 && std::fabs(previous-shape.aspect())<=previous*0.004) return;") != std::string::npos);
+  }
+  puts("Media geometry: complete per-file dimensions, unchanged width/height, repeated formats, portrait/square/rotation, stale reply rejection and the shape at load passed");
 }

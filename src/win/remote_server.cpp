@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
@@ -24,6 +25,7 @@
 #include "platform.h"
 #include "../core/json.h"
 #include "cover_image.h"
+#include "remote_gate.h"
 
 namespace {
 #include "remote_page.inc"
@@ -169,13 +171,7 @@ std::string make_thumb(const std::string& path, bool square) {
 std::string make_cover(const std::string& path, int n) { return make_image(path, n, n, n); }
 constexpr int kCoverPx = 72;  // shown at 2x: big, honest pixels, like the eyes it replaces
 
-struct Gate {
-  std::mutex mu;
-  std::condition_variable cv;
-  int busy = 0;
-  void enter(int limit) { std::unique_lock<std::mutex> l(mu); cv.wait(l, [&] { return busy < limit; }); ++busy; }
-  void leave() { { std::lock_guard<std::mutex> l(mu); --busy; } cv.notify_one(); }
-};
+// Gate lives in remote_gate.h so its concurrency contract is testable on its own.
 
 struct ThumbCache {
   std::mutex mu;
@@ -506,28 +502,32 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
         resp = remote::http_response(st, st == 200 ? "application/json; charset=utf-8" : "text/plain", st == 200 ? body : "");
       } else if (cover) {
         std::string img, k = lower_path(path) + "#cover";
+        bool gate_busy = false;
         if (!thumbs_ref->get(k, img)) {
-          gate_ref->enter(3);
-          struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
-          if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
-            img = make_cover(path, kCoverPx);
-            if (*generation_ref == epoch) thumbs_ref->put(k, img);
-          }
+          if (gate_ref->enter(3, generation_ref, epoch)) {
+            struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
+            if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
+              img = make_cover(path, kCoverPx);
+              if (*generation_ref == epoch) thumbs_ref->put(k, img);
+            }
+          } else if (*generation_ref == epoch) gate_busy = true;
         }
-        resp = img.empty() ? remote::http_response(404, "text/plain", "") : remote::http_response(200, "image/bmp", img);
+        resp = gate_busy ? remote::http_response(503, "text/plain", "") : (img.empty() ? remote::http_response(404, "text/plain", "") : remote::http_response(200, "image/bmp", img));
       } else if (!queue_song && (!root_of(roots_copy, path) || !remote_path_allowed(root_of(roots_copy, path)->path, path) || !remote::is_playable_name(path))) {
         resp = remote::http_response(403, "text/plain", "");
       } else {
         std::string img, k = lower_path(path);
+        bool gate_busy = false;
         if (!thumbs_ref->get(k, img)) {
-          gate_ref->enter(3);
-          struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
-          if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
-            img = make_thumb(path, remote::is_audio_name(path));  // a song: its square cover, centred
-            if (*generation_ref == epoch) thumbs_ref->put(k, img);
-          }
+          if (gate_ref->enter(3, generation_ref, epoch)) {
+            struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
+            if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
+              img = make_thumb(path, remote::is_audio_name(path));  // a song: its square cover, centred
+              if (*generation_ref == epoch) thumbs_ref->put(k, img);
+            }
+          } else if (*generation_ref == epoch) gate_busy = true;
         }
-        resp = img.empty() ? remote::http_response(404, "text/plain", "") : remote::http_response(200, "image/bmp", img);
+        resp = gate_busy ? remote::http_response(503, "text/plain", "") : (img.empty() ? remote::http_response(404, "text/plain", "") : remote::http_response(200, "image/bmp", img));
       }
       if (*generation_ref == epoch) send_all(s, resp);
       shutdown(s, SD_SEND);
@@ -798,6 +798,7 @@ void RemoteServer::stop(bool tell_phones) {
   if (!d_->running) return;
   d_->tell = tell_phones;
   ++*d_->generation;
+  d_->gate->wake_all();
   d_->quit = true;
   if (d_->th.joinable()) d_->th.join();
   closesocket(d_->lsock);
@@ -861,6 +862,7 @@ void RemoteServer::set_roots(std::vector<Root> roots) {
   std::lock_guard<std::mutex> l(d_->mu);
   d_->roots = std::move(roots);
   ++*d_->generation;
+  d_->gate->wake_all();
 }
 
 void RemoteServer::set_progress(std::vector<std::pair<std::string, Progress>> items) {
@@ -875,6 +877,7 @@ void RemoteServer::set_tokens(std::vector<std::string> tokens) {
   d_->tokens.clear();
   for (const auto& t : tokens) if (remote::valid_token(t) && d_->tokens.size() < remote::kMaxTokens) d_->tokens.insert(t);
   ++*d_->generation;
+  d_->gate->wake_all();
 }
 
 void RemoteServer::set_pairing(bool open, const std::string& code) {

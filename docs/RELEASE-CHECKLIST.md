@@ -1,7 +1,7 @@
 # Release process
 
 1. Set the version in `src/core/version.h` and add its changelog entry.
-2. Run `bash tools/test.sh`; regenerate and verify localization and embedded pages.
+2. Run `bash tools/test.sh`; regenerate and verify localization and embedded pages. Before a release, also `bash tools/sanitize.sh` (every test under AddressSanitizer, LeakSanitizer and UBSan; about an hour).
 3. Build application and installer with MinGW-w64 or the documented Windows tools.
    Official .tinypeep releases use `make OFFICIAL=1` and `make OFFICIAL=1 setup`.
 4. Exercise playback, audio tracks, subtitles, queue/EOF, rapid file changes,

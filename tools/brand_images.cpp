@@ -183,7 +183,7 @@ int main() {
                               {"tagline", words("video and music player for Windows", 4, p.fg, 34)},
                               {"subtitle", words("beautiful, lightweight, subtitle-first", 3, p.dim, 16)},
                               {"icons", Line{icons(4, 26).ink, 44}},
-                              {"signature", words(".tinypeep  ·  v1.2.3", 3, p.faint, 40)}};
+                              {"signature", words(".tinypeep  ·  v1.3", 3, p.faint, 40)}};
     pair(d, character(8), col, 96, 270, 16);
     d.save_all("cue-cover");
   }
@@ -193,7 +193,7 @@ int main() {
     d.add("background").clear(p.bg);
     std::vector<Named> col = {{"name", words("Cue", 15, p.pixel, 0)},
                               {"tagline", words("video and music player for Windows", 3, p.fg, 24)},
-                              {"signature", words(".tinypeep  ·  v1.2.3", 2, p.dim, 14)}};
+                              {"signature", words(".tinypeep  ·  v1.3", 2, p.dim, 14)}};
     pair(d, character(5), col, 72, 160, 10);
     d.save_all("cue-banner");
   }

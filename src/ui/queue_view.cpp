@@ -21,6 +21,56 @@ std::string QueueView::display_name(const std::string& name) {
   for(size_t i=dot+1;i<name.size();++i)if(!std::isalnum((unsigned char)name[i]))return name;
   return name.substr(0,dot);
 }
+void QueueView::split_artist_title(const std::string& name,std::string& title,std::string& artist) {
+  title=name;artist.clear();
+  // " - ", " – " or " — " between two non-empty parts; the first one (titles keep their own dashes)
+  static const char* marks[]={" - "," \xe2\x80\x93 "," \xe2\x80\x94 "};
+  size_t best=std::string::npos,len=0;
+  for(const char* m:marks) {size_t at=name.find(m);if(at!=std::string::npos&&at<best) {best=at;len=std::char_traits<char>::length(m);}}
+  if(best==std::string::npos||best==0||best+len>=name.size())return;
+  auto trim=[](std::string v) {
+    while(!v.empty()&&v.front()==' ')v.erase(v.begin());
+    while(!v.empty()&&v.back()==' ')v.pop_back();
+    return v;
+  };
+  std::string a=trim(name.substr(0,best)),t=trim(name.substr(best+len));
+  if(a.empty()||t.empty())return;
+  title=t;artist=a;
+}
+std::string QueueView::plain_title(std::string title) {
+  // the uploads' labels at a title's end, in (), [] or {}: "(audio)", "[Official Video]", "(320 Kbps)"
+  static const char* noise[]={"audio","official audio","official video","official music video","music video","video",
+                              "lyric video","lyrics","lyric","visualizer","visualiser","hq","hd","4k","mv","clip",
+                              "audio oficial","video oficial","clipe oficial","official","explicit","clean"};
+  for(int guard=0;guard<4;++guard) {
+    while(!title.empty()&&title.back()==' ')title.pop_back();
+    if(title.size()<3)break;
+    char close=title.back(),open=close==')'?'(':close==']'?'[':close=='}'?'{':0;
+    if(!open)break;
+    size_t at=title.rfind(open);
+    if(at==std::string::npos||at==0)break;
+    std::string inner;
+    for(size_t i=at+1;i+1<title.size();++i)inner+=(char)std::tolower((unsigned char)title[i]);
+    bool drop=std::any_of(std::begin(noise),std::end(noise),[&](const char* n){return inner==n;});
+    // "320 kbps", "128kbps"
+    if(!drop&&inner.size()>=4&&inner.find("kbps")!=std::string::npos)drop=std::isdigit((unsigned char)inner[0])!=0;
+    if(!drop)break;
+    std::string rest=title.substr(0,at);
+    while(!rest.empty()&&rest.back()==' ')rest.pop_back();
+    if(rest.empty())break;  // a title that is only a label stays as it is
+    title=rest;
+  }
+  return title;
+}
+void QueueView::set_compact(bool compact) {
+  if(compact==compact_)return;
+  const double before=row_h();
+  compact_=compact;frame_s_=0;cancel();ghosts_.clear();
+  reshape();
+  for(int i=0;i<(int)items_.size();++i)items_[i].y.snap(i*row_h());
+  // the same rows stay in view (the scroll is in rows' heights)
+  scroll_.snap(std::clamp(scroll_.target*row_h()/std::max(1.,before),0.,max_scroll()));scrollbar();
+}
 int QueueView::index(uint32_t id) const {
   for(int i=0;i<(int)items_.size();++i)if(items_[i].entry.id==id)return i;
   return -1;
@@ -29,9 +79,12 @@ int QueueView::current_index() const {
   for(int i=0;i<(int)items_.size();++i)if(items_[i].entry.current)return i;
   return -1;
 }
-double QueueView::max_scroll() const { return std::max(0,((int)items_.size()+(bare_?1:0))*row_h()-viewport_.h); }
+double QueueView::max_scroll() const { return std::max(0,((int)items_.size()+(add_row_on()?1:0))*row_h()-viewport_.h); }
+// The list ends the same way wherever it is (beside the cover or in its popover): one more line
+// that adds songs, by a click or by dropping files on it. An empty popover has its own words.
+bool QueueView::add_row_on() const { return bare_||!items_.empty(); }
 Rect QueueView::add_row() const {
-  if(!bare_)return {};
+  if(!add_row_on())return {};
   int y=viewport_.y+(int)std::lround(items_.size()*row_h()-scroll_.x);
   return {viewport_.x,y,viewport_.w-(int)(7*s_),row_h()-(int)(2*s_)};
 }
@@ -58,6 +111,9 @@ void QueueView::sync(const std::vector<QueueEntry>& entries,uint64_t revision) {
       if(ghosts_.size()==12)ghosts_.pop_front();
       ghosts_.push_back(std::move(ghost));
     }
+    // the rows leave first, then the list closes up round what is left (it does not shrink under
+    // rows still fading)
+    if(!ghosts_.empty()) {height_motion_.snap(height_motion_.x);h_=(int)std::lround(height_motion_.x);reshape();}
   }
   album_=!entries.empty()&&std::all_of(entries.begin(),entries.end(),[](const auto& e){return e.audio;});
   std::vector<Item> updated; updated.reserve(std::min<size_t>(entries.size(),512));
@@ -89,7 +145,9 @@ void QueueView::sync(const std::vector<QueueEntry>& entries,uint64_t revision) {
   targets(); scrollbar();
 }
 void QueueView::reshape() {
-  if(bare_) viewport_={0,2*s_,w_-4*s_,std::max(0.,h_-4*s_)};
+  // (beside the cover the list has the popover's footer too: the same ways to add and to clear,
+  // on no sheet; the card's short list keeps only its last line)
+  if(bare_) viewport_={0,2*s_,w_-4*s_,std::max(0.,h_-4*s_-(compact_?0:kFooter*s_))};
   else viewport_={4*s_,(kHeader+2)*s_,w_-8*s_,std::max(0.,h_-(kHeader+kFooter+2)*s_)};
   scroll_.target=std::clamp(scroll_.target,0.,max_scroll());scrollbar();
 }
@@ -113,7 +171,10 @@ void QueueView::opened() {
   for(auto& item:items_) {item.y.snap(item.y.target);item.enter=1;item.fresh=0;}
   cancel(); keyboard_=false;control_=0;
   for(auto& i:items_)if(i.entry.current)focus_=i.entry.id;
-  ensure_visible();scroll_.snap(scroll_.target);scrollbar();
+  // the song playing near the top, one row of what came before above it: what is next is in view
+  ensure_visible();
+  if(int i=index(focus_);i>=0) scroll_.target=std::clamp((i-1.0)*row_h(),0.,max_scroll());  // (a whole row, never a cut one)
+  scroll_.snap(scroll_.target);scrollbar();
 }
 void QueueView::cancel() {
   pressed_=-1;pressed_id_=drag_id_=0;lift_=0;targets();
@@ -137,7 +198,7 @@ void QueueView::scrollbar() {
   thumb_={bar_.x,bar_.y+(bar_.h-height)*clamp01(scroll_.x/max_scroll()),bar_.w,height};
 }
 Rect QueueView::button(int n) const {
-  if(bare_)return {};  // no header, no footer
+  if(bare_&&(compact_||n==kClose))return {};  // beside the cover: no header (the song's words stand above)
   auto px=[&](double v){return (int)std::lround(v*s_);};
   if(n==kClose)return {w_-px(26),px(6),px(20),px(20)};
   // Footer: adding happens at the end of the list, so its actions sit under the last row.
@@ -155,7 +216,7 @@ int QueueView::hit(int x,int y) const {
   if(x<0||y<0||x>=w_||y>=h_)return -1;
   for(int b:{kAdd,kFolder,kClear,kClose})if((b!=kClear||!items_.empty())&&button(b).contains(x,y))return b;
   if(max_scroll()>0&&Rect{w_-12*s_,viewport_.y,10*s_,viewport_.h}.contains(x,y))return kScrollbar;
-  if(bare_&&viewport_.contains(x,y)&&add_row().contains(x,y))return kAdd;
+  if(viewport_.contains(x,y)&&add_row().contains(x,y))return kAdd;
   if(!viewport_.contains(x,y))return -1;
   for(int i=0;i<(int)items_.size();++i) {
     double top=viewport_.y+items_[i].y.x-scroll_.x;
@@ -216,7 +277,7 @@ QueueView::Event QueueView::up(int x,int y) {
       case kClear:if(!items_.empty())event.action=Action::Clear;break;
       case kClose:event.action=Action::Close;break;
       default:
-        if(pressed_>=0&&index(pressed_id_)==pressed_&&down_x_>=22*s_&&((x>=w_-30*s_)==(down_x_>=w_-30*s_)))
+        if(pressed_>=0&&index(pressed_id_)==pressed_&&down_x_>=grip_w()*s_&&((x>=w_-30*s_)==(down_x_>=w_-30*s_)))
           event={x>=w_-30*s_?Action::Remove:Action::Play,pressed_id_};
         break;
     }
@@ -259,6 +320,7 @@ QueueView::Event QueueView::key(const std::string& key,bool shift,bool ctrl) {
     else if(key=="end")i=(int)items_.size()-1;
     else i=std::clamp(i+((key=="up"||key=="pageup")?-step:step),0,(int)items_.size()-1);
     focus_=items_[i].entry.id;keyboard_=true;control_=0;ensure_visible();
+    if(i==(int)items_.size()-1)scroll_.target=max_scroll();  // the last song: the list's own last line too
   }
   return {};
 }
@@ -266,10 +328,11 @@ bool QueueView::tick(double dt) {
   bool changed=!scroll_.settled();
   if(!open_)return false;
   if(count_age_<1) {count_age_=reduce_motion()?1:std::min(1.,count_age_+dt/.15);changed=true;}
-  if(empty_age_<1) {empty_age_=reduce_motion()?1:std::min(1.,empty_age_+dt/.24);changed=true;}
   for(auto& ghost:ghosts_)ghost.age+=dt;
   bool had_ghosts=!ghosts_.empty();
   std::erase_if(ghosts_,[](const auto& g){return reduce_motion()||g.age>=g.duration;});
+  // (the empty list's words come once the rows are gone)
+  if(empty_age_<1&&ghosts_.empty()) {empty_age_=reduce_motion()?1:std::min(1.,empty_age_+dt/.3);changed=true;}
   if(had_ghosts)changed=true;
   if(ghosts_.empty())height_motion_.to(desired_height_,.20);
   if(!height_motion_.settled()) {height_motion_.step(dt);h_=std::lround(height_motion_.x);reshape();changed=true;}
@@ -327,32 +390,21 @@ void QueueView::thumbnail(uint32_t id,const std::vector<uint32_t>& pixels) {
   Picture picture;picture.id=id;picture.used=++clock_;picture.image.resize(84,48);picture.image.px=pixels;
   pictures_.push_back(std::move(picture));
 }
-void QueueView::draw_item(Canvas& c,Item& item,int y,bool floating,bool paused,int current) {
-  const auto& p=P();const auto& entry=item.entry;double s=s_;
-  const int position=index(entry.id);
-  const bool played=current>=0&&position>=0&&position<current;
-  const bool next=current>=0&&position==current+1;
-  Rect row{0,y,c.w-7*s,row_h()-2*s};
-  if(floating) {
-    c.cornered(row,s,p.press);
-    // a one-pixel rim keeps the lifted row legible over the rows sliding beneath it
-    c.fill(row.x+s,row.y,row.w-2*s,s,p.faint);c.fill(row.x+s,row.b()-s,row.w-2*s,s,p.faint);
-    c.fill(row.x,row.y+s,s,row.h-2*s,p.faint);c.fill(row.r()-s,row.y+s,s,row.h-2*s,p.faint);
-  } else if(entry.current)c.cornered(row,s,p.hover);
-  if(!floating&&item.hover>0)c.cornered(row,s,p.press,ease_out(item.hover)*.65);
-  if(!floating&&item.fresh>0)c.cornered(row,s,p.press,ease_out(item.fresh)*.8);
-  if(entry.current)c.fill(0,y+9*s,2*s,row.h-18*s,p.fg);
-  // A quiet grip becomes bright on hover, without adding an always-visible toolbar.
-  for(int gy=0;gy<3;++gy)for(int gx=0;gx<2;++gx)c.fill((7+gx*3)*s,y+(17+gy*3)*s,s,s,item.hover>0||floating?p.dim:p.faint);
-  // Music shows its cover square, like an album's track list; in a list of only music the
-  // titles move in next to it, otherwise they keep the column the films use.
-  Rect image=entry.audio?Rect{(album_?20:33)*s,y+5*s,34*s,34*s}:Rect{20*s,y+5*s,60*s,34*s};
-  const bool pictured=std::any_of(pictures_.begin(),pictures_.end(),[&](const auto& pic){return pic.id==entry.id&&pic.fade>=1;});
+Rect QueueView::cover_box(const QueueEntry& entry,int y) const {
+  const int s=(int)s_;(void)s;
+  const double k=s_;
+  if(compact_)return {(int)std::lround(9*k),y+(int)std::lround(3*k),(int)std::lround(18*k),(int)std::lround(18*k)};
+  return entry.audio?Rect{(int)((album_?20:33)*k),y+(int)(5*k),(int)(34*k),(int)(34*k)}:Rect{(int)(20*k),y+(int)(5*k),(int)(60*k),(int)(34*k)};
+}
+void QueueView::draw_picture(Canvas& c,const QueueEntry& entry,const Rect& image,bool played) {
+  const auto& p=P();double s=s_;
+  // (the card's playing row puts its play mark where the tile's note would be)
+  const bool pictured=(compact_&&entry.current)||std::any_of(pictures_.begin(),pictures_.end(),[&](const auto& pic){return pic.id==entry.id&&pic.fade>=1;});
   if(entry.audio) {
     // a song without a cover wears Cue's own music tile: black, with its note
     c.cornered(image,s,Rgb{12,12,12});
     if(const BitmapDef* note=pictured?nullptr:bmp("cue-note")) {
-      double k=s*2;
+      double k=compact_?s:s*2;
       c.bitmap(note,image.x+(int)std::lround((image.w-note->w*k)/2/s)*s,image.y+(int)std::lround((image.h-note->h*k)/2/s)*s,k,played?p.faint:mix(p.dim,p.fg,.35));
     }
   } else {
@@ -376,6 +428,74 @@ void QueueView::draw_item(Canvas& c,Item& item,int y,bool floating,bool paused,i
     c.blit(picture.scaled,image.x,image.y,std::ceil(ease_out(picture.fade)*3-1e-9)/3*(played?.55:1));
     break;
   }
+}
+// The card's row: [grip] [cover] Title  artist, on one line at the card's type size. The song
+// playing is lit like the full list's (its band and the bar on its left) and its cover carries
+// the play or pause mark; the remove mark takes the line's end only under the pointer.
+void QueueView::draw_compact(Canvas& c,Item& item,int y,bool floating,bool paused,int current) {
+  const auto& p=P();const auto& entry=item.entry;double s=s_;
+  const int position=index(entry.id);
+  const bool played=current>=0&&position>=0&&position<current;
+  Rect row{0,y,c.w-(int)(7*s),row_h()-(int)(2*s)};
+  if(floating) {
+    c.cornered(row,s,p.press);
+    c.fill(row.x+s,row.y,row.w-2*s,s,p.faint);c.fill(row.x+s,row.b()-s,row.w-2*s,s,p.faint);
+    c.fill(row.x,row.y+s,s,row.h-2*s,p.faint);c.fill(row.r()-s,row.y+s,s,row.h-2*s,p.faint);
+  } else if(entry.current)c.cornered(row,s,p.hover);
+  if(!floating&&item.hover>0)c.cornered(row,s,p.press,ease_out(item.hover)*.65);
+  if(!floating&&item.fresh>0)c.cornered(row,s,p.press,ease_out(item.fresh)*.8);
+  if(entry.current)c.fill(0,y+6*s,2*s,row.h-12*s,p.fg);
+  // the grip: two columns of three dots, quiet until the row is under the pointer
+  for(int gy=0;gy<3;++gy)for(int gx=0;gx<2;++gx)c.fill((3+gx*2)*s,y+(8+gy*3)*s,s,s,item.hover>0||floating?p.dim:p.faint,item.hover>0||floating?1.:.7);
+  Rect image=cover_box(entry,y);
+  draw_picture(c,entry,image,played);
+  if(entry.current) {
+    // the song playing: its cover dims a little under the play (or pause) mark
+    c.fill(image,Rgb{0,0,0},.45);
+    int m=(int)(7*s);
+    action_icon(c,paused?"pause":"play",{image.cx()-m/2,image.cy()-m/2,m,m},s,p.fg);
+  }
+  const bool remove=!floating&&(item.hover>0||keyboard_);
+  const int tx=image.r()+(int)(7*s);
+  const int end=row.r()-(int)((remove?24:6)*s);
+  const int available=std::max(0,end-tx);
+  std::string title,artist;
+  split_artist_title(display_name(entry.name),title,artist);
+  title=plain_title(title);
+  Rgb name_ink=entry.current||floating?p.fg:played?p.faint:mix(p.dim,p.fg,.25+ease_out(item.hover)*.55);
+  const int ty=y+(int)std::lround(5*s);
+  std::string t=fit_end(title,available,s);
+  text(c,t,tx,ty,s,name_ink);
+  // who, beside the title in the faint ink, when there is room for a few letters of it
+  int aw=available-text_w(t,s)-(int)(6*s);
+  if(!artist.empty()&&aw>=(int)(24*s))
+    text(c,fit_end(artist,aw,s),tx+text_w(t,s)+(int)(6*s),ty,s,entry.current?p.dim:p.faint);
+  if(remove) {
+    Rect x{row.r()-(int)(22*s),y+(int)(2*s),(int)(20*s),row.h-(int)(2*s)};
+    c.bitmap(bmp("x-small"),x.cx()-2*s,x.cy()-2*s,s,p.dim,keyboard_&&item.hover<=0?1.:ease_out(item.hover));
+  }
+}
+void QueueView::draw_item(Canvas& c,Item& item,int y,bool floating,bool paused,int current) {
+  if(compact_) {draw_compact(c,item,y,floating,paused,current);return;}
+  const auto& p=P();const auto& entry=item.entry;double s=s_;
+  const int position=index(entry.id);
+  const bool played=current>=0&&position>=0&&position<current;
+  const bool next=current>=0&&position==current+1;
+  Rect row{0,y,c.w-7*s,row_h()-2*s};
+  if(floating) {
+    c.cornered(row,s,p.press);
+    // a one-pixel rim keeps the lifted row legible over the rows sliding beneath it
+    c.fill(row.x+s,row.y,row.w-2*s,s,p.faint);c.fill(row.x+s,row.b()-s,row.w-2*s,s,p.faint);
+    c.fill(row.x,row.y+s,s,row.h-2*s,p.faint);c.fill(row.r()-s,row.y+s,s,row.h-2*s,p.faint);
+  } else if(entry.current)c.cornered(row,s,p.hover);
+  if(!floating&&item.hover>0)c.cornered(row,s,p.press,ease_out(item.hover)*.65);
+  if(!floating&&item.fresh>0)c.cornered(row,s,p.press,ease_out(item.fresh)*.8);
+  if(entry.current)c.fill(0,y+9*s,2*s,row.h-18*s,p.fg);
+  // A quiet grip becomes bright on hover, without adding an always-visible toolbar.
+  for(int gy=0;gy<3;++gy)for(int gx=0;gx<2;++gx)c.fill((7+gx*3)*s,y+(17+gy*3)*s,s,s,item.hover>0||floating?p.dim:p.faint);
+  // Music shows its cover square, like an album's track list; in a list of only music the
+  // titles move in next to it, otherwise they keep the column the films use.
+  draw_picture(c,entry,cover_box(entry,y),played);
   int tx=(album_?62:88)*s,available=c.w-tx-34*s;
   Rgb name_ink=entry.current||floating?p.fg:played?p.faint:mix(p.dim,p.fg,ease_out(item.hover)*.6);
   text(c,fit_middle(display_name(entry.name),std::max(0,available),s),tx,y+8*s,s,name_ink);
@@ -385,6 +505,53 @@ void QueueView::draw_item(Canvas& c,Item& item,int y,bool floating,bool paused,i
   if(entry.current)action_icon(c,paused?"pause":"play",{tx+text_w(caption,s)+5*s,y+27*s,7*s,7*s},s,p.dim);
   Rect remove{c.w-29*s,y+10*s,20*s,24*s};
   if(!floating&&(item.hover>0||keyboard_))c.bitmap(bmp("x-small"),remove.cx()-2*s,remove.cy()-2*s,s,p.dim,ease_out(item.hover));
+}
+// The list's last line: a dotted place with a plus, "add tracks / or drag them here"; while files
+// are dragged over the window it brightens, breathes and says "drop to add"
+void QueueView::draw_add_row(Canvas& list) {
+  const auto& p=P();double s=s_;
+  // the last line adds songs: a dotted place with a plus, "add tracks / or drag them here";
+  // while files are dragged over the window it brightens, breathes and says "drop to add"
+  Rect a=add_row();a.y-=viewport_.y;a.x-=viewport_.x;
+  if(a.y+a.h>0&&a.y<list.h) {
+    double hv=ease_out(control_hover_[slot_of(kAdd)]),dk=ease_out(drop_k_);
+    double breath=dropping_?.5+.5*std::sin(drop_t_*5.2):0;
+    Rgb ink=mix(mix(p.faint,p.dim,.6+.4*hv),p.fg,dk);
+    if(hv>0||dk>0)list.cornered(a,s,p.press,std::max(hv*.5,dk*(.45+.25*breath)));
+    std::string first=tr(dropping_?str::queue_drop_to_add:str::queue_add_tracks);
+    if(compact_) {
+      // the card: one line too, a dotted place where a cover would be
+      Rect box=cover_box({},a.y);
+      dotted(list,box,s,ink,1);
+      if(const BitmapDef* plus=bmp("plus")) list.bitmap(plus,box.cx()-(int)std::lround(2.5*s),box.cy()-(int)std::lround(2.5*s),s,ink);
+      int tx=box.r()+(int)(7*s),room=std::max(0,a.r()-tx-6*(int)s);
+      text(list,fit_end(first,room,s),tx,a.y+(int)std::lround(5*s),s,ink);
+    } else {
+      Rect box{a.x+20*s,a.y+5*s,34*s,34*s};
+      dotted(list,box,s,ink,1);
+      if(const BitmapDef* plus=bmp("plus")) list.bitmap(plus,box.cx()-5*s,box.cy()-5*s,s*2,ink);
+      int tx=box.r()+8*s,room=std::max(0,a.r()-tx-8*(int)s);
+      text(list,fit_end(first,room,s),tx,a.y+(int)std::lround(lerp(8.,16.,dk)*s),s,ink);  // alone, it sits in the middle
+      if(!dropping_)text(list,fit_end(tr(str::queue_or_drag),room,s),tx,a.y+25*s,s,mix(p.faint,p.dim,.4*hv),1-dk);
+    }
+  }
+}
+// The footer: "+ files", "+ folder" and "clear" (the popover's, and the list's beside the cover)
+void QueueView::draw_footer(Canvas& c,bool rules) {
+  const auto& p=P();double s=s_;
+  if(rules)c.fill(8*s,h_-kFooter*s,w_-16*s,s,p.edge);
+  else c.fill(2*s,h_-kFooter*s,w_-12*s,s,p.edge,.6);
+  for(int b:{kAdd,kFolder,kClear}) {
+    Rect box=button(b);double h=ease_out(control_hover_[slot_of(b)]);
+    double alpha=b==kClear&&items_.empty()?1-ease_out(empty_age_):1;
+    if(b==kClear&&items_.empty()&&empty_age_>=1)continue;
+    if(h>0)c.cornered(box,s,p.hover,h*alpha);
+    Rgb ink=mix(p.dim,p.fg,h);
+    if(b==kClear) {text(c,tr(str::queue_clear),box.x+5*s,box.y+4*s,s,ink,alpha);continue;}
+    // "+ files", "+ folder": the plus says add, the word says what
+    c.bitmap(bmp("plus"),box.x+5*s,box.y+(box.h-5*s)/2,s,ink);
+    text(c,fit_end(tr(b==kAdd?str::queue_add_files_short:str::queue_add_folder_short),std::max(0,box.w-22*(int)s),s),box.x+15*s,box.y+4*s,s,ink);
+  }
 }
 void QueueView::draw(Canvas& c,bool paused) {
   const auto& p=P();double s=s_;last_paused_=paused;
@@ -402,24 +569,20 @@ void QueueView::draw(Canvas& c,bool paused) {
       if(y+row_h()<0||y>=list_.h)continue;
       draw_item(list_,item,y,false,paused,current);
     }
-    {
-      // the last line adds songs: a dotted place with a plus, "add tracks / or drag them here";
-      // while files are dragged over the window it brightens, breathes and says "drop to add"
-      Rect a=add_row();a.y-=viewport_.y;a.x-=viewport_.x;
-      if(a.y+a.h>0&&a.y<list_.h) {
-        double hv=ease_out(control_hover_[slot_of(kAdd)]),dk=ease_out(drop_k_);
-        double breath=dropping_?.5+.5*std::sin(drop_t_*5.2):0;
-        Rgb ink=mix(mix(p.faint,p.dim,.6+.4*hv),p.fg,dk);
-        if(hv>0||dk>0)list_.cornered(a,s,p.press,std::max(hv*.5,dk*(.45+.25*breath)));
-        Rect box{a.x+20*s,a.y+5*s,34*s,34*s};
-        dotted(list_,box,s,ink,1);
-        if(const BitmapDef* plus=bmp("plus")) list_.bitmap(plus,box.cx()-5*s,box.cy()-5*s,s*2,ink);
-        int tx=box.r()+8*s,room=std::max(0,a.r()-tx-8*(int)s);
-        std::string first=tr(dropping_?str::queue_drop_to_add:str::queue_add_tracks);
-        text(list_,fit_end(first,room,s),tx,a.y+(int)std::lround(lerp(8.,16.,dk)*s),s,ink);  // alone, it sits in the middle
-        if(!dropping_)text(list_,fit_end(tr(str::queue_or_drag),room,s),tx,a.y+25*s,s,mix(p.faint,p.dim,.4*hv),1-dk);
-      }
+    // a cleared list: the rows leave top to bottom (as in the popover), and its line that adds songs
+    // comes in once they are gone, where the list closes up
+    for(const auto& ghost:ghosts_) {
+      double progress=ease_out(clamp01(ghost.age/ghost.duration));
+      list_.blit(ghost.image,(int)std::lround(6*s*progress),ghost.y,1-progress);
     }
+    if(items_.empty()&&(empty_age_<1||!ghosts_.empty())) {
+      const double a=ghosts_.empty()?ease_out(clamp01((empty_age_-.5)/.5)):0.0;
+      if(a>0) {
+        row_image_.resize(list_.w,list_.h);row_image_.clear_transparent();
+        draw_add_row(row_image_);
+        list_.blit(row_image_,0,(int)std::lround(3*s*(1-a)),a);
+      }
+    } else draw_add_row(list_);
     if(drag_id_) {
       int from=index(drag_id_);
       if(from>=0)draw_item(list_,items_[from],my_-viewport_.y-(int)grab_,true,paused,current);
@@ -437,6 +600,7 @@ void QueueView::draw(Canvas& c,bool paused) {
       }
     }
     c.blit(list_,viewport_.x,viewport_.y);
+    if(!compact_)draw_footer(c,false);
     for(auto& picture:pictures_) {if(!picture.drawn&&picture.scaled.w)picture.scaled=Canvas{};picture.drawn=false;}
     if(thumb_.h>0) {c.fill(bar_,p.edge);c.cornered(thumb_,0,held()?p.fg:p.dim);}
     return;
@@ -455,19 +619,7 @@ void QueueView::draw(Canvas& c,bool paused) {
     action_icon(c,"x-small",box,s,mix(p.dim,p.fg,h));
   }
   c.fill(8*s,(kHeader-1)*s,w_-16*s,s,p.edge);
-  // footer
-  c.fill(8*s,h_-kFooter*s,w_-16*s,s,p.edge);
-  for(int b:{kAdd,kFolder,kClear}) {
-    Rect box=button(b);double h=ease_out(control_hover_[slot_of(b)]);
-    double alpha=b==kClear&&items_.empty()?1-ease_out(empty_age_):1;
-    if(b==kClear&&items_.empty()&&empty_age_>=1)continue;
-    if(h>0)c.cornered(box,s,p.hover,h*alpha);
-    Rgb ink=mix(p.dim,p.fg,h);
-    if(b==kClear) {text(c,tr(str::queue_clear),box.x+5*s,box.y+4*s,s,ink,alpha);continue;}
-    // "+ files", "+ folder": the plus says add, the word says what
-    c.bitmap(bmp("plus"),box.x+5*s,box.y+(box.h-5*s)/2,s,ink);
-    text(c,fit_end(tr(b==kAdd?str::queue_add_files_short:str::queue_add_folder_short),std::max(0,box.w-22*(int)s),s),box.x+15*s,box.y+4*s,s,ink);
-  }
+  draw_footer(c,true);
   // list
   if(list_.w!=viewport_.w||list_.h!=viewport_.h)list_.resize(viewport_.w,viewport_.h);else list_.clear_transparent();
   if(items_.empty()) {
@@ -488,6 +640,7 @@ void QueueView::draw(Canvas& c,bool paused) {
       double reveal=ease_out(item.enter);list_.blit(row_image_,0,y+(int)std::lround(4*s*(1-reveal)),reveal);
     } else draw_item(list_,item,y,false,paused,current);
   }
+  draw_add_row(list_);
   if(drag_id_) {
     int from=index(drag_id_);
     double lift=ease_out(lift_);

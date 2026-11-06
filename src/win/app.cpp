@@ -2,6 +2,8 @@
 #include "../core/subtitle_geometry.h"
 #include "../core/file_io.h"
 #include "single_instance.h"
+#include "video_enhance.h"
+#include "../core/video_enhance.h"
 
 #include <dwmapi.h>
 #include <wincodec.h>
@@ -41,6 +43,8 @@
 #include "../core/version.h"
 
 namespace {
+// music's room light: part of the look (the films' ambient switch and strength are the films')
+constexpr double kMusicLight = 0.30;
 std::string subtitle_position_string(double pos) {
   char value[32]; std::snprintf(value, sizeof value, "%.3f", pos); return value;
 }
@@ -86,7 +90,7 @@ const char* kBindings[][2] = {
     // the rest of the sheet's keys, so they work after a click on the picture too (the engine's
     // window has the keyboard then): repeat, next / previous, subtitles menu, always on top, ?
     {"l", "l"}, {"L", "l"}, {"n", "n"}, {"N", "n"}, {"p", "p"}, {"P", "p"}, {"c", "c"}, {"C", "c"},
-    {"Ctrl+t", "c_t"}, {"Ctrl+T", "c_t"}, {"?", "qmark"},
+    {"Ctrl+t", "c_t"}, {"Ctrl+T", "c_t"}, {"Ctrl+m", "c_m"}, {"Ctrl+M", "c_m"}, {"?", "qmark"},
 };
 
 COLORREF cref(Rgb c) { return RGB(c.r, c.g, c.b); }
@@ -101,6 +105,9 @@ std::string engine_text(const std::string& err) {
 }  // namespace
 
 static HWND g_app_hwnd = nullptr;  // where the engine's window forwards its input
+// a song's card turns its new cover in as the song starts: its pictures come at 60 a second from
+// the first one, so the turn needs no head start (see audio_still_tail)
+static constexpr double kFlipSettle = 0.0;
 
 double App::now() const {
   LARGE_INTEGER t;
@@ -109,32 +116,90 @@ double App::now() const {
 }
 
 // Called from the UI thread and the engine thread: one file, opened once, a line at a time.
-void App::log(const std::string& msg) {
-  static std::mutex mu;
-  static std::ofstream f;
-  std::lock_guard<std::mutex> lock(mu);
-  if (!f.is_open()) f.open(data_dir_ / "cue.log", std::ios::app);
-  if(f.tellp()>1024*1024) {
-    f.close();std::error_code ec;
-    std::filesystem::remove(data_dir_/"cue.log.1",ec);
-    std::filesystem::rename(data_dir_/"cue.log",data_dir_/"cue.log.1",ec);
-    f.open(data_dir_/"cue.log",std::ios::trunc);
+// cue.log: what went wrong, and the few facts that explain it (version, engine, the picture's
+// helpers, the mini player). Routine steps are written only with --log. Lines wait in memory and
+// reach the disk together (at most every minute, or at once for a failure and at the goodbye),
+// the file stays under 256 KB (the older half kept as cue.log.1) and a log older than 5 days is
+// cleared when Cue starts: the person's disk is not a diary.
+namespace {
+std::mutex g_log_mu;
+std::string g_log_buf;
+std::filesystem::path g_log_path;
+constexpr std::uintmax_t kLogCap = 256 * 1024;
+void log_write_locked() {
+  if (g_log_buf.empty() || g_log_path.empty()) return;
+  std::error_code ec;
+  const auto size = std::filesystem::file_size(g_log_path, ec);
+  if (!ec && size + g_log_buf.size() > kLogCap) {
+    auto old = g_log_path; old += ".1";
+    std::filesystem::remove(old, ec);
+    std::filesystem::rename(g_log_path, old, ec);
   }
+  std::ofstream f(g_log_path, std::ios::app | std::ios::binary);
+  f << g_log_buf;
+  g_log_buf.clear();
+}
+// the date on a log's first line (its oldest), as days since the epoch; -1 if unreadable
+long log_first_day(const std::filesystem::path& p) {
+  std::ifstream f(p, std::ios::binary);
+  char d[11] = {};
+  if (!f.read(d, 10)) return -1;
+  std::tm t{};
+  if (std::sscanf(d, "%4d-%2d-%2d", &t.tm_year, &t.tm_mon, &t.tm_mday) != 3) return -1;
+  t.tm_year -= 1900; t.tm_mon -= 1; t.tm_hour = 12;
+  std::time_t tt = std::mktime(&t);
+  return tt < 0 ? -1 : (long)(tt / 86400);
+}
+}  // namespace
+
+void cue_log_open(const std::filesystem::path& dir) {
+  std::lock_guard<std::mutex> lock(g_log_mu);
+  g_log_path = dir / "cue.log";
+  const long today = (long)(std::time(nullptr) / 86400);
+  for (auto p : {g_log_path, std::filesystem::path(g_log_path.wstring() + L".1")}) {
+    long day = log_first_day(p);
+    std::error_code ec;
+    if (day >= 0 && today - day > 5) std::filesystem::remove(p, ec);
+  }
+}
+
+void cue_log_flush(bool crashing) {
+  if (crashing) {  // the crash handler: never wait on a lock the crashed thread may hold
+    if (g_log_mu.try_lock()) { log_write_locked(); g_log_mu.unlock(); }
+    return;
+  }
+  std::lock_guard<std::mutex> lock(g_log_mu);
+  log_write_locked();
+}
+
+void App::log(const std::string& msg) {
   std::time_t t = std::time(nullptr);
   char b[32];
   std::tm tmv{};
   localtime_s(&tmv, &t);
   std::strftime(b, sizeof b, "%Y-%m-%d %H:%M:%S", &tmv);
-  f << b << "  +" << (long long)(now() * 1000) << "ms  " << msg << "\n";
-  f.flush();
+  std::lock_guard<std::mutex> lock(g_log_mu);
+  g_log_buf += b;
+  g_log_buf += "  +" + std::to_string((long long)(now() * 1000)) + "ms  " + msg + "\n";
+  // what explains a problem is on disk at once; the rest waits for the minute's write
+  static const char* urgent[] = {"fail", "error", "could not", "refused", "unavailable", "crash", "engine:", "bye", "missing"};
+  bool now_ = g_log_buf.size() > 16 * 1024;
+  for (const char* u : urgent) if (!now_ && msg.find(u) != std::string::npos) now_ = true;
+  if (now_) log_write_locked();
 }
+
+// a routine step: only with --log (when someone is looking into something)
+void App::trace(const std::string& msg) { if (engine_log_) log(msg); }
 
 // ── startup ─────────────────────────────────────────────────────────
 bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   inst_ = inst;
   QueryPerformanceFrequency(&qpf_);
   QueryPerformanceCounter(&qp0_);
+  const bool moved = migrate_data_dir();  // %APPDATA%\tinyoffice\Cue becomes tinypeep\Cue, once
   data_dir_ = std::filesystem::path(data_dir());
+  cue_log_open(data_dir_);
+  if (!moved) log("data folder: still the old one (it was in use); moved at the next start");
   for (auto& a : args) if (a == "--log") engine_log_ = true;
   // Prepare the worker now, but map the DLL only after the first paint. DLL
   // initialization holds Windows' loader lock and can stall window creation
@@ -146,14 +211,17 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   store_.load(state_path_);  // early: the window opens at its size, with the person's settings
   apply_language(false);     // the saved choice, or Windows' display languages (read once)
   play_.in.controls_free = store_.controls_free;
+  play_.in.settings_examples = store_.settings_examples;
+  play_.in.mini_sub_size = store_.mini_sub_size;
   play_.in.loop = store_.loop;
   play_.in.loop_all = store_.loop_all;
+  play_.in.shuffle = store_.shuffle;
   play_.in.ui_scale = store_.ui_scale;
   play_.in.ambient = store_.ambient;
   play_.in.ambient_strength = store_.ambient_strength;
   play_.set_double_click_time(GetDoubleClickTime() / 1000.0);
-  log("start");
-  log("settings " + store_.load_status);
+  log(std::string("start ") + CUE_VERSION);
+  if (store_.load_status != "ok") log("settings " + store_.load_status); else trace("settings ok");
   reduce_motion() = system_reduce_motion();
   set_high_contrast(system_high_contrast());
   for (auto& a : args) if (!a.empty() && a[0] != '-') pending_open_ = a;
@@ -166,6 +234,15 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   home_.news = compare_versions(CUE_NEWS_VERSION, store_.news_closed) > 0;  // the line at the bottom, until closed
   news_due_ = store_.onboarded && !onboarding_ && pending_open_.empty() && compare_versions(CUE_NEWS_VERSION, store_.news_seen) > 0;
   for (auto& a : args) if (a == "--news") news_due_ = !onboarding_ && pending_open_.empty();
+  // the survey: offered on the home to people who updated (kept until answered or declined, so a
+  // first file opened straight away does not lose it) or a week after Cue first ran here
+  {
+    bool dirty = false;
+    if (store_.onboarded && store_.survey.empty() && compare_versions(CUE_NEWS_VERSION, store_.news_seen) > 0) { store_.survey = "due"; dirty = true; }
+    if (store_.installed <= 0) { store_.installed = (int64_t)std::time(nullptr); dirty = true; }
+    for (auto& a : args) if (a == "--survey") store_.survey = "due";
+    if (dirty) save_state();
+  }
   ob_.ambient = store_.ambient;
   ob_.ui_scale = store_.ui_scale;
   // a version found on an earlier run is offered right away; the details come with the next check
@@ -174,7 +251,7 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
     upd_ = Upd::Available;
     upd_rel_.version = store_.update_available;
   }
-  log(std::string("version ") + CUE_VERSION);
+  trace(std::string("version ") + CUE_VERSION);
 
   WNDCLASSEXW wc{sizeof(wc)};
   wc.lpfnWndProc = wndproc;
@@ -244,12 +321,12 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
                           nullptr, nullptr, inst, this);
   if (hwnd_) SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
   if (!hwnd_) { log("could not create window: " + std::to_string(GetLastError())); return false; }
-  log("window ok");
+  trace("window ok");
   video_ = CreateWindowExW(0, vc.lpszClassName, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0, hwnd_, nullptr, inst, this);
   SetWindowLongPtrW(video_, GWLP_USERDATA, (LONG_PTR)this);
   g_app_hwnd = hwnd_;
   dpi_ = GetDpiForWindow(hwnd_);
-  if (pacer_.start(hwnd_, WM_APP_VSYNC)) log("vsync pacer ok");
+  if (pacer_.start(hwnd_, WM_APP_VSYNC)) trace("vsync pacer ok");
   refresh_display_rate();
   make_cursors();
   {
@@ -321,12 +398,12 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   engine_cfg_.log = engine_log_;
   refresh_recents(false); // draw saved rows before starting filesystem checks
   show_update_state();
-  if (onboarding_) { ob_.set_size(cw_, ch_, s_); ob_.start(now()); log("welcome"); }
+  if (onboarding_) { ob_.set_size(cw_, ch_, s_); ob_.start(now()); trace("welcome"); }
   SetTimer(hwnd_, T_POLL, poll_slow_ ? 250 : 33, nullptr);
   SetTimer(hwnd_, T_MAINTENANCE, 5000, nullptr);
   ShowWindow(hwnd_, start_max && show != SW_SHOWMINIMIZED && show != SW_MINIMIZE ? SW_SHOWMAXIMIZED : show);
   UpdateWindow(hwnd_);
-  log("first paint");
+  trace("first paint");
   // Overlap the unchanged home departure with engine/file preparation, rather
   // than adding it after the engine has already become ready.
   if (engine_thread_) SetEvent(engine_go_);
@@ -443,7 +520,7 @@ DWORD WINAPI App::engine_main(void* p) {
   WaitForSingleObject(self->engine_go_, INFINITE);
   // The shell is already visible. Load while its departure animation runs.
   bool loaded = self->mpv_.load(exe_dir(), &self->engine_err_);
-  self->log(loaded ? "engine DLL mapped" : "engine DLL failed");
+  if (loaded) self->trace("engine DLL mapped"); else self->log("engine DLL failed");
   bool ok = loaded && self->start_engine();
   PostMessageW(self->hwnd_, WM_APP_ENGINE, ok ? 1 : 0, 0);
   return 0;
@@ -453,7 +530,7 @@ DWORD WINAPI App::engine_main(void* p) {
 // engine_cfg_, engine_err_, prop_name_ and has_background_box_, which the UI thread leaves
 // alone until WM_APP_ENGINE.
 bool App::start_engine() {
-  log("loading engine");
+  trace("loading engine");
   if (!mpv_.loaded() && !mpv_.load(exe_dir(), &engine_err_)) { log(engine_err_); return false; }
   if (!mpv_.create(hwnd_, WM_APP_MPV, engine_cfg_.wid, &engine_err_)) { log(engine_err_); return false; }
   std::wstring conf = data_dir_.wstring() + L"\\input.conf";
@@ -487,6 +564,16 @@ bool App::start_engine() {
   o("window-dragging", "no");
   o("cursor-autohide", "no");          // the app hides the cursor itself (works on any mpv)
   o("video-sync", "display-resample");  // draws at the display rate: the UI animates at 60 Hz+, not 24
+  // the sound keeps 0.25 s ready (the engine's default is 0.2): a hiccup upstream (the picture's
+  // side as Windows hides or shows the window, a busy disk) is covered by what is queued. Not
+  // more: after every jump the engine fills this much (and draws the music's picture for it)
+  // before it plays again (at 0.75 s, and still at 0.4, a click on the timeline lagged). Volume
+  // is applied as the sound leaves (not in the queue), so it stays instant.
+  o("audio-buffer", "0.25");
+  // smoothing, when on: the lightest blend there is (frames mix only at their changes: no judder
+  // on pans, no "soap opera" frames invented). Off until a film that needs it asks for it.
+  o("tscale", "oversample");
+  o("interpolation", "no");
   o("osd-level", "1");
   o("osd-bar", "no");
   o("osd-on-seek", "no");
@@ -523,7 +610,7 @@ bool App::start_engine() {
   // mpv writes its log file at verbose level whatever msg-level says: every start and every file
   // opened paid for hundreds of lines on disk. Only with `Cue.exe --log` now.
   if (engine_cfg_.log) o("log-file", narrow((data_dir_ / "mpv.log").wstring()));
-  log("engine initialize");
+  trace("engine initialize");
   int r = mpv_.api().initialize(mpv_.handle());
   if (r < 0) {
     engine_err_ = i18n::key_name(str::engine_failed);
@@ -549,12 +636,15 @@ bool App::start_engine() {
   mpv_.observe("video-out-params",MPV_FORMAT_NODE,O_VIDEO_PARAMS);
   mpv_.observe("eof-reached", MPV_FORMAT_FLAG, O_EOF);
   mpv_.observe("osd-width", MPV_FORMAT_INT64, O_OSDW);
+  // the engine's warnings, only the ones about the sound or the picture falling behind, go to
+  // cue.log (a dozen per file at most): what "it stuttered" looked like from the inside
+  mpv_.request_log("warn");
   mpv_.observe("osd-height", MPV_FORMAT_INT64, O_OSDH);
   mpv_.hook_add("on_load", kHookLoad);
   mpv_.hook_add("on_preloaded", kHookPreloaded);
   mpv_.hook_add("on_unload", kHookUnload);
   resolve_props();
-  log("engine ok");
+  trace("engine ok");
   return true;
 }
 
@@ -576,6 +666,7 @@ void App::on_engine_ready(bool ok) {
     static_cast<App*>(ctx)->wake_mpv();
   }, this);
   mpv_ok_ = true;
+  play_.in.iris_engine = true;  // the opening iris is the video shader's from now on
   drain_mpv();  // whatever the engine said while it was starting
   if (!pending_open_.empty()) { auto p = pending_open_; pending_open_.clear(); open(p); }
 }
@@ -598,8 +689,338 @@ void App::start_maintenance() {
 // ── updates ─────────────────────────────────────────────────────────
 // Always on top: for a film in a corner while working. For this session only (a window that
 // stays above everything should never come back by surprise on the next start).
+// on top or not, quietly (the mini player pins its window and gives the pin back after)
+void App::set_pin(bool on) {
+  if (pinned_ == on) return;
+  pinned_ = on;
+  SetWindowPos(hwnd_, pinned_ ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  ambient_.set_topmost(pinned_);
+  ambient_.follow(hwnd_);
+  home_.chrome.pinned = play_.chrome.pinned = ob_.chrome.pinned = pinned_;
+}
+
+double App::mini_aspect() const {
+  if (audio_only_) return 1.9;  // a song: the card, its cover on the left, the words and the bar beside it
+  if (vid_w_ > 0 && vid_h_ > 0) {
+    double ar = (double)vid_w_ / vid_h_;
+    if (vid_rot_ == 90 || vid_rot_ == 270) ar = 1 / ar;
+    return std::clamp(ar, 0.4, 2.6);
+  }
+  return 16.0 / 9.0;
+}
+
+// The mini window: 400 px (at 100%) on its long side, the picture's shape, 16 px from the
+// work area's edges in the given corner
+// The mini player's smallest (or largest) client size, in its own shape: the long side between
+// 480 and 800 px at 100% for a film (smaller, a film's picture and subtitles stop being worth
+// watching), between 440 and 640 for a song's card.
+SIZE App::mini_client(bool smallest) const {
+  const double k = dpi_ / 96.0, ar = mini_aspect();
+  const double lng = (audio_only_ ? (smallest ? 440 : 640) : (smallest ? 480 : 800)) * k;
+  return ar >= 1 ? SIZE{(LONG)std::lround(lng), (LONG)std::lround(lng / ar)} : SIZE{(LONG)std::lround(lng * ar), (LONG)std::lround(lng)};
+}
+
+RECT App::mini_rect(double ar, int corner) const {
+  const double k = dpi_ / 96.0;
+  const int lng = (int)std::lround((audio_only_ ? 480 : 540) * k);  // big enough to watch, small enough to work beside
+  int cw = ar >= 1 ? lng : (int)std::lround(lng * ar), ch = ar >= 1 ? (int)std::lround(lng / ar) : lng;
+  cw = std::max(cw, (int)std::lround(200 * k)); ch = std::max(ch, (int)std::lround(150 * k));
+  return mini_place(cw, ch, corner);
+}
+
+// a client of cw x ch in the given corner of the work area, 16 px from its edges
+RECT App::mini_place(int cw, int ch, int corner) const {
+  MONITORINFO mi{sizeof(mi)};
+  GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+  const RECT wa = mi.rcWork;
+  const int m = (int)std::lround(16 * dpi_ / 96.0);
+  // the window's invisible resize borders: the picture itself sits m px from the edges
+  RECT wr = window_rect(), cr; GetClientRect(hwnd_, &cr);
+  const int fx = (wr.right - wr.left) - cr.right, fy = (wr.bottom - wr.top) - cr.bottom;
+  const int w = cw + fx, h = ch + fy;
+  const int left = (corner & 1) ? wa.right - m - cw - fx / 2 : wa.left + m - fx / 2;
+  const int top = (corner & 2) ? wa.bottom - m - ch - fy / 2 : wa.top + m - fy / 2;
+  return {left, top, left + w, top + h};
+}
+
+int App::mini_corner() const {
+  MONITORINFO mi{sizeof(mi)};
+  GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+  RECT r = window_rect();
+  const int cx = (r.left + r.right) / 2, cy = (r.top + r.bottom) / 2;
+  return (cx > (mi.rcWork.left + mi.rcWork.right) / 2 ? 1 : 0) | (cy > (mi.rcWork.top + mi.rcWork.bottom) / 2 ? 2 : 0);
+}
+
+// The next file in the mini player: its new shape, from the same corner of where the window is
+// (the person put it there), kept whole on the screen.
+RECT App::mini_keep_place(double ar) const {
+  RECT t = mini_rect(ar, 0), wr = window_rect();
+  const int w = t.right - t.left, h = t.bottom - t.top, c = mini_corner();
+  int left = (c & 1) ? wr.right - w : wr.left, top = (c & 2) ? wr.bottom - h : wr.top;
+  MONITORINFO mi{sizeof(mi)};
+  GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+  RECT cr; GetClientRect(hwnd_, &cr);
+  const int bx = ((wr.right - wr.left) - cr.right) / 2, by = ((wr.bottom - wr.top) - cr.bottom) / 2;  // invisible borders
+  left = std::clamp(left, (int)mi.rcWork.left - bx, std::max((int)mi.rcWork.left - bx, (int)mi.rcWork.right + bx - w));
+  top = std::clamp(top, (int)mi.rcWork.top - by, std::max((int)mi.rcWork.top - by, (int)mi.rcWork.bottom + by - h));
+  return {left, top, left + w, top + h};
+}
+
+// Let go of the mini window: it stays where the person put it, kept whole on the screen. Only
+// released right by a corner (its edges a few px from both of the corner's sides, or past them)
+// does it glide into that corner.
+void App::mini_settle() {
+  MONITORINFO mi{sizeof(mi)};
+  GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+  const RECT wa = mi.rcWork;
+  RECT wr = window_rect(), cr; GetClientRect(hwnd_, &cr);
+  const int bx = ((wr.right - wr.left) - cr.right) / 2, by = ((wr.bottom - wr.top) - cr.bottom) / 2;
+  const int x0 = wr.left + bx, y0 = wr.top + by, x1 = x0 + cr.right, y1 = y0 + cr.bottom;  // the picture
+  const int c = mini_corner();
+  const int dx = (c & 1) ? wa.right - x1 : x0 - wa.left, dy = (c & 2) ? wa.bottom - y1 : y0 - wa.top;
+  const int snap = (int)std::lround(40 * dpi_ / 96.0);
+  if (dx < snap && dy < snap) { animate_window_to(mini_place(cr.right, cr.bottom, c)); return; }
+  int ox = 0, oy = 0;
+  if (x0 < wa.left) ox = wa.left - x0; else if (x1 > wa.right) ox = wa.right - x1;
+  if (y0 < wa.top) oy = wa.top - y0; else if (y1 > wa.bottom) oy = wa.bottom - y1;
+  if (ox || oy) animate_window_to({wr.left + ox, wr.top + oy, wr.right + ox, wr.bottom + oy});
+}
+
+namespace { double snap_px(double amount, int height); }
+
+// The flight into the mini player (and back): the window lands on a spring with a little life,
+// and on the way the picture breaks into Cue's pixels and comes back sharp just before it lands;
+// the controls step aside for the flight and return with the landing. Only the geometry moves
+// with Windows' animations off, for music without its picture, or over another transition.
+// Hidden from view (DWM cloak: the window stays, it is just not composed) while it changes size
+// for the mini player: Windows otherwise shows the last big frame squeezed into the small window
+// (with its big bar and any open menu) until the engine has drawn one at the new size.
+void App::set_cloak(bool on) {
+  if (on == cloaked_) return;
+  cloaked_ = on;
+  BOOL v = on ? TRUE : FALSE;
+  DwmSetWindowAttribute(hwnd_, DWMWA_CLOAK, &v, sizeof v);
+}
+
+RECT App::client_screen() const {
+  RECT cr{};
+  GetClientRect(hwnd_, &cr);
+  POINT o{0, 0};
+  ClientToScreen(hwnd_, &o);
+  return {o.x, o.y, o.x + cr.right, o.y + cr.bottom};
+}
+
+// The largest rect of shape ar inside r, centred.
+static RECT contain_rect(const RECT& r, double ar) {
+  const int w = r.right - r.left, h = r.bottom - r.top;
+  if (w <= 0 || h <= 0 || ar <= 0) return r;
+  int cw = w, ch = h;
+  if ((double)w / h > ar) cw = std::max(1, (int)std::lround(h * ar)); else ch = std::max(1, (int)std::lround(w / ar));
+  const int x = r.left + (w - cw) / 2, y = r.top + (h - ch) / 2;
+  return {x, y, x + cw, y + ch};
+}
+
+static RECT mix_rect(const RECT& a, const RECT& b, double k) {
+  auto m = [&](LONG p, LONG q) { return (LONG)std::lround(p + (q - p) * k); };
+  return {m(a.left, b.left), m(a.top, b.top), m(a.right, b.right), m(a.bottom, b.bottom)};
+}
+
+void App::end_mini_fx(bool apply) {
+  if (!mini_fx_.on) return;
+  const bool pending = apply && mini_fx_.stage == 0;  // still on the old size: the switch happens now
+  mini_fx_.on = false;
+  end_snap();
+  set_cloak(false);
+  ghost_.end();
+  play_.end_viewport_transition(now());
+  if (pending) { geom_.on = false; mini_switch(mini_fx_.entering); }
+  play_.changed(now());
+}
+
+bool App::start_mini_fx(bool entering) {
+  end_mini_fx();  // a flight already under way (in and straight back out): it ends here
+  if (reduce_motion() || !mpv_ok_ || !loaded_ || (audio_only_ && !waveform_active_) || fullscreen_transition_ || audio_switch_.stage || snap_.on) return false;
+  mini_fx_ = MiniFx{};
+  mini_fx_.on = true;
+  mini_fx_.entering = entering;
+  mini_fx_.t0 = now();
+  // (the picture breaks into pixels where it is, then flies: shrinking into the corner on a spring
+  // with a little life, or opening out to the old place and size)
+  mini_fx_.rise = 0.12;
+  mini_fx_.dur = entering ? 0.46 : 0.40;
+  snap_subtitles(true);  // drawn after the mosaic: they step out with the controls
+  play_.begin_viewport_transition(now(), true);
+  ensure_anim();
+  return true;
+}
+
+// The mini player on or off and the window at its new size (out of sight, during a flight).
+void App::mini_switch(bool entering) {
+  if (entering) {
+    mini_player_ = play_.in.mini_player = true;
+    if (IsZoomed(hwnd_)) ShowWindow(hwnd_, SW_RESTORE);
+    // on top only if the person pinned it (the pin in its corner; remembered for next time)
+    set_pin(store_.mini_pinned);
+    // no maximize while small: Windows' drag-to-the-top would blow the mini window up
+    SetWindowLongPtrW(hwnd_, GWL_STYLE, GetWindowLongPtrW(hwnd_, GWL_STYLE) & ~(LONG_PTR)WS_MAXIMIZEBOX);
+    mini_drops_ = mpv_ok_ ? mpv_.get_double("frame-drop-count", 0) + mpv_.get_double("vo-delayed-frame-count", 0) : 0;
+    log("mini player on");
+    play_.changed(now());
+    play_.resize(cw_, ch_, s_);  // the bar becomes the mini player's at once, before the window shrinks
+    // in flight: the mini player's size where the window was (centred on it), then it flies into
+    // its corner; otherwise straight into the corner
+    const RECT to = mini_rect(mini_aspect(), 3), from = window_rect();
+    const int w = to.right - to.left, h = to.bottom - to.top;
+    const int cx = (from.left + from.right) / 2, cy = (from.top + from.bottom) / 2;
+    if (mini_fx_.on && !mini_fx_.ghost) {
+      SetWindowPos(hwnd_, nullptr, cx - w / 2, cy - h / 2, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+      mini_fx_.to = to;
+    } else {
+      SetWindowPos(hwnd_, nullptr, to.left, to.top, w, h, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+    }
+  } else {
+    end_card_flip(true);  // a song on its way in the card still opens; the cover lands flat
+    mini_player_ = play_.in.mini_player = false;
+    // the card's covers (this song's and its neighbours', read ahead at the card's size) go with it
+    card_art_.reset(); ahead_next_ = {}; ahead_prev_ = {}; card_art_path_.clear();
+    play_.in.card_art.reset(); play_.in.card_art_show = false;
+    mini_drag_ = false;
+    SetWindowLongPtrW(hwnd_, GWL_STYLE, GetWindowLongPtrW(hwnd_, GWL_STYLE) | WS_MAXIMIZEBOX);
+    set_pin(mini_was_pinned_);
+    geom_.on = false;
+    if (mpv_ok_ && loaded_ && !audio_only_) {  // how the picture kept up while small (cue.log)
+      double d = mpv_.get_double("frame-drop-count", 0) + mpv_.get_double("vo-delayed-frame-count", 0) - mini_drops_;
+      log("mini player off (" + std::to_string((long long)std::max(0.0, d)) + " late or dropped frames)");
+    } else log("mini player off");
+    SetWindowPlacement(hwnd_, &mini_restore_);  // its old place and size (maximized again, if it was)
+    play_.changed(now());
+    play_.resize(cw_, ch_, s_);
+  }
+}
+
+bool App::step_mini_fx(double t) {
+  if (!mini_fx_.on) return false;
+  if (in_sizemove_) { end_mini_fx(); return true; }  // the person took the window: it ends now
+  if (mini_fx_.stage == 0) {  // the picture breaks up where it is
+    const double k = (t - mini_fx_.t0) / std::max(0.01, mini_fx_.rise);
+    const double a = smoothstep(0.0, 1.0, std::min(1.0, k));
+    set_snap(0.12 * a, snap_px(0.6 * a, ch_), 0.0);
+    if (k < 1) return true;
+    // The ghost: the window's live picture where the window is (for the way in, the part the
+    // mini player keeps: the picture in the mini player's shape), shown over it; the window goes
+    // out of sight and takes its new size and place at once; the picture flies there.
+    {
+      const RECT here = client_screen();
+      const RECT from = mini_fx_.entering ? contain_rect(here, mini_aspect()) : here;
+      if (ghost_.begin(inst_, hwnd_, from)) {
+        set_cloak(true);
+        mini_fx_.cloaked = true;
+        mini_fx_.ghost = true;
+        geom_.on = false;
+        mini_switch(mini_fx_.entering);
+        mini_fx_.from = from;
+        mini_fx_.gto = client_screen();
+        ghost_.place(from);  // (the window changed shape: the picture is cropped to the ghost's again)
+        mini_fx_.stage = 2;
+        mini_fx_.t0 = t;
+        return true;
+      }
+    }
+    // out of sight for 80 ms while the window changes size: the engine draws at the new size
+    // (two or three frames, even in 4K) before anyone sees it
+    set_cloak(true);
+    mini_fx_.cloaked = true;
+    geom_.on = false;
+    mini_switch(mini_fx_.entering);
+    set_snap(0.12, snap_px(0.6, ch_), 0.0);
+    mini_fx_.stage = 1;
+    mini_fx_.t0 = t;
+    return true;
+  }
+  if (mini_fx_.stage == 1) {
+    if (t - mini_fx_.t0 < mini_fx_.hold) return true;
+    set_cloak(false);
+    mini_fx_.cloaked = false;
+    mini_fx_.stage = 2;
+    mini_fx_.t0 = t;
+    if (mini_fx_.entering) {  // into the corner, on a spring, only moving (its size is already right)
+      animate_window_to(mini_fx_.to);
+      if (geom_.on) geom_.kind = 2;
+      geom_.dur = mini_fx_.dur;
+    }
+  }
+  if (mini_fx_.ghost) {
+    if (mini_fx_.stage == 3) {  // landed: the window was shown last frame, the picture goes now
+      ghost_.end();
+      mini_fx_.on = false;
+      play_.end_viewport_transition(now());
+      play_.changed(now());
+      return true;
+    }
+    const double k = clamp01((t - mini_fx_.t0) / std::max(0.01, mini_fx_.dur));
+    double e;
+    if (mini_fx_.entering) {  // into the corner: quick, a hair past its place, settling (ease out, back)
+      const double c1 = 0.9, c3 = c1 + 1, x = k - 1;
+      e = 1 + c3 * x * x * x + c1 * x * x;
+    } else {  // out to the old place (often the whole screen): opening, no overshoot past it
+      e = 1 - std::pow(1 - k, 3);
+    }
+    ghost_.place(mix_rect(mini_fx_.from, mini_fx_.gto, e));
+    const double px = 1 - smoothstep(0.0, 0.9, k);  // sharp just before it lands
+    set_snap(0.12 * px, snap_px(0.6 * px, ch_), 0.0);
+    if (k >= 1) {
+      ghost_.place(mini_fx_.gto);
+      end_snap();
+      set_cloak(false);  // the window shows where the picture is; the picture goes next frame
+      mini_fx_.cloaked = false;
+      mini_fx_.stage = 3;
+    }
+    return true;
+  }
+  const double k = (t - mini_fx_.t0) / std::max(0.01, mini_fx_.dur);
+  if (k >= 1) {
+    mini_fx_.on = false;
+    end_snap();
+    set_cloak(false);
+    play_.end_viewport_transition(now());
+    play_.changed(now());
+    return true;
+  }
+  const double e = 1 - smoothstep(0.0, 0.9, k);  // sharp just before it lands
+  set_snap(0.12 * e, snap_px(0.6 * e, ch_), 0.0);
+  return true;
+}
+
+void App::enter_mini() {
+  if (mini_player_ || mode_ != Mode::Play || fullscreen_ || fullscreen_transition_) return;
+  if (mini_fx_.on && mini_fx_.stage < 2) return;  // already on its way
+  mini_restore_ = WINDOWPLACEMENT{sizeof(WINDOWPLACEMENT)};
+  if (!GetWindowPlacement(hwnd_, &mini_restore_)) return;
+  mini_was_pinned_ = pinned_;
+  // The flight: the picture breaks into pixels where it is, the window takes the mini player's
+  // size once, out of sight, centred on where it was, and then only moves into its corner on a
+  // spring as the picture comes sharp. Changing its size on every frame made the engine draw a
+  // frame behind the window each time (black edges, a picture cut off), worse with a 4K film.
+  if (!start_mini_fx(true)) mini_switch(true);
+  ensure_anim();
+}
+
+void App::exit_mini(bool animate) {
+  if (mini_fx_.on && mini_fx_.stage < 2) {  // on its way (in or out), the window not settled yet
+    if (animate) return;
+    // at once (home): a way in still at the old size is dropped, a way out finishes
+    end_mini_fx(!(mini_fx_.entering && mini_fx_.stage == 0));
+  }
+  if (!mini_player_) return;
+  // back: the pixels rise as the small window drifts toward its old place, the window opens up
+  // out of sight, and the picture comes back sharp out of the pixels (maximized too)
+  if (!animate || !start_mini_fx(false)) { end_mini_fx(); mini_switch(false); }
+  ensure_anim();
+}
+
 void App::toggle_pin() {
   pinned_ = !pinned_;
+  if (mini_player_ && store_.mini_pinned != pinned_) { store_.mini_pinned = pinned_; save_state(); }  // the mini player's own pin
   SetWindowPos(hwnd_, pinned_ ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   ambient_.set_topmost(pinned_);
   ambient_.follow(hwnd_);
@@ -798,6 +1219,8 @@ void App::drain_mpv() {
           break;
         }
         // resume naturally: the start position is set before the file even opens
+        play_.in.sub_selection.reset();
+        sid_reselect_ = 0;
         std::string p = mpv_.get_string("path");
         // music starts from its beginning: a song is not a film to come back to halfway
         double rp = store_.resume && !remote::is_audio_name(p) ? store_.resume_point(p) : -1;
@@ -824,6 +1247,17 @@ void App::drain_mpv() {
         break;
       }
       case MPV_EVENT_COMMAND_REPLY:
+        if (e->reply_userdata == 103) {
+          cloud_inflight_ = false;
+          if (e->error < 0) cloud_options_.clear();
+          if (cloud_pending_) { update_blur_cloud(); ensure_anim(); }
+          break;
+        }
+        if (SubtitleSelection::is_reply(e->reply_userdata)) {
+          subtitle_selection_reply(e->reply_userdata, e->error);
+          touched = true;
+          break;
+        }
         if (e->reply_userdata >= kReplyOverlay && e->reply_userdata < kReplyOverlay + PlayView::L_COUNT) {
           Ov& o = ov_[e->reply_userdata - kReplyOverlay];
           o.added(e->error >= 0);
@@ -879,7 +1313,15 @@ void App::drain_mpv() {
         }
         break;
       case MPV_EVENT_PLAYBACK_RESTART:
+        // how long a file took to play, once (a song too: a film says it at its first frame)
+        if (loaded_ && audio_only_ && !open_timed_) { open_timed_ = true; log("song plays (open " + std::to_string((int)((now() - open_started_) * 1000)) + "ms)"); }
+        if (seek_fade_.stage == 2) { seek_fade_.stage = 3; seek_fade_.t0 = now(); ensure_anim(); }  // the new place: breathe back in
         audio_switch_restart();
+        // the card: the new cover turns in, a beat after the song starts (the engine holds its
+        // redraws for 0.1 s after a start: the turn's quick first part was lost there, a jump)
+        if (turn_on_ && flip_.stage >= 2 && loaded_) { if (turn_restart_t_ < 0) turn_restart_t_ = now(); ensure_anim(); }
+        else if (flip_.stage == 2 && loaded_) { flip_.stage = 3; flip_.t0 = now() + kFlipSettle; ensure_anim(); }
+        if (wing_hold_ && loaded_ && wing_hold_t_ <= 0) wing_hold_t_ = now() + 0.2;  // its own picture is about to be up
         if (music_intro_ && hidden_now()) { music_intro_ = false; end_snap(); }  // nobody to show it to
         if (music_intro_ && !audio_switch_.stage) {
           // the new song resolves from big pixels to its picture, the way a track change reads
@@ -898,6 +1340,16 @@ void App::drain_mpv() {
         }
         break;
       case MPV_EVENT_SHUTDOWN: mpv_ok_ = false; break;
+      case MPV_EVENT_LOG_MESSAGE: {
+        auto* m = static_cast<mpv_event_log_message*>(e->data);
+        if (!m || !m->text || engine_warns_ >= 12) break;
+        std::string t = m->text;
+        if (t.find("underrun") == std::string::npos && t.find("esynchron") == std::string::npos && t.find("too slow") == std::string::npos) break;
+        while (!t.empty() && (t.back() == '\n' || t.back() == '\r')) t.pop_back();
+        ++engine_warns_;
+        log(std::string("engine: ") + (m->prefix ? m->prefix : "") + ": " + t + (mini_player_ ? " (mini player)" : ""));
+        break;
+      }
       default: break;
     }
   }
@@ -954,6 +1406,9 @@ void App::on_property(uint64_t id, const mpv_event_property* p) {
           p->format == MPV_FORMAT_DOUBLE && p->data) {
         first_frame_ = true;
         background_warmup_.first_frame(now());
+        // a file that does not say its frame rate: the decoder's own measure, once playing
+        if (!audio_only_ && video_fps_ <= 0) { video_fps_ = mpv_.get_double("container-fps", 0); if (video_fps_ <= 0) video_fps_ = mpv_.get_double("estimated-vf-fps", 0); }
+        if (!audio_only_) apply_smooth();
         try_start_iris();
       }
       break;
@@ -982,8 +1437,14 @@ void App::on_property(uint64_t id, const mpv_event_property* p) {
       // choice either (it must never be remembered as "no audio" for the file)
       if (id == O_AID && (amix_ || (aid_reselect_ && idv != aid_reselect_))) break;
       if (id == O_AID) aid_reselect_ = 0;
-      if (id == O_SID && sid_reselect_ && idv != sid_reselect_) break;  // the refresh's passing "no"
-      if (id == O_SID) sid_reselect_ = 0;
+      if (id == O_SID && in.sub_selection.pending()) break;  // only the latest command reply confirms a click
+      if (id == O_SID && sid_reselect_) {
+        // The synchronous refresh has already finished. Its transient "no" may still be in
+        // the event queue; read the settled track once, rather than leaving an open-ended filter.
+        const std::string actual = mpv_.get_string("sid");
+        idv = (actual.empty() || actual == "no") ? 0 : std::atoll(actual.c_str());
+        sid_reselect_ = 0;
+      }
       (id == O_SID ? in.sid : in.aid) = idv;
       // a choice made by hand (not the engine's pick at load) is remembered for the file,
       // and its language becomes the preferred one for the next files
@@ -1182,6 +1643,7 @@ bool App::change_audio_graph(const std::string& graph, int64_t single_track) {
     mpv_.set("pause", "yes");
     snap_subtitles(true);
   }
+  a.opening_mix = false;
   a.graph = graph; a.track = single_track; a.dirty = true;
   if (hidden_now()) {
     a.dirty = false; a.stage = 3; a.at = now();
@@ -1209,6 +1671,7 @@ void App::cancel_audio_switch() {
 // The shuffle also hides the moment the engine shows a frame from further on.
 namespace {
 constexpr double kSwitchOut = 0.16, kSwitchIn = 0.32, kSwitchDim = 0.32;
+constexpr double kSnapOut = 0.11, kSnapIn = 0.20, kSnapHold = 0.045;
 double snap_px(double amount, int height);  // the mosaic's block size (defined with the fullscreen motion)
 }
 
@@ -1217,21 +1680,25 @@ bool App::step_audio_switch(double t) {
   if (!a.stage) return false;
   bool rm = reduce_motion();
   auto shuffle = [&] {
+    if (a.opening_mix) { set_snap(1.0, snap_px(1.0, ch_), 1.0); return; }
     // two coarse block sizes taking turns, a dozen times a second
     int beat = (int)std::floor((t - a.at) / 0.085);
     set_snap(kSwitchDim, snap_px(beat % 2 ? 0.84 : 1.0, ch_), 1.0);
   };
   // a song opened again for a new look moves quicker than a language change: the picture is all
   // that changes, and the sound waits only for the reopen
-  const double out = a.reopen ? 0.12 : kSwitchOut, in = a.reopen ? 0.26 : kSwitchIn;
+  const double out = a.opening_mix ? kSnapOut : a.reopen ? 0.12 : kSwitchOut;
+  const double in = a.opening_mix ? kSnapIn : a.reopen ? 0.26 : kSwitchIn;
+  const double hold = a.opening_mix ? kSnapHold : .05;
   if (a.stage == 1) {
     double k = rm ? 1.0 : clamp01((t - a.at) / out);
-    set_snap(kSwitchDim * k, snap_px(0.3 + 0.7 * k * k, ch_), smoothstep(0.0, 0.7, k));
+    if (a.opening_mix) set_snap(k * k, snap_px(k, ch_), std::min(1.0, k * 1.6));
+    else set_snap(kSwitchDim * k, snap_px(0.3 + 0.7 * k * k, ch_), smoothstep(0.0, 0.7, k));
     if (a.reopen) set_switch_gain(1 - k);  // the sound breathes out with the picture
     if (k >= 1) { a.stage = 2; a.at = t; }
-  } else if (a.stage == 2 && t - a.at < .05) {
+  } else if (a.stage == 2 && t - a.at < hold) {
     shuffle();
-  } else if (a.stage == 2 && t - a.at >= .05) {
+  } else if (a.stage == 2 && t - a.at >= hold) {
     // Give the shader's black picture a couple of presentation frames first.
     a.dirty = false; a.stage = 3; a.at = t;
     if (a.reopen) {
@@ -1253,7 +1720,12 @@ bool App::step_audio_switch(double t) {
     double k = rm ? 1.0 : clamp01((t - a.at) / in);
     if (a.reopen) set_switch_gain(rm ? 1.0 : ease_out(clamp01((t - a.at) / 0.2)));  // and back in
     double blocks = 1 - ease_out(k);
-    set_snap(kSwitchDim * (1 - ease_out(clamp01(k * 1.4))), snap_px(blocks, ch_), 1 - smoothstep(0.5, 1.0, k));
+    if (a.opening_mix) {
+      set_snap(1 - ease_out(clamp01(k * 1.35)),
+               snap_px(1 - ease_out(clamp01((k - 0.08) / 0.85)), ch_),
+               1 - smoothstep(0.45, 1.0, k));
+      if (k >= 0.55) snap_subtitles(false);
+    } else set_snap(kSwitchDim * (1 - ease_out(clamp01(k * 1.4))), snap_px(blocks, ch_), 1 - smoothstep(0.5, 1.0, k));
     if (k >= 1) {
       a.stage = 0;
       set_switch_gain(1);
@@ -1272,10 +1744,43 @@ bool App::step_audio_switch(double t) {
 // again): the track still says "on", nothing shows. Letting go of the track and taking it again
 // makes the engine read the current line anew. Its passing "no" is not the person's choice.
 void App::refresh_subtitles() {
-  int64_t sid = play_.in.sid;
+  int64_t sid = play_.in.sub_selection.shown(play_.in.sid);
   if (sid <= 0 || !mpv_ok_) return;
   sid_reselect_ = sid;
-  mpv_.cmd_batch({{"set", "sid", "no"}, {"set", "sid", std::to_string(sid)}});
+  if (!mpv_.cmd_batch({{"set", "sid", "no"}, {"set", "sid", std::to_string(sid)}})) sid_reselect_ = 0;
+}
+
+void App::select_subtitle(int64_t id) {
+  if (id < 0) return;
+  sid_reselect_ = 0;  // a new choice supersedes the audio refresh, including its suppressed "no"
+  const uint64_t request = play_.in.sub_selection.begin(id);
+  // Always send the choice. in.sid may still describe A while B is queued and the user picks A.
+  const int error = mpv_.cmd({"set", "sid", id == 0 ? "no" : std::to_string(id)}, request);
+  if (error < 0) subtitle_selection_reply(request, error);
+  if (id > 0) set_subtitle_visibility(true);
+}
+
+void App::subtitle_selection_reply(uint64_t request, int error) {
+  if (!play_.in.sub_selection.finish(request)) return;  // an older click or another file
+  sid_reselect_ = 0;
+  // A -> B -> A need not emit an observer event. Read the actual result after the last command,
+  // also on failure, so the menu never keeps claiming a choice the engine did not accept.
+  std::string value = mpv_.get_string("sid");
+  char* text = value.data();
+  mpv_event_property property{"sid", MPV_FORMAT_STRING, &text};
+  on_property(O_SID, &property);
+  if (error < 0) log("subtitle selection failed: " + std::to_string(error));
+  play_.changed(now());
+}
+
+void App::set_subtitle_visibility(bool visible) {
+  play_.in.sub_visible = visible;
+  if (snap_.subs_hidden) {
+    // A click during a mini/fullscreen/audio transition changes what is restored on landing.
+    snap_.subs_were = visible;
+    if (loaded_) if (RecentItem* r = store_.find(path_)) { r->sub_visible = visible; save_state(); }
+  }
+  mpv_.set_flag_async("sub-visibility", visible && !snap_.subs_hidden);
 }
 
 void App::audio_switch_restart() {
@@ -1297,6 +1802,39 @@ void App::audio_switch_restart() {
   mpv_.set("pause", a.paused ? "yes" : "no");
   if (hidden_now()) { a.stage = 0; set_switch_gain(1); end_snap(); }
   ensure_anim();
+}
+
+// A jump in the sound (a click on the timeline, the arrow keys, the 15-second steps) used to cut
+// the wave wherever it was and start the new place at full level: a pop. Now the sound breathes
+// out in 16 ms, jumps, and breathes in over 50 ms once the new place plays (the engine's gain,
+// under the person's volume). Paused, nothing to hear: the jump is immediate.
+void App::seek_soft(std::vector<std::string> cmd) {
+  auto& f = seek_fade_;
+  if (!mpv_ok_ || play_.in.paused || audio_switch_.stage) { f.stage = 0; set_switch_gain(1); mpv_.cmd_vec(cmd); return; }
+  if (f.stage == 2) { mpv_.cmd_vec(cmd); return; }  // already silent, waiting: the newer place wins
+  if (f.stage == 3) f.t0 = now() - (1 - switch_gain_) * 0.016;  // breathing in: back out from where it is
+  else if (f.stage == 0) f.t0 = now();
+  f.stage = 1;
+  f.cmd = std::move(cmd);
+  step_seek_fade(now());
+  ensure_anim();
+}
+
+bool App::step_seek_fade(double t) {
+  auto& f = seek_fade_;
+  if (!f.stage) return false;
+  if (f.stage == 1) {
+    double k = clamp01((t - f.t0) / 0.016);
+    set_switch_gain(1 - k);
+    if (k >= 1) { mpv_.cmd_vec(f.cmd); f.cmd.clear(); f.stage = 2; f.t0 = t; }
+  } else if (f.stage == 2) {
+    if (t - f.t0 > 1.5) { f.stage = 3; f.t0 = t; }  // no restart came: never left quiet
+  } else {
+    double k = clamp01((t - f.t0) / 0.05);
+    set_switch_gain(k * k * (3 - 2 * k));
+    if (k >= 1) { set_switch_gain(1); f.stage = 0; }
+  }
+  return true;
 }
 
 // The engine's own gain, under the person's volume (volume-gain, in dB): 1 is untouched, 0 silent.
@@ -1344,6 +1882,8 @@ void App::set_audio_mix(std::vector<int64_t> ids, bool remember) {
     std::string g = audio_mix_graph(ids, audio_only_ && waveform_active_, visual_cover(), music_scene_, music_look_on_);
     if (g.empty()) return;
     if (!change_audio_graph(g, 0)) return;
+    // Automatic restoration uses the fullscreen pixel fade, without changing window mode.
+    audio_switch_.opening_mix = !remember && !audio_only_;
   }
   amix_ = play_.in.amix = true;
   play_.in.amix_ids = ids;
@@ -1363,6 +1903,8 @@ void App::set_audio_mix(std::vector<int64_t> ids, bool remember) {
 void App::clear_audio_mix() {
   cancel_audio_switch();
   aid_reselect_ = 0;
+  sid_reselect_ = 0;
+  play_.in.sub_selection.reset();
   if (!amix_) return;
   amix_ = play_.in.amix = false;
   play_.in.amix_ids.clear();
@@ -1473,6 +2015,7 @@ void App::set_music_look(int look) {
 // the same way where IsIconic is checked. Cue pinned on top stays awake.
 bool App::covered() const {
   if (!hwnd_ || IsIconic(hwnd_)) return false;
+  if (cloaked_) return false;  // our own cloak for a moment (the mini player's flight): still in view
   BOOL cloaked = FALSE;  // another virtual desktop
   if (SUCCEEDED(DwmGetWindowAttribute(hwnd_, DWMWA_CLOAKED, &cloaked, sizeof cloaked)) && cloaked) return true;
   if (GetWindowLongPtrW(hwnd_, GWL_EXSTYLE) & WS_EX_TOPMOST) return false;
@@ -1502,14 +2045,14 @@ void App::update_music_idle() {
   const bool film_out = mpv_ok_ && loaded_ && !audio_only_ && mode_ == Mode::Play && hidden_;
   if (film_out != film_idle_) {
     film_idle_ = film_out;
-    mpv_.set_async("file-local-options/video-sync", film_out ? "audio" : video_sync_.empty() ? "display-resample" : video_sync_);
+    send_sync();
   }
 }
 
 void App::set_hidden(bool h) {
   if (h == hidden_) return;
   hidden_ = h;
-  log(h ? "covered by a full-screen window: drawing paused" : "in view again");
+  trace(h ? "covered by a full-screen window: drawing paused" : "in view again");
   update_music_idle();  // a film: frames timed by the sound while covered
   update_blur_cloud();
   if (!h) { play_.changed(now()); ensure_anim(); }
@@ -1555,7 +2098,7 @@ void App::media_sync() {
       { std::ofstream(mark) << "1"; }
       bool ok = media_controls_.attach(hwnd_, WM_APP_MEDIA_BUTTON);
       std::filesystem::remove(mark, ec);
-      log(ok ? "media controls on" : "media controls unavailable");
+      if (ok) trace("media controls on"); else log("media controls unavailable");
     }
   }
   media_controls_.set_active(active);
@@ -1563,15 +2106,17 @@ void App::media_sync() {
   media_controls_.set_playing(!play_.in.paused && !eof_);
   media_controls_.set_buttons(play_.in.queue_active && play_.in.has_prev, play_.in.has_next);
   if (!loaded_) return;
-  // a song: its tags; a film: its name as people say it ("Twin Peaks" / "S01E03", a title / its year)
-  std::string title, artist;
-  if (audio_only_) { title = play_.in.music_title; artist = play_.in.music_artist; }
-  else remote::card_words(file_name(path_), title, artist);
-  std::string key = path_ + "\n" + title + "\n" + artist;
+  // Parse a film's filename once per file, rather than on every 33 ms poll. Music tags
+  // can arrive later, so their actual words still invalidate the cached card immediately.
   const double t = now();
-  if (key != media_key_) {
-    media_key_ = key;
-    media_title_ = title; media_sub_ = artist;
+  if (path_ != media_key_ || audio_only_ != media_words_audio_ ||
+      (audio_only_ && (play_.in.music_title != media_title_ || play_.in.music_artist != media_sub_))) {
+    media_key_ = path_;
+    media_words_audio_ = audio_only_;
+    if (audio_only_) { media_title_ = play_.in.music_title; media_sub_ = play_.in.music_artist; }
+    else remote::card_words(file_name(path_), media_title_, media_sub_);
+    const auto& title = media_title_;
+    const auto& artist = media_sub_;
     media_controls_.set_media(audio_only_, title, artist, "");  // the words at once; the picture follows
     media_cover_job_.reset();
     media_still_job_.reset();
@@ -1580,7 +2125,7 @@ void App::media_sync() {
     else media_still_due_ = t + 6;  // a film shows a still of itself, taken a few seconds in
   }
   if (media_cover_job_ && media_cover_job_->done.load()) {
-    if (!media_cover_job_->bytes.empty()) media_controls_.set_media(true, title, artist, media_cover_job_->bytes);
+    if (!media_cover_job_->bytes.empty()) media_controls_.set_media(true, media_title_, media_sub_, media_cover_job_->bytes);
     media_cover_job_.reset();
   }
   // the film's still: the engine saves the frame on screen (no subtitles), it is read on a
@@ -1624,11 +2169,11 @@ void App::hold_seek(double target) {
 
 void App::music_fit_window() {
   if (!audio_only_ || !cover_scene_ || cw_ <= 0 || ch_ <= 0) return;
-  MusicFrame f = music_frame_for(cw_, ch_, s_);
+  MusicFrame f = mini_player_ && audio_only_ && !fullscreen_ ? MusicFrame::Card : music_frame_for(cw_, ch_, s_);
   if (f != music_frame_) {
     view_from_ = play_.in.music_view.f > 0 ? play_.in.music_view : music_view_target();
     music_frame_ = f;
-    view_t0_ = reduce_motion() ? -1 : now();
+    view_t0_ = reduce_motion() || mini_fx_.on ? -1 : now();  // into or out of the mini player: under the pixels, at once
   }
   step_music_view(now());
   play_.changed(now());
@@ -1639,12 +2184,46 @@ MusicView App::music_view_target() const {
   int top = ch_;
   Rect d = play_.blur_cloud().controls;
   if (d.h > 0 && d.cy() > ch_ / 2) top = d.y;  // the bar at the bottom: the cover stays above it
-  return music_view(music_scene_, music_frame_, cw_, ch_, top);
+  // the list open with its header (a close composition, a small window): the cover is the
+  // header's thumbnail, framed there like the card's cover
+  if (music_frame_ != MusicFrame::Card) {
+    const Rect c = play_.list_cover();
+    if (c.w > 0) {
+      MusicView v;
+      v.frame = music_frame_;
+      v.f = c.w / (double)music_scene_.side;
+      v.ox = c.x - music_scene_.x * v.f;
+      v.oy = c.y - music_scene_.y * v.f;
+      return v;
+    }
+  }
+  // a song's mini player: the cover where the card puts it (its words and bar beside it)
+  if (music_frame_ == MusicFrame::Card) {
+    MusicView v;
+    v.frame = MusicFrame::Card;
+    Rect c = play_.card_cover();
+    if (c.w <= 0) return music_view(music_scene_, MusicFrame::Cover, cw_, ch_, top);
+    v.f = c.w / (double)music_scene_.side;
+    v.ox = c.x - music_scene_.x * v.f;
+    v.oy = c.y - music_scene_.y * v.f;
+    return v;
+  }
+  // a roomy window: the cover in the middle over its words, the bar along the foot (the list open:
+  // the cover and its words in the left half)
+  if (music_frame_ == MusicFrame::Centre)
+    return music_view(music_scene_, MusicFrame::Centre, cw_, ch_, top, play_.music_centre_below(), play_.music_stack_above(), -1,
+                      play_.music_list_beside());
+  // framed close: the cover, its words and the bar as one group
+  if (music_frame_ != MusicFrame::Scene && play_.music_stacked())
+    return music_view(music_scene_, music_frame_, cw_, ch_, top, play_.music_stack_below(), play_.music_stack_above());
+  return music_view(music_scene_, music_frame_, cw_, ch_, top, -1, 0, play_.music_words_w());
 }
 
 bool App::step_music_view(double t) {
   if (!audio_only_ || !cover_scene_ || cw_ <= 0 || ch_ <= 0) return false;
   MusicView v = music_view_target();
+  // (what this framing was made for: a change from it is seen on the next frame, whoever framed it)
+  if (music_frame_ == MusicFrame::Centre) { list_side_seen_ = play_.music_list_beside(); centre_below_seen_ = play_.music_centre_below(); }
   bool moving = false;
   if (view_t0_ >= 0) {
     double k = clamp01((t - view_t0_) / 0.34);
@@ -1659,12 +2238,299 @@ bool App::step_music_view(double t) {
     framing_sent_ = m;
     char b[3][32];
     std::snprintf(b[0], 32, "%.5f", m.zoom); std::snprintf(b[1], 32, "%.6f", m.pan_x); std::snprintf(b[2], 32, "%.6f", m.pan_y);
-    mpv_.set_async("file-local-options/video-zoom", b[0]);
-    mpv_.set_async("file-local-options/video-pan-x", b[1]);
-    mpv_.set_async("file-local-options/video-pan-y", b[2]);
+    // (the engine's own options, not file-local ones: those go back when a song unloads, and its
+    // last picture, still on screen while the next one opens, was drawn again unframed. Every file
+    // sets them when the engine reads it: a film back to none, a song to its framing)
+    mpv_.set_async("video-zoom", b[0]);
+    mpv_.set_async("video-pan-x", b[1]);
+    mpv_.set_async("video-pan-y", b[2]);
     update_blur_cloud();
   }
   return moving;
+}
+
+// The engine's picture as it comes (a film, or a song with no picture of its own).
+void App::frame_plain() {
+  framing_sent_ = {0, 0, 0};
+  mpv_.set("video-zoom", "0");
+  mpv_.set("video-pan-x", "0");
+  mpv_.set("video-pan-y", "0");
+}
+
+void App::begin_music_gap() {
+  music_gap_ = true;
+  music_gap_t_ = now();
+}
+
+void App::end_music_gap() {
+  if (!music_gap_) return;
+  music_gap_ = false;
+  update_blur_cloud();
+}
+
+// ── the card's song change ──────────────────────────────────────────
+// Next, previous, a song chosen in the list or the one that follows at the end, in the mini
+// player's card: the cover turns away about its upright axis while the song breathes out (0.15 s),
+// the next one opens while the cover is edge-on, and as it starts playing its cover turns in from
+// the other side, settling with a little overshoot (0.42 s). The words step out with the old cover
+// and the new ones slide in. The sound is never held: the old song fades for those 0.15 s, the new
+// one starts at its full level.
+// The spectrum-alone look has no cover in the engine's picture: in the card Cue draws the song's
+// cover itself (read ahead at the card's size, the same picture the turn uses) over the square
+// where the engine shows the spectrum. Nothing is reopened, the sound never stops, and back in
+// the full player the spectrum is there as it was.
+// (also while one song closes and the next opens: the interface keeps the song's scene then, and
+// the look in use is the last one set up; a gap in this condition showed the spectrum behind the
+// card for a moment at every song change)
+bool App::card_drawn() const {
+  return mode_ == Mode::Play && mini_player_ && !fullscreen_ && play_.in.audio_only && play_.in.cover_scene && !cover_art_ &&
+         music_look_on_ == 1;
+}
+
+bool App::card_flip_ok() const {
+  return mode_ == Mode::Play && mini_player_ && !fullscreen_ && audio_only_ && cover_scene_ && (cover_art_ || card_drawn()) && waveform_active_ &&
+         loaded_ && first_frame_ && mpv_ok_ && !reduce_motion() && !hidden_now() && !audio_switch_.stage && !mini_fx_.on;
+}
+
+// The turn is one movement through the edge: away with an ease-in (fastest at the edge), in with an
+// ease-out that leaves the edge at that same speed (885 degrees a second, so the hand-over reads
+// as one turn, not a stop and a start), a whisper past flat, settled. 88.5 degrees: edge-on is a
+// hair, never a lit sliver that seems to hang while the next song opens.
+namespace { constexpr double kFlipEdge = 1.545, kFlipOut = 0.20, kFlipIn = 0.42, kFlipWait = 2.0, kFlipBack = 1.2; }
+
+// The card's cover on screen, and the window's client area (screen px).
+bool App::card_cover_screen(RECT& cover, RECT& clip) const {
+  const Rect c = play_.card_cover();
+  if (c.w <= 0 || !hwnd_) return false;
+  POINT a{c.x, c.y}, b{c.x + c.w, c.y + c.h}, o{0, 0};
+  if (!ClientToScreen(hwnd_, &a) || !ClientToScreen(hwnd_, &b) || !ClientToScreen(hwnd_, &o)) return false;
+  cover = {a.x, a.y, b.x, b.y};
+  clip = {o.x, o.y, o.x + cw_, o.y + ch_};
+  return true;
+}
+
+// The cover the card shows, read ahead at the card's size, so a song change can start turning it
+// the moment it is asked for.
+void App::card_art_prefetch() {
+  if (!mini_player_ || fullscreen_ || !audio_only_ || !(cover_art_ || card_drawn()) || mode_ != Mode::Play || turn_on_) return;
+  const int side = play_.card_cover().w;
+  if (side <= 0) return;
+  if (!card_art_ || card_art_->side != side || card_art_path_ != path_) {
+    card_art_ = request_cover_art(cover_vid_ > 0 ? cover_job_ : nullptr, side);
+    card_art_path_ = path_;
+  }
+  // and the songs either side of it, a moment after this one started (never while it opens): a
+  // skip has its next cover in hand, and turns through the edge in one movement
+  if (!queue_.active() || !loaded_ || now() - loaded_at_ < 1.0) return;
+  auto ahead = [&](Ahead& a, const MediaQueue::Item* item) {
+    if (!item) return;
+    if (a.job && a.id == item->id && a.job->side == side) return;
+    a.id = item->id;
+    a.job = request_cover_art(request_cover(item->path), side);
+  };
+  ahead(ahead_next_, queue_following());
+  ahead(ahead_prev_, shuffle_previous());
+}
+
+// The drawn card cover (card_drawn): handed to the interface once read, shown while no turn draws
+// it (a turn hands it back as the engine's cover would come back: once its shadow is home)
+bool App::sync_card_art() {
+  const bool drawn = card_drawn() && !mini_fx_.on;
+  std::shared_ptr<const CoverArt> art;
+  const bool ready = card_art_ && card_art_->done.load() && card_art_path_ == path_ && card_art_->art;
+  if (drawn) art = ready ? card_art_->art : play_.in.card_art;  // (the last cover stays until the next is read)
+  const bool show = drawn && art && art->ok() && !(turn_on_ && cov_hide_ > 0.0005);
+  if (art != play_.in.card_art || show != play_.in.card_art_show) {
+    play_.in.card_art = art;
+    play_.in.card_art_show = show;
+    play_.changed(now());
+    return true;
+  }
+  return drawn && !ready;  // (still being read: look again next frame)
+}
+
+void App::queue_play(uint32_t id) {
+  if (flip_.stage == 1) {  // still turning away: the newer choice wins
+    if (turn_on_ && id != flip_.id) {
+      const auto* item = queue_.get(id);
+      next_art_ = item ? request_cover_art(request_cover(item->path), turn_cover_.right - turn_cover_.left) : nullptr;
+      next_art_id_ = id;
+    }
+    flip_.id = id;
+    return;
+  }
+  // a song chosen while the last turn is still under way: that one lands at once, this one turns
+  if (turn_on_) end_card_flip(false);
+  card_art_prefetch();
+  // Cue's own turn, over the engine's picture: the old cover where the engine shows it, then the
+  // engine leaves its cover out (the room and the shadow stay its own)
+  RECT cover{}, clip{};
+  if (flip_.stage == 0 && card_flip_ok() && card_art_ && card_art_->done.load() && card_art_->art && card_art_path_ == path_ &&
+      card_cover_screen(cover, clip) && card_art_->side == cover.right - cover.left && view_t0_ < 0 &&
+      turn_.begin(inst_, hwnd_, cover, clip, card_art_->art)) {
+    turn_on_ = true;
+    turn_cover_ = cover;
+    turn_restart_t_ = -1;
+    cov_hide_ = 0.002;  // (the cover out; its shadow fades as the window's comes in)
+    flip_ = {};
+    flip_.stage = 1; flip_.t0 = now(); flip_.id = id;
+    // (read ahead for the songs either side: in hand already, the turn never waits at the edge)
+    const int side = cover.right - cover.left;
+    if (ahead_next_.job && ahead_next_.id == id && ahead_next_.job->side == side) next_art_ = ahead_next_.job;
+    else if (ahead_prev_.job && ahead_prev_.id == id && ahead_prev_.job->side == side) next_art_ = ahead_prev_.job;
+    else { const auto* item = queue_.get(id); next_art_ = item ? request_cover_art(request_cover(item->path), side) : nullptr; }
+    next_art_id_ = id;
+    play_.in.music_leaving = true;
+    play_.changed(now());
+    update_blur_cloud();
+    ensure_anim();
+    return;
+  }
+  if (flip_.stage == 3 || (flip_.stage == 0 && card_flip_ok())) {
+    flip_.from = flip_.stage == 3 ? flip_ry_ : 0.0;  // (turning in: it turns right on round)
+    flip_.stage = 1; flip_.t0 = now(); flip_.id = id;
+    play_.in.music_leaving = true;
+    play_.changed(now());
+    ensure_anim();
+    return;
+  }
+  queue_play_now(id);
+}
+
+void App::end_card_flip(bool play_pending) {
+  if (!flip_.stage) return;
+  const int stage = flip_.stage;
+  const uint32_t id = flip_.id;
+  if (turn_on_) {
+    turn_.abort();
+    turn_on_ = false;
+    cov_hide_ = 0;
+    turn_restart_t_ = -1;
+    next_art_.reset();
+  }
+  flip_ = {};
+  flip_ry_ = 0;
+  play_.in.music_leaving = false;
+  set_switch_gain(1);
+  play_.changed(now());
+  update_blur_cloud();
+  if (stage == 1 && play_pending) queue_play_now(id);
+}
+
+// Cue's own turn (see cover_turn_window.h): the window's thread draws the cover; this side opens
+// the next song at the edge, hands it the next cover, keeps the engine's shadow with the turn and
+// gives the cover back to the engine once its picture shows the new one.
+bool App::step_card_turn(double t) {
+  auto& f = flip_;
+  // the window stopped drawing before it was through (Windows refused its pixels): the engine's
+  // cover comes back at once and a song waiting for the edge opens
+  if (f.stage < 6 && turn_.done()) { end_card_flip(true); return false; }
+  // the window moved under the cover (dragged, snapped): the turn lands at once
+  RECT cover{}, clip{};
+  if (in_sizemove_ || !card_cover_screen(cover, clip) || cover.left != turn_cover_.left || cover.top != turn_cover_.top ||
+      cover.right != turn_cover_.right) {
+    end_card_flip(true);
+    return false;
+  }
+  {
+    const auto ct = play_.cover_tilt();
+    turn_.tilt(ct.rx * 3.14159265358979 / 180, ct.ry * 3.14159265358979 / 180, ct.k);
+  }
+  // The engine leaves the cover out and its shadow fades as the window's comes in (and back at the
+  // end): the window says how much of the shadow it drew, the engine draws the rest
+  if (f.stage < 5) {
+    const double hide = std::max(0.002, turn_.shadow());
+    if (std::fabs(hide - cov_hide_) > 0.004 || (hide >= 0.999 && cov_hide_ < 0.999)) { cov_hide_ = hide; update_blur_cloud(); }
+  }
+  if (f.stage == 1) {
+    const double k = clamp01((t - f.t0) / CoverTurnTiming::kOut);
+    if (!play_.in.paused && !eof_) set_switch_gain(1 - k);  // the old song breathes out with it
+    if (!turn_.edge()) return true;
+    f.stage = 2; f.t0 = t;
+    const uint32_t id = f.id;
+    queue_play_now(id);
+    // (the engine has the next song's load before this: the old one stops there, never louder)
+    set_switch_gain(1);
+    if (loaded_) {  // nothing opened (the file is gone, nothing follows): the old cover turns back
+      if (card_art_ && card_art_->art) turn_.set_to(card_art_->art);
+      turn_restart_t_ = t;
+    } else if (next_art_ && next_art_id_ == id) {
+      // the card's cover from now on is this one (read already, at this size)
+      card_art_ = next_art_;
+      card_art_path_ = path_;
+    }
+    return true;
+  }
+  if (f.stage == 2) {  // at the edge, then turning in (the window's own clock)
+    if (next_art_ && next_art_->done.load() && next_art_->art) turn_.set_to(next_art_->art);
+    if (turn_.landed()) { f.stage = 3; f.t0 = t; }
+    return true;
+  }
+  if (f.stage == 3) {
+    // flat: the engine takes the cover back once the song plays (its first pictures come a moment
+    // after it starts) or, if it never does, after a while: first the shadows hand over
+    const bool shown = turn_restart_t_ >= 0 && t - turn_restart_t_ >= 0.15 && !music_gap_;
+    if (shown || t - f.t0 > 2.5) { turn_.release(); f.stage = 4; f.t0 = t; }
+    return true;
+  }
+  if (f.stage == 4) {  // the shadows handed over: the engine's cover comes back under the window's
+    if (turn_.shadow_out() || t - f.t0 > 0.6) {
+      cov_hide_ = 0;
+      flip_ry_ = 0;
+      update_blur_cloud();
+      f.stage = 5; f.t0 = t;
+    }
+    return true;
+  }
+  if (f.stage == 5) {  // a few of the engine's pictures with the cover, then the window fades
+    if (t - f.t0 >= 0.10) { turn_.finish(); f.stage = 6; f.t0 = t; }
+    return true;
+  }
+  if (turn_.done() || t - f.t0 > 1.0) {
+    turn_.abort();
+    turn_on_ = false;
+    next_art_.reset();
+    flip_ = {};
+    return false;
+  }
+  return true;
+}
+
+bool App::step_card_flip(double t) {
+  auto& f = flip_;
+  if (!f.stage) return false;
+  if (hidden_now() || !mini_player_ || mode_ != Mode::Play) { end_card_flip(true); return false; }
+  if (turn_on_) return step_card_turn(t);
+  if (f.stage == 1) {
+    const double k = clamp01((t - f.t0) / kFlipOut);
+    flip_ry_ = f.from + (kFlipEdge - f.from) * k * k;  // eases away, faster and faster (ease in)
+    if (!play_.in.paused && !eof_) set_switch_gain(1 - k);  // the old song breathes out with it
+    update_blur_cloud();
+    if (k < 1) return true;
+    flip_ry_ = kFlipEdge;
+    update_blur_cloud();
+    f.stage = 2; f.t0 = t;
+    const uint32_t id = f.id;
+    queue_play_now(id);
+    // (the engine has the next song's load before this: the old one stops there, never louder)
+    set_switch_gain(1);
+    if (loaded_) { f.stage = 3; f.t0 = t; }  // nothing opened (the file is gone, nothing follows): the cover turns back
+    return true;
+  }
+  if (f.stage == 2) {  // edge-on while the next song opens (its first picture turns it in)
+    if (t - f.t0 > kFlipWait) { f.stage = 3; f.t0 = t; }
+    return true;
+  }
+  // in from the other side, past flat by a hair, then flat
+  const double k = clamp01((t - f.t0) / kFlipIn);
+  // ease out, back: leaves the edge at the turn-away's speed (slope 3*c3 - 2*c1 = 4.2: 2 x 0.42/0.20),
+  // passes flat by about 6 degrees, lands
+  const double c1 = kFlipBack, c3 = c1 + 1, x = k - 1;
+  const double e = 1 + c3 * x * x * x + c1 * x * x;
+  flip_ry_ = -kFlipEdge * (1 - e);
+  update_blur_cloud();
+  if (k >= 1) { flip_ = {}; flip_ry_ = 0; update_blur_cloud(); return false; }
+  return true;
 }
 
 // The cover look and the spectrum (and the wide and tall compositions) are graphs built around
@@ -1681,7 +2547,7 @@ void App::reopen_music() {
     play_.in.cover_art = cover_art_;
     mpv_.set("file-local-options/scale", cover_art_ ? "spline36" : "nearest");
     mpv_.set("file-local-options/dscale", cover_art_ ? "mitchell" : "nearest");
-    change_audio_graph(audio_mix_graph(play_.in.amix_ids, true, visual_cover(), music_scene_, look), 0);
+    change_audio_graph(audio_mix_graph(play_.in.amix_ids, true, visual_cover(), music_scene_, music_look_on_), 0);
     update_blur_cloud();
     return;
   }
@@ -1709,6 +2575,41 @@ void App::reopen_song() {
   ensure_anim();
 }
 
+// Smoothing: off by default (a choice in "..."), offered where it helps (a film whose frames do
+// not land evenly on the screen's refreshes), never on battery. The blend only exists while the
+// film is timed by the display (display-resample): the engine silently ignores it otherwise, so
+// a film with smoothing on is timed that way whatever its size (big films are otherwise timed by
+// the sound, which draws fewer pictures).
+void App::apply_smooth() {
+  const double hz = pacer_.interval() > 0 ? 1.0 / pacer_.interval() : 60.0;
+  const bool helps = !audio_only_ && cadence_uneven(video_fps_, hz);
+  play_.in.smooth_available = helps;
+  play_.in.smooth_motion = store_.smooth_motion;
+  const bool want = helps && store_.smooth_motion && !on_battery();
+  smooth_on_ = want;
+  if (mpv_ok_) mpv_.set_async("interpolation", want ? "yes" : "no");
+  send_sync();
+  if (!audio_only_ && loaded_) {  // so it can be checked: cue.log says when it works, and why not
+    char b[160];
+    std::snprintf(b, sizeof b, "smooth motion %s (%.3f fps on %.2f Hz%s%s)", want ? "on" : "off", video_fps_, hz,
+                  helps ? "" : ", even cadence", on_battery() ? ", on battery" : "");
+    if (b != smooth_logged_) { smooth_logged_ = b; log(b); }
+  }
+  play_.changed(now());
+}
+
+// The film's timing, one place for all three reasons: covered by a full-screen window (the
+// sound times it), smoothing on (the display times it, or the blend does nothing), otherwise
+// what decide_window chose for its size. File-local: the next file starts from the default.
+void App::send_sync() {
+  if (!mpv_ok_ || audio_only_) return;
+  if (!sync_decided_ && !smooth_on_ && !film_idle_) return;  // nothing to say before the film's size is known
+  std::string s = film_idle_ ? "audio" : smooth_on_ ? "display-resample" : video_sync_.empty() ? "display-resample" : video_sync_;
+  if (s == sync_sent_) return;
+  sync_sent_ = s;
+  mpv_.set_async("file-local-options/video-sync", s);
+}
+
 void App::configure_audio_mode() {
   mpv_node node{};
   std::vector<Track> tracks;
@@ -1729,10 +2630,70 @@ void App::configure_audio_mode() {
   play_.in.music_look = store_.music_look;
   play_.in.music_mono = store_.music_mono;
   play_.in.cover_tilt = store_.cover_tilt;
-  play_.in.cover_scene = false;
+  play_.in.settings_examples = store_.settings_examples;
+  play_.in.mini_sub_size = store_.mini_sub_size;
+  // (a song keeps the interface's scene until its own is decided below: apply_smooth redraws
+  // the interface on the way, and a scene off for that moment put the full bar in the film's
+  // place, and back, at every song change)
+  if (!audio_only_) play_.in.cover_scene = false;
   // File-local options are restored by mpv on unload: a following film must
   // never inherit the waveform, low-resolution scaler or audio clock.
-  if (!audio_only_) return;
+  if (!audio_only_) {
+    // the film's own size and rate (its first real video track)
+    int vw = 0, vh = 0; video_fps_ = 0;
+    early_shape_ = {};
+    for (auto& t : tracks) if (t.type == "video" && !t.albumart) {
+      vw = t.demux_w; vh = t.demux_h; video_fps_ = t.demux_fps;
+      // the window's shape, known before the first picture when the engine says how the film is
+      // turned (see on_file_loaded)
+      if (vw > 0 && vh > 0 && t.demux_rotation >= 0)
+        early_shape_ = {(int64_t)std::lround(vw * (t.demux_par > 0 ? t.demux_par : 1.0)), vh, t.demux_rotation};
+      break;
+    }
+    // super resolution, NVIDIA's switch decides (Cue has none): on there, a film smaller than
+    // the screen, on power. Set before the film starts, so it never rebuilds while it plays.
+    vsr_on_ = false;
+    if (!on_battery() && primary_gpu_nvidia() && nvidia_vsr_switch() == 1) {
+      MONITORINFO mi{sizeof(mi)};
+      GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+      double k = vsr_scale(vw, vh, mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top);
+      if (k > 0) {
+        char vf[96];
+        std::snprintf(vf, sizeof vf, "@cuevsr:d3d11vpp=scale=%.2f:scaling-mode=nvidia", k);
+        vsr_on_ = mpv_.set("file-local-options/vf", vf);
+        log(std::string("super resolution ") + (vsr_on_ ? "on" : "refused") + " (" + std::to_string(vw) + "x" + std::to_string(vh) + ")");
+      }
+    }
+    // Build a restored video mix in on_preloaded, before decoders start. Rebuilding after
+    // FILE_LOADED used to compete with the opening iris and flush the first 4K frames.
+    std::vector<Track> audios;
+    for (const auto& t : tracks) if (t.type == "audio") audios.push_back(t);
+    std::vector<int64_t> mix;
+    if (recent && recent->aid == -2) {
+      if (recent->aid_lang.empty()) for (const auto& t : audios) mix.push_back(t.id);
+      else for (size_t i = 0; i < recent->aid_lang.size();) {
+        size_t e = recent->aid_lang.find(',', i);
+        if (e == std::string::npos) e = recent->aid_lang.size();
+        const int64_t wanted = std::atoll(recent->aid_lang.substr(i, e - i).c_str());
+        for (const auto& t : audios) if (t.id == wanted) mix.push_back(t.id);
+        i = e + 1;
+      }
+    } else if ((!recent || recent->aid < 0) && looks_like_multitrack_recording(audios)) {
+      for (const auto& t : audios) mix.push_back(t.id);
+    }
+    std::sort(mix.begin(), mix.end());
+    mix.erase(std::unique(mix.begin(), mix.end()), mix.end());
+    if (mix.size() >= 2 && mpv_.set("file-local-options/lavfi-complex", audio_mix_graph(mix, false))) {
+      amix_ = play_.in.amix = true;
+      play_.in.amix_ids = mix;
+    }
+    apply_smooth();
+    frame_plain();  // a film: never a song's framing
+    end_music_gap();
+    return;
+  }
+  video_fps_ = 0;
+  apply_smooth();
   mpv_.set("file-local-options/force-window", "yes"); // controls even without a video stream
   mpv_.set("file-local-options/audio-display", "no");
   mpv_.set("file-local-options/video-sync", "audio"); // visualization never retimes the sound
@@ -1745,12 +2706,14 @@ void App::configure_audio_mode() {
   // the light show's meter: the loudness and the highs of every audio frame, read as the
   // filter's metadata. It changes nothing in the sound; if it fails, the engine leaves it out.
   // (the cover alone has no light show: no meter either, nothing read 30 times a second)
+  // (a song opened in the mini player's card has the person's look too: the card masks the
+  // spectrum's wings, and back in the full player they are there at once, nothing reopened)
   light_meter_ = (cover_fallback_ || store_.music_look != 2) &&
                  mpv_.set("file-local-options/af",
                           "@cuelvl:lavfi=[astats=metadata=1:reset=1:measure_perchannel=Zero_crossings_rate:measure_overall=RMS_level]");
   light_latency_ = std::clamp(mpv_.get_double("audio-buffer", 0.2), 0.0, 1.0) + 0.04;
   light_cover_job_ = cover_job_ ? cover_job_ : request_cover(path_);  // read since the song was opened
-  bg_ready_t_ = -1;
+  if (!room_kept_) bg_ready_t_ = -1;  // (song to song: the room keeps its light; its colours cross over)
   if (!waveform_fallback_) {
     // the cover look is a picture (smooth scaling keeps the cover sharp); the spectrum alone is
     // pixels (nearest keeps every dot square)
@@ -1772,9 +2735,14 @@ void App::configure_audio_mode() {
     }
     play_.in.music_scene = music_scene_;
     framing_sent_ = {1e9, 0, 0};          // file-local: the engine starts every file unframed
-    music_frame_ = music_frame_for(cw_, ch_, s_);
+    // (the mini player's card stays the card from song to song: it used to fall back to the full
+    // composition here, its spectrum and words over the cover, until the next resize)
+    music_frame_ = mini_player_ && !fullscreen_ ? MusicFrame::Card : music_frame_for(cw_, ch_, s_);
     view_t0_ = -1;
+    // (no framing yet, but its frame already: the list open beside the cover is judged on it. A
+    // song picked in the open list used to be framed centred, the list over it, and stay so)
     play_.in.music_view = {};
+    play_.in.music_view.frame = music_frame_;
     mpv_.set("file-local-options/scale", cover ? "spline36" : "nearest");
     mpv_.set("file-local-options/dscale", cover ? "mitchell" : "nearest");
     // several tracks heard at once (remembered for this file, or a recording in parts): the mix is
@@ -1810,7 +2778,21 @@ void App::configure_audio_mode() {
     music_look_on_ = look;
     play_.in.cover_scene = cover_scene_;
     play_.in.cover_art = cover_art_;
-    if (cover_scene_) step_music_view(now());  // framed for this window from its first picture
+    if (cover_scene_) {
+      step_music_view(now());  // framed for this window from its first picture
+      // and said right now, before the engine draws it (sent on its way, the first picture could
+      // come out unframed: the whole scene, small, with its spectrum)
+      char b[3][32];
+      std::snprintf(b[0], 32, "%.5f", framing_sent_.zoom); std::snprintf(b[1], 32, "%.6f", framing_sent_.pan_x); std::snprintf(b[2], 32, "%.6f", framing_sent_.pan_y);
+      if (framing_sent_.zoom < 1e8) {
+        mpv_.set("video-zoom", b[0]);
+        mpv_.set("video-pan-x", b[1]);
+        mpv_.set("video-pan-y", b[2]);
+      }
+    } else frame_plain();
+    play_.in.music_leaving = false;  // its words come in
+    wing_hold_ = wing_sent_ && cover_scene_;  // (the last picture's wings stay masked until this one's is up)
+    wing_hold_t_ = 0;
     // the captions under the cover: the tags when there are some, else the file's own name
     std::string title = mpv_.get_string("metadata/by-key/title"), artist = mpv_.get_string("metadata/by-key/artist"),
                 album = mpv_.get_string("metadata/by-key/album");
@@ -1824,6 +2806,8 @@ void App::configure_audio_mode() {
     play_.in.music_title = title;
     play_.in.music_artist = artist;
   }
+  if (waveform_fallback_) { frame_plain(); play_.in.cover_scene = false; }  // (no picture of its own: nothing to frame)
+  end_music_gap();
   if (!audio_only_) return;
   if (queue_.active()) find_next_episode();  // the queue was read before this file was known as music
   else music_album_queue();
@@ -1879,6 +2863,7 @@ void App::refresh_file_info() {
 }
 
 void App::on_file_loaded() {
+  playback_priority(true);  // never slowed by Windows while something plays (back to normal at home)
   // The path property may still describe the previous file when FILE_LOADED
   // arrives. open() already owns the requested path; never replace it with a stale observation.
   closing_video_ = false;
@@ -1886,7 +2871,7 @@ void App::on_file_loaded() {
   loaded_ = true;
   open_failures_ = 0;
   loaded_at_ = now();
-  log("file loaded");
+  trace("file loaded");
   double dur = play_.in.dur;
   store_.touch(path_, dur, (int64_t)std::time(nullptr));
   play_.in.style = store_.style_for(path_);
@@ -1898,9 +2883,9 @@ void App::on_file_loaded() {
   const bool reopened = music_reopening_;  // the same song again: the interface stays as it is
   music_reopening_ = false;
   // a new song while music plays: it comes in through the pixels (see PLAYBACK_RESTART)
-  music_intro_ = !reopened && audio_only_ && waveform_active_ && mode_ == Mode::Play && !reduce_motion() && !audio_switch_.stage;
+  music_intro_ = !reopened && audio_only_ && waveform_active_ && mode_ == Mode::Play && !reduce_motion() && !audio_switch_.stage && !flip_.stage;
   if (music_intro_) set_snap(kSwitchDim, snap_px(1.0, ch_), 1.0);  // held in big pixels until it plays
-  play_.set_base_scale(s_); play_.resize(cw_, ch_, portrait_scale(s_, cw_, ch_, store_.ui_scale));
+  play_.set_base_scale(s_); play_.resize(cw_, ch_, play_scale(store_.ui_scale));
   // a song that follows a song keeps the controls (and an open list) where they are: only the
   // picture changes, through the pixels; anything else starts the interface afresh
   const bool song_follows = !reopened && audio_only_ && last_was_music_ && mode_ == Mode::Play;
@@ -1908,6 +2893,7 @@ void App::on_file_loaded() {
   if (!reopened && !song_follows) play_.reset(now());
   // black over the picture until its first frame is ready, then the pixel iris opens it
   first_frame_ = false;
+  first_frame_t_ = -1;
   if (audio_only_) {
     // Audio does not have to wait for a native video frame to reveal its controls.
     first_frame_ = true;
@@ -1922,6 +2908,19 @@ void App::on_file_loaded() {
     geom_done_ = false;
     user_sized_ = false;
     request_video_geometry();
+    // A film's window takes its shape now, from what the file says, while the engine starts its
+    // decoder: the picture opens with its first frame. It waited for the engine's first picture,
+    // then 60 ms, then the 0.26 s glide (about 0.4 s of black, and the glide drawn while the film
+    // had started). The engine's own measure, a moment later, corrects it if it differs.
+    if (!audio_only_ && early_shape_.width > 0 && early_shape_.height > 0) {
+      vid_w_ = early_shape_.width; vid_h_ = early_shape_.height; vid_rot_ = early_shape_.rotation;
+      trace("early geometry " + std::to_string(vid_w_) + "x" + std::to_string(vid_h_) + " rotate " + std::to_string(vid_rot_));
+      decide_window();
+    }
+  } else {
+    // the window is the person's: nothing reshapes it for this song either (the engine's
+    // picture reports its shape again as the song starts, and that used to resize the window)
+    user_sized_ = true;
   }
   if (!reopened && !song_follows) play_.begin_cover();
   play_.prepare(now());
@@ -1943,7 +2942,7 @@ void App::on_file_loaded() {
   remote_publish();
   if (!audio_only_) SetTimer(hwnd_, T_THUMB, (UINT)(PlaybackWarmup::kAtmosphereDelay * 1000), nullptr);
   else KillTimer(hwnd_, T_THUMB);
-  if (hidden_ && !audio_only_) mpv_.set_async("file-local-options/video-sync", "audio");  // still covered
+  if (hidden_ && !audio_only_ && !film_idle_) { film_idle_ = true; send_sync(); }  // still covered
   update_blur_cloud();  // the cover's shader pass follows this file's look at once
   ensure_anim();
 }
@@ -1961,20 +2960,35 @@ void App::reveal_play() {
   SetTimer(hwnd_, T_POLL, poll_slow_ ? 250 : 33, nullptr);
   // the place in a film is written at most once a minute while it plays (pause, close, the end
   // and Windows shutting down write it at once): a crash loses a minute, the disk is left alone
-  SetTimer(hwnd_, T_SAVE, 60000, nullptr);
+  SetTimer(hwnd_, T_SAVE, 300000, nullptr);  // where a film is, every 5 minutes (and at pause, stop, close)
   try_start_iris();
   ensure_anim();
 }
 
+// The picture opens once the window has its shape: a new film reshapes the window (decide_window,
+// a 0.26 s glide) a moment after its first frame. Opening during the glide drew the iris in the
+// old shape, moved it every frame and made the engine draw a new size each frame (the stutter).
+// A film whose shape never comes (or a slow one) opens anyway, at most 0.9 s after its first frame.
+bool App::window_settled() const {
+  if (audio_only_ || user_sized_ || fullscreen_ || mini_player_ || IsZoomed(hwnd_) || IsIconic(hwnd_)) return true;
+  if (geom_.on || !geom_done_) return false;
+  const double frame = pacer_.ok() ? pacer_.interval() : 1.0 / 60;
+  return now() - geom_end_t_ >= 2 * frame;  // a couple of frames drawn at the new size
+}
+
 void App::try_start_iris() {
-  if (mode_ == Mode::Play && play_.iris_waiting() && (first_frame_ || now() - loaded_at_ > 1.2)) {
+  const double t = now();
+  if (first_frame_ && first_frame_t_ < 0) first_frame_t_ = t;
+  const bool shaped = window_settled() || (first_frame_t_ >= 0 && t - first_frame_t_ > 0.9) || t - loaded_at_ > 2.0;
+  if (!audio_switch_.stage && mode_ == Mode::Play && play_.iris_waiting() && first_frame_ && shaped) {
     play_.start_iris(now());
-    log("iris start");
+    log("picture opens (open " + std::to_string((int)((t - open_started_) * 1000)) + "ms)");
     ensure_anim();
   }
 }
 
 void App::on_end_file(const mpv_event_end_file* e) {
+  if (e && e->reason == MPV_END_FILE_REASON_ERROR) end_music_gap();
   if (e && e->reason == MPV_END_FILE_REASON_ERROR && audio_only_ && waveform_active_ && cover_art_ && !cover_fallback_) {
     // the cover look could not start: the same file again, with the spectrum alone
     release_video_window();
@@ -2074,6 +3088,23 @@ void App::show_news(bool asked) {
 }
 
 // Closed by hand: it comes back only with the next version.
+// The survey's invitation (see HomeView): only on the home, never over the welcome, the news or
+// a scene; answered or declined, it never comes back.
+bool App::survey_wanted() const {
+  if (store_.survey == "answered" || store_.survey == "declined") return false;
+  const bool week = store_.installed > 0 && (int64_t)std::time(nullptr) - store_.installed >= 7 * 86400;
+  return (store_.survey == "due" || week) && mode_ == Mode::Home && !onboarding_ && !news_due_ && !news_host_.visible() &&
+         !scene_.visible() && pending_open_.empty();
+}
+
+void App::answer_survey(bool yes) {
+  store_.survey = yes ? "answered" : "declined";
+  save_state();
+  home_.survey = false;
+  if (yes && (INT_PTR)ShellExecuteW(hwnd_, L"open", L"https://tally.so/r/8NzQZA", nullptr, nullptr, SW_SHOWNORMAL) <= 32)
+    home_.show_notice(tr(str::toast_link_failed), now());
+}
+
 void App::close_news_line() {
   home_.news = false;
   store_.news_closed = CUE_NEWS_VERSION;
@@ -2096,7 +3127,13 @@ void App::open(std::string path, std::vector<std::string> subs) {
   if (music_intro_) { music_intro_ = false; end_snap(); }
   seek_hold_ = -1;
   thumb_stop();
-  reset_atmosphere(play_.in.audio_only && remote::is_audio_name(path) && mode_ == Mode::Play && ambient_.active());
+  // (song to song, the music's light carries on whatever the halo outside does: the card has none)
+  const bool music_to_music = play_.in.audio_only && remote::is_audio_name(path) && mode_ == Mode::Play;
+  reset_atmosphere(music_to_music);
+  room_kept_ = music_to_music;
+  // the last song's picture stays on screen while the next opens: it keeps its framing and passes
+  if (music_to_music && audio_only_ && cover_scene_ && waveform_active_ && mpv_ok_) begin_music_gap();
+  else { end_music_gap(); wing_hold_ = false; }
   if (onboarding_) {
     onboarding_ = false;
     store_.onboarded = true;
@@ -2137,10 +3174,13 @@ void App::open(std::string path, std::vector<std::string> subs) {
   geometry_query_dirty_=false;
   geom_.on=false; geom_done_=false; user_sized_=false; pending_ar_=0;
   film_idle_ = false;  // file-local: the next file starts without it
+  engine_warns_ = 0;
+  sync_decided_ = false; sync_sent_.clear(); smooth_on_ = false;
   KillTimer(hwnd_,T_GEOM);
   path_ = path;
   open_started_ = now();
-  log("open requested");
+  open_timed_ = false;
+  trace("open requested");
   observed_path_.clear();
   pending_subs_ = std::move(subs);
   clear_audio_mix();
@@ -2178,6 +3218,8 @@ void App::handle_files(const std::vector<std::string>& files) {
 }
 
 void App::go_home() {
+  exit_mini(false);  // back home: the full window, at once
+  playback_priority(false);
   if (folder_scan_) folder_scan_->cancelled=true;
   // Retain the worker slot until cancellation completes; no new scan can pile up.
   queue_.clear(); queue_refresh();
@@ -2197,6 +3239,8 @@ void App::go_home() {
   reveal_pending_ = false;
   home_.enter(now());
   mode_ = Mode::Home;  // `loaded_` stays: the end-file event may still arrive and must save the position
+  end_card_flip(false);
+  end_music_gap();
   taskbar_sync();
   set_hidden(false);  // the home is only drawn while in view, and only checked while playing
   last_was_music_ = false;
@@ -2327,6 +3371,7 @@ void App::apply_style(bool live) {
 
 // ── actions from the playback UI ────────────────────────────────────
 void App::request_pause(bool paused) {
+  if (paused && !play_.in.paused) save_position();  // the place is saved when it stops moving, not on a clock
   if (audio_switch_.stage && audio_switch_.stage < 5) {
     audio_switch_.paused = paused; play_.in.paused = paused;
     return;
@@ -2345,7 +3390,7 @@ void App::run_actions() {
   for (auto& a : acts) {
     switch (a.a) {
       case PA::NextEpisode: if(queue_.active()) {if(auto* i=queue_following())queue_play(i->id);} else if (!next_ep_.empty()) open(next_ep_); break;
-      case PA::PreviousInQueue: if(queue_.active()) {if(auto* i=queue_.previous())queue_play(i->id);} break;
+      case PA::PreviousInQueue: if(queue_.active()) {if(auto* i=shuffle_previous())queue_play(i->id);} break;
       case PA::CancelNext: next_advance_.clear(); next_cancelled_ = true; next_count_ = -1; play_.next_notice("", t); break;
       case PA::TogglePause:
         if (eof_) {  // play at the end: from the beginning
@@ -2360,24 +3405,19 @@ void App::run_actions() {
       case PA::SeekRel:
         cancel_audio_switch();
         hold_seek((seek_hold_ >= 0 ? seek_hold_ : play_.in.time) + a.v);
-        mpv_.cmd({"seek", std::to_string(a.v), "relative"});
+        seek_soft({"seek", std::to_string(a.v), "relative"});
         break;
       case PA::SeekAbs:
         cancel_audio_switch();
         if (seek_in_flight_) seek_pending_ = a.v;  // one seek in flight: scrubbing never queues up
         else { seek_in_flight_ = true; mpv_.cmd({"seek", std::to_string(a.v), "absolute+keyframes"}, kReplySeek); }
         break;
-      case PA::SeekAbsExact: cancel_audio_switch(); seek_pending_ = -1; hold_seek(a.v); mpv_.cmd({"seek", std::to_string(a.v), "absolute+exact"}); break;
+      case PA::SeekAbsExact: cancel_audio_switch(); seek_pending_ = -1; hold_seek(a.v); seek_soft({"seek", std::to_string(a.v), "absolute+exact"}); break;
       case PA::Volume: mpv_.set_double_async("volume", a.v); play_.in.volume = a.v; break;
       case PA::ToggleMute: mpv_.cmd({"cycle", "mute"}); break;
       case PA::Fullscreen: toggle_fullscreen(); break;
       case PA::SelectSub:
-        if (a.id == 0) mpv_.set_async("sid", "no");
-        else {
-          // re-selecting the current track would reload it and lose the line on screen
-          if (a.id != play_.in.sid) mpv_.set_async("sid", std::to_string(a.id));
-          mpv_.set_flag_async("sub-visibility", true);
-        }
+        select_subtitle(a.id);
         break;
       case PA::SelectAudio: select_audio(a.id); play_.announce_audio(t); break;
       case PA::AudioMix: {
@@ -2425,13 +3465,15 @@ void App::run_actions() {
         break;
       }
       case PA::SubVisible:
-        if (a.v > 0 && play_.in.sid == 0 && !play_.in.subs.empty()) mpv_.set_async("sid", std::to_string(play_.in.subs[0].id));
-        mpv_.set_flag_async("sub-visibility", a.v > 0);
+        if (a.v > 0 && play_.in.sub_selection.shown(play_.in.sid) == 0 && !play_.in.subs.empty()) select_subtitle(play_.in.subs[0].id);
+        set_subtitle_visibility(a.v > 0);
         if (!play_.in.subs.empty() && !play_.panel_open()) play_.toast(tr(a.v > 0 ? str::toast_sub_on : str::toast_sub_off), nullptr, t);
         break;
       case PA::Placement: store_.dock = play_.place; save_state(); break;
       case PA::WinMin: ShowWindow(hwnd_, SW_MINIMIZE); break;
       case PA::WinPin: toggle_pin(); break;
+      case PA::SmoothMotion: store_.smooth_motion = a.v > 0.5; save_state(); apply_smooth(); break;
+      case PA::MiniPlayer: if (a.v > 0.5) enter_mini(); else exit_mini(true); break;
       case PA::WinMax: toggle_maximize(); break;
       case PA::WinClose: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
       case PA::WinDragBegin: begin_window_drag(); break;
@@ -2470,6 +3512,13 @@ void App::run_actions() {
           play_.toast(tr(str::toast_link_failed), nullptr, t);
         break;
       }
+      case PA::Shuffle:
+        store_.shuffle = play_.in.shuffle = a.v > 0.5;
+        shuffle_reset();
+        save_state();
+        find_next_episode();  // what follows is another song now
+        play_.changed(t);
+        break;
       case PA::Loop:
         // 2: repeat the file forever (a music video, a loop); 1: repeat the queue (an album
         // plays on from its first song); 0: off. Stays as chosen for the next files too
@@ -2512,6 +3561,8 @@ void App::run_actions() {
         break;
       case PA::MusicLook: set_music_look((int)a.v); break;
       case PA::MusicMono: set_music_mono(a.v > 0.5); break;
+      case PA::SettingsExamples: store_.settings_examples = play_.in.settings_examples = a.v > 0.5; save_state(); break;
+      case PA::MiniSubSize: store_.mini_sub_size = play_.in.mini_sub_size = std::clamp((int)std::lround(a.v), 0, 2); save_state(); ensure_anim(); break;
       case PA::CoverTilt: store_.cover_tilt = play_.in.cover_tilt = a.v > 0.5; if (!play_.in.cover_tilt) play_.pointer_left(); save_state(); play_.changed(now()); ensure_anim(); break;
       case PA::ControlsFree:
         store_.controls_free = a.v > 0;
@@ -2567,10 +3618,19 @@ void App::update_blur_cloud() {
     cloud.alpha, u.x,u.y,u.rx,u.ry,u.sx,u.sy);
   // Ignore geometry while inactive: no redraws or option churn in clean playback.
   std::string options = cloud.alpha > 0 ? b : "cloud_alpha=0";
-  bool fx = snap_.on || subfx_.on;
+  // the opening iris, drawn by the engine's shader on the picture (it was a full-window bitmap
+  // made and sent 60 times a second: 33 MB a frame in 4K, while the film was starting)
+  // (also while the home still says goodbye: the picture is black before its window shows)
+  const double iris = play_.in.iris_engine && loaded_ ? play_.iris_open(tn) : -1.0;
+  bool fx = snap_.on || subfx_.on || iris >= 0;
   if (snap_.on) {
     char f[200];
-    std::snprintf(f, sizeof f, ",cue_on=1,cue_dark=%.4f,cue_px=%.1f,cue_gray=%.4f,cue_ar=10,cue_br=0", snap_.dark, snap_.px, snap_.gray);
+    std::snprintf(f, sizeof f, ",cue_on=1,cue_dark=%.4f,cue_px=%.1f,cue_gray=%.4f,cue_ar=10,cue_br=0,cue_ir=-1", snap_.dark, snap_.px, snap_.gray);
+    options += f;
+  } else if (iris >= 0 && !subfx_.on) {
+    char f[200];
+    std::snprintf(f, sizeof f, ",cue_on=1,cue_dark=0,cue_px=1.0,cue_gray=0,cue_ar=10,cue_br=0,cue_cell=%.0f,cue_ir=%.4f",
+                  std::max(2.0, std::round(3 * play_.in.s)), iris);
     options += f;
   } else if (fx) {
     // subtitle edit: grey and a little darker (so the line being placed stands out), spreading
@@ -2583,14 +3643,20 @@ void App::update_blur_cloud() {
     double ar = ring(subfx_.t_in, .42, tn), br = ring(subfx_.t_out, .45, tn);
     char f[360];
     std::snprintf(f, sizeof f,
-      ",cue_on=1,cue_dark=0.32,cue_px=1.0,cue_gray=1,cue_cell=%.0f,cue_ax=%.5f,cue_ay=%.5f,cue_ar=%.4f,cue_bx=%.5f,cue_by=%.5f,cue_br=%.4f",
+      ",cue_on=1,cue_dark=0.32,cue_px=1.0,cue_gray=1,cue_cell=%.0f,cue_ax=%.5f,cue_ay=%.5f,cue_ar=%.4f,cue_bx=%.5f,cue_by=%.5f,cue_br=%.4f,cue_ir=-1",
       std::max(4.0, std::round(8 * play_.in.s)), subfx_.ax, subfx_.ay, ar, subfx_.bx, subfx_.by, br);
     options += f;
   } else if (snap_.was_on) {
-    options += ",cue_on=0";
+    options += ",cue_on=0,cue_ir=-1";
   }
+  // the music passes: while a song opens after a song, they stay as last sent (music_gap_)
+  std::string mus;
+  const bool was_wing = wing_sent_;
   // music with its cover: the soft shadow always, the tilt and its light under the pointer
-  bool cov = cover_art_ && mode_ == Mode::Play && first_frame_ && !hidden_;
+  // (the card's drawn cover: the engine has none, but its cover pass still paints the room under
+  // the square, hidden for good, so a turn never shows the black the spectrum left there)
+  const bool drawn = card_drawn();
+  bool cov = (cover_art_ || drawn) && mode_ == Mode::Play && first_frame_ && !hidden_;
   if (cov) {
     auto ct = play_.cover_tilt();
     // the shader works in the shown part of the picture: the cover's place there
@@ -2599,13 +3665,13 @@ void App::update_blur_cloud() {
     MusicVisible vis = music_visible(S, v, cw_, ch_);
     if (vis.w < 1 || vis.h < 1) vis = {0, 0, (double)std::max(1, cw_), (double)std::max(1, ch_)};
     char f[220];
-    std::snprintf(f, sizeof f, ",cov_on=1,cov_x=%.5f,cov_y=%.5f,cov_hw=%.5f,cov_rx=%.4f,cov_ry=%.4f,cov_k=%.3f",
+    std::snprintf(f, sizeof f, ",cov_on=1,cov_x=%.5f,cov_y=%.5f,cov_hw=%.5f,cov_rx=%.4f,cov_ry=%.4f,cov_k=%.3f,cov_hide=%.3f",
                   (v.ox + (S.x + S.side / 2.0) * v.f - vis.x) / vis.w, (v.oy + (S.y + S.side / 2.0) * v.f - vis.y) / vis.h,
                   S.side / 2.0 * v.f / vis.w,
-                  ct.rx * 3.14159265358979 / 180, ct.ry * 3.14159265358979 / 180, ct.k);
-    options += f;
+                  ct.rx * 3.14159265358979 / 180, ct.ry * 3.14159265358979 / 180 + flip_ry_, ct.k, drawn ? 1.0 : cov_hide_);
+    mus += f;
   } else if (cov_sent_) {
-    options += ",cov_on=0";
+    mus += ",cov_on=0";
   }
   // music's light show, around the cover (or the spectrum standing in its place)
   bool lit = audio_only_ && cover_scene_ && music_look_on_ != 2 && mode_ == Mode::Play && first_frame_ && !hidden_ && light_k_ > 0.002;
@@ -2624,26 +3690,50 @@ void App::update_blur_cloud() {
                   (v.ox + (S.x + S.side / 2.0) * v.f - vis.x) / vis.w, (v.oy + (S.y + S.side / 2.0) * v.f - vis.y) / vis.h,
                   S.side / 2.0 * v.f / vis.w, light_k_, f.energy, f.section, f.breath, reduce_motion() ? 0.35 : 1.0, f.turn - std::floor(f.turn), cover_art_ ? 1 : 0,
                   wr[0], wa[0], wr[1], wa[1], wr[2], wa[2], light_kick_[0], light_kick_[1], light_kick_[2], light_kick_[3]);
-    options += f2;
+    mus += f2;
   } else if (lit_sent_) {
-    options += ",lit_on=0";
+    mus += ",lit_on=0";
   }
   // the room's soft light around the cover (cover looks): drawn by the shader, centred on the
   // cover, always (ambient light or not); it fades in once the cover's colours are known
-  bool bg = audio_only_ && cover_scene_ && music_look_on_ != 1 && mode_ == Mode::Play && first_frame_;
+  // (the card in the spectrum-alone look has the cover look's room: its cover is Cue's own)
+  bool bg = audio_only_ && cover_scene_ && (music_look_on_ != 1 || drawn) && mode_ == Mode::Play && first_frame_;
   if (bg) {
     const MusicScene& S = music_scene_;
     MusicView v = play_.in.music_view.f > 0 ? play_.in.music_view : music_view(S, MusicFrame::Scene, cw_, ch_, ch_);
     MusicVisible vis = music_visible(S, v, cw_, ch_);
     if (vis.w < 1 || vis.h < 1) vis = {0, 0, (double)std::max(1, cw_), (double)std::max(1, ch_)};
     double k = bg_ready_t_ < 0 ? 0.0 : reduce_motion() ? 1.0 : std::clamp((tn - bg_ready_t_) / 0.3, 0.0, 1.0);
+    // the list's header: the cover a thumbnail, its light a quiet halo (the picture's frame is small
+    // round it, and a room light cut by it would show as a lit box behind the header)
+    k *= 1 - 0.7 * play_.list_header_mix();
     char f5[200];
     std::snprintf(f5, sizeof f5, ",bg_on=1,bg_x=%.5f,bg_y=%.5f,bg_hw=%.5f,bg_k=%.3f",
                   (v.ox + (S.x + S.side / 2.0) * v.f - vis.x) / vis.w, (v.oy + (S.y + S.side / 2.0) * v.f - vis.y) / vis.h,
                   S.side / 2.0 * v.f / vis.w, k * k * (3 - 2 * k));
-    options += f5;
+    mus += f5;
   } else if (bg_sent_) {
-    options += ",bg_on=0";
+    mus += ",bg_on=0";
+  }
+  // a song's mini player (the card): the wings step out, the cover keeps its light
+  // (and the list's header: the cover a thumbnail, the wings would run into its words)
+  // (the card in the spectrum-alone look: all of the spectrum steps out, not only beside the cover)
+  bool wing = (audio_only_ && cover_scene_ && mode_ == Mode::Play && ((mini_player_ && !fullscreen_) || play_.list_cover().w > 0) && music_look_on_ != 1) ||
+              (wing_hold_ && audio_only_ && cover_scene_ && mode_ == Mode::Play) || drawn;
+  if (wing) {
+    const MusicScene& S = music_scene_;
+    MusicView v = play_.in.music_view.f > 0 ? play_.in.music_view : music_view(S, MusicFrame::Scene, cw_, ch_, ch_);
+    MusicVisible vis = music_visible(S, v, cw_, ch_);
+    if (vis.w < 1 || vis.h < 1) vis = {0, 0, (double)std::max(1, cw_), (double)std::max(1, ch_)};
+    char f7[180];
+    std::snprintf(f7, sizeof f7, ",wing_on=1,wing_all=%d,wing_x=%.5f,wing_y=%.5f,wing_hw=%.5f", drawn ? 1 : 0,
+                  (v.ox + (S.x + S.side / 2.0) * v.f - vis.x) / vis.w, (v.oy + (S.y + S.side / 2.0) * v.f - vis.y) / vis.h,
+                  S.side / 2.0 * v.f / vis.w);
+    mus += f7;
+    wing_sent_ = true;
+  } else if (wing_sent_) {
+    mus += ",wing_on=0,wing_all=0";
+    wing_sent_ = false;
   }
   // the cover's eight border colours, for the light show and the room's light
   if (lit || bg) {
@@ -2652,10 +3742,39 @@ void App::update_blur_cloud() {
     for (int i = 0; i < 8 && n6 >= 0 && n6 < (int)sizeof f6 - 64; ++i)
       n6 += std::snprintf(f6 + n6, sizeof f6 - n6, ",lit_p%dr=%.3f,lit_p%dg=%.3f,lit_p%db=%.3f", i, light_pal_[i].r / 255.0, i,
                           light_pal_[i].g / 255.0, i, light_pal_[i].b / 255.0);
-    options += f6;
+    mus += f6;
+  }
+  // the window's own colour around the music's picture: the room's far light, in the cover's
+  // colours (grey with the music in black and white), black for anything else
+  Rgb backdrop{0, 0, 0};
+  if (bg && !music_gap_) {
+    int r = 0, g = 0, b = 0;
+    for (const Rgb& c : light_pal_) { r += c.r; g += c.g; b += c.b; }
+    const double k = bg_ready_t_ < 0 ? 0.0 : reduce_motion() ? 1.0 : std::clamp((tn - bg_ready_t_) / 0.3, 0.0, 1.0);
+    backdrop = music_backdrop(Rgb{(uint8_t)(r / 8), (uint8_t)(g / 8), (uint8_t)(b / 8)}, k * k * (3 - 2 * k) * (1 - 0.7 * play_.list_header_mix()));
+    if (mono_k_ > 0.001) {
+      const double m = std::min(1.0, mono_k_), l = 0.2126 * backdrop.r + 0.7152 * backdrop.g + 0.0722 * backdrop.b;
+      backdrop = {(uint8_t)std::lround(backdrop.r + (l - backdrop.r) * m), (uint8_t)std::lround(backdrop.g + (l - backdrop.g) * m),
+                  (uint8_t)std::lround(backdrop.b + (l - backdrop.b) * m)};
+    }
+  } else if (music_gap_) {
+    backdrop = backdrop_sent_;  // a song opening after a song: the room keeps its colour meanwhile
+  }
+  // the list over the cover darkens the picture (the veil pass): the window around it darkens as
+  // much, or the picture's frame would show as a darker band against it
+  if (const double vl = audio_only_ && mode_ == Mode::Play ? play_.list_veil() : 0.0; vl > 0.001) {
+    const double k = 1 - 0.86 * std::min(1.0, vl);
+    backdrop = {(uint8_t)std::lround(backdrop.r * k), (uint8_t)std::lround(backdrop.g * k), (uint8_t)std::lround(backdrop.b * k)};
+  }
+  if (backdrop.r != backdrop_sent_.r || backdrop.g != backdrop_sent_.g || backdrop.b != backdrop_sent_.b || !backdrop_known_) {
+    backdrop_sent_ = backdrop;
+    backdrop_known_ = true;
+    char bc[16];
+    std::snprintf(bc, sizeof bc, "#%02X%02X%02X", backdrop.r, backdrop.g, backdrop.b);
+    mpv_.set_async("background-color", bc);
   }
   // music: where the picture stops short of the window (much wider or taller than it), it fades
-  // into the window's black instead of ending on a straight line; never over the cover or wings
+  // into the window's colour instead of ending on a straight line; never over the cover or wings
   bool edge = audio_only_ && cover_scene_ && mode_ == Mode::Play && first_frame_ && !hidden_;
   if (edge) {
     const MusicScene& S = music_scene_;
@@ -2674,33 +3793,46 @@ void App::update_blur_cloud() {
     }
     edge = e[0] > 0.001 || e[1] > 0.001 || e[2] > 0.001 || e[3] > 0.001;
     if (edge) {
-      char f3[120];
-      std::snprintf(f3, sizeof f3, ",edge_on=1,edge_l=%.4f,edge_r=%.4f,edge_t=%.4f,edge_b=%.4f", e[0], e[1], e[2], e[3]);
-      options += f3;
+      char f3[200];
+      std::snprintf(f3, sizeof f3, ",edge_on=1,edge_l=%.4f,edge_r=%.4f,edge_t=%.4f,edge_b=%.4f,edge_cr=%.4f,edge_cg=%.4f,edge_cb=%.4f", e[0], e[1],
+                    e[2], e[3], backdrop.r / 255.0, backdrop.g / 255.0, backdrop.b / 255.0);
+      mus += f3;
     }
   }
-  if (!edge && edge_sent_) options += ",edge_on=0";
+  if (!edge && edge_sent_) mus += ",edge_on=0";
+  // music's list open over the cover: the picture steps back (eased by the interface's list_k)
+  const double veil = audio_only_ && mode_ == Mode::Play ? play_.list_veil() : 0.0;
+  if (veil > 0.001) { char fv[32]; std::snprintf(fv, sizeof fv, ",veil=%.3f", veil); mus += fv; }
+  else if (veil_sent_ > 0.001) mus += ",veil=0";
+  veil_sent_ = veil;
   // music in black and white (eased by step_mono)
   bool mono = mono_k_ > 0.001 && audio_only_ && mode_ == Mode::Play;
   if (mono) {
     char f4[32];
     std::snprintf(f4, sizeof f4, ",mono=%.3f", std::min(1.0, mono_k_));
-    options += f4;
+    mus += f4;
   } else if (mono_sent_) {
-    options += ",mono=0";
+    mus += ",mono=0";
   }
+  if (music_gap_) { mus = music_opts_; wing_sent_ = was_wing; }
+  else music_opts_ = mus;
+  options += mus;
   cloud_pending_ = false;
   if (options == cloud_options_) return;
+  if (cloud_inflight_) { cloud_pending_ = true; return; }
   if ((cloud.alpha > 0 || fx || cov || lit || bg || edge || mono) && !cloud_cadence_.ready(tn, .0015)) { cloud_pending_ = true; return; }
-  cov_sent_ = cov;
-  lit_sent_ = lit;
-  bg_sent_ = bg;
-  edge_sent_ = edge;
-  mono_sent_ = mono;
+  if (!music_gap_) {
+    cov_sent_ = cov;
+    lit_sent_ = lit;
+    bg_sent_ = bg;
+    edge_sent_ = edge;
+    mono_sent_ = mono;
+  }
   snap_.was_on = fx;
   cloud_cadence_.mark(tn);
   cloud_options_ = options;
-  mpv_.set_async("glsl-shader-opts", options);
+  cloud_inflight_ = mpv_.cmd({"set", "glsl-shader-opts", options}, 103) >= 0;
+  if (!cloud_inflight_) cloud_options_.clear();
 }
 
 void App::upload_overlays() {
@@ -2804,10 +3936,50 @@ void App::frame() {
   bool moving = geom_.on;
   moving |= step_fullscreen_transition(t);
   moving |= step_audio_switch(t);
+  // the words beside the cover changed width (another song's title): the composition, centred on
+  // them, glides to its new place
+  if (audio_only_ && cover_scene_ && mode_ == Mode::Play && music_frame_ == MusicFrame::Scene) {
+    const double ww = play_.music_words_w();
+    if (std::fabs(ww - words_w_seen_) > 0.5) {
+      words_w_seen_ = ww;
+      if (play_.in.music_view.f > 0 && !reduce_motion()) { view_from_ = play_.in.music_view; view_t0_ = t; }
+      else step_music_view(t);
+    }
+  }
+  // Centre: the list opened beside the cover (or closed): the cover and its words glide into the
+  // left half (or back to the middle); the words' height changed (another song): to their place
+  if (audio_only_ && cover_scene_ && mode_ == Mode::Play && music_frame_ == MusicFrame::Centre) {
+    const bool side = play_.music_list_beside();
+    const double below = play_.music_centre_below();
+    if (side != list_side_seen_ || std::fabs(below - centre_below_seen_) > 0.5) {
+      const bool toggled = side != list_side_seen_;
+      list_side_seen_ = side;
+      centre_below_seen_ = below;
+      if (toggled && play_.in.music_view.f > 0 && !reduce_motion()) { view_from_ = play_.in.music_view; view_t0_ = t; }
+      else step_music_view(t);
+    }
+  }
+  // the list opened with its header (or closed from it): the cover glides into the thumbnail (or
+  // back out of it)
+  if (audio_only_ && cover_scene_ && mode_ == Mode::Play) {
+    const Rect lc = play_.list_cover();
+    if (lc.x != list_cover_seen_.x || lc.y != list_cover_seen_.y || lc.w != list_cover_seen_.w) {
+      const bool toggled = (lc.w > 0) != (list_cover_seen_.w > 0);
+      list_cover_seen_ = lc;
+      if (toggled && play_.in.music_view.f > 0 && !reduce_motion()) { view_from_ = play_.in.music_view; view_t0_ = t; }
+      else step_music_view(t);
+    }
+  }
   if (view_t0_ >= 0) moving |= step_music_view(t);
   moving |= step_sub_fx(t, dt);
   moving |= step_mono(dt);
   step_geom(t);
+  moving |= step_mini_fx(t);
+  card_art_prefetch();
+  moving |= step_card_flip(t);
+  moving |= sync_card_art();
+  moving |= step_seek_fade(t);
+  if (music_gap_ && t - music_gap_t_ > 4) end_music_gap();  // (a load that never reports: the passes follow again)
   if (mode_ == Mode::Home && onboarding_) {
     moving = ob_.tick(t, dt);
     if (ob_.finished(t)) {
@@ -2824,6 +3996,7 @@ void App::frame() {
       home_paint_at_ = t;
     }
   } else if (mode_ == Mode::Home) {
+    home_.survey = survey_wanted();
     moving |= home_.tick(t, dt);
     // Rasterize once per display frame; very large canvases (4K and up) stay at 60 Hz,
     // where a full software frame plus its copy to the screen would cost more than it shows.
@@ -2836,6 +4009,7 @@ void App::frame() {
     if (reveal_pending_) { moving = true; if (home_.leave_done(t)) reveal_play(); }
   } else {
     if (play_.iris_waiting()) { try_start_iris(); moving = true; }
+    // upload_overlays updates the shader once below, after the UI animation has advanced.
     if (play_.dragging() && !play_.win_dragging()) {
       POINT p = cursor_client();
       if (p.x != last_cursor_.x || p.y != last_cursor_.y) { last_cursor_ = p; play_.mouse_move(p.x, p.y, t); }
@@ -2930,6 +4104,7 @@ void App::key(const std::string& k, bool shift, bool ctrl) {
   }
   if (ctrl && k == "v") { handle_files(clipboard_files(hwnd_)); return; }
   if (ctrl && k == "t") { toggle_pin(); return; }  // always on top, like Windows' own Win+Ctrl+T
+  if (ctrl && k == "m" && mode_ == Mode::Play) { if (mini_player_) exit_mini(true); else enter_mini(); return; }  // the mini player (m alone mutes)
   // interface size, anywhere: ctrl + / ctrl - / ctrl 0
   if (ctrl && (k == "plus" || k == "minus" || k == "zero")) {
     set_ui_scale(k == "zero" ? kDefaultUiSize : next_ui_size(store_.ui_scale, k == "plus" ? 1 : -1));
@@ -2954,6 +4129,7 @@ void App::key(const std::string& k, bool shift, bool ctrl) {
     if (a.a == HomeAct::Remote) open_remote_scene();
     if (a.a == HomeAct::News) show_news(true);
     if (a.a == HomeAct::NewsClose) close_news_line();
+    if (a.a == HomeAct::Survey || a.a == HomeAct::SurveyClose) answer_survey(a.a == HomeAct::Survey);
     ensure_anim();
     return;
   }
@@ -2963,6 +4139,7 @@ void App::key(const std::string& k, bool shift, bool ctrl) {
 }
 
 void App::toggle_fullscreen() {
+  if (mini_player_ && !fullscreen_) return;  // full screen is the full player's (F, a double click): not from the mini player
   if (fullscreen_transition_ || audio_switch_.stage || mode_ != Mode::Play) return;
   begin_fullscreen_motion();
 }
@@ -2978,7 +4155,7 @@ void App::toggle_fullscreen() {
 // Pixel steps are the Cue's own language (the opening iris, the eyes, the type), and they
 // read the same at 24, 60 or 144 frames per second.
 namespace {
-constexpr double kSnapOut = 0.11, kSnapIn = 0.20, kSnapHold = 0.045;
+
 // physical pixel sizes for the mosaic at 1080 lines; scaled to the window's height
 constexpr double kSnapSteps[] = {1, 2, 4, 8, 16, 32};
 double snap_px(double amount, int height) {  // 0 = sharp, 1 = biggest blocks
@@ -3014,6 +4191,17 @@ bool App::step_sub_fx(double t, double dt) {
   // the lift moves in steps of 1.5%: every new size makes libass rasterise the line again,
   // so a handful of sizes (cached after the first time) instead of one per frame
   double q = 1.0 + std::round((sub_lift_.x - 1.0) / 0.015) * 0.015;
+  // the mini player: the subtitles keep a readable size (about 19 px at 100%) however small the
+  // window, in a few steps (each new size makes libass draw the lines again)
+  if (mini_player_ && ch_ > 0 && cw_ > 0) {
+    const double px = play_.in.style.size * ch_ / 720.0 * subtitle_typography_scale(cw_, ch_);
+    const double want = 19.0 * dpi_ / 96.0;
+    if (px > 0 && px < want) q *= std::round(std::min(2.5, want / px) * 10) / 10;
+    // and the size chosen there (the mini player's subtitles panel): as it is, a size up, two up;
+    // the full player's subtitle style stays as it was
+    static const double kMiniSub[3] = {1.0, 1.25, 1.5};
+    q *= kMiniSub[std::clamp(store_.mini_sub_size, 0, 2)];
+  }
   char b[16];
   std::snprintf(b, sizeof b, "%.3f", q);
   if (mpv_ok_ && sub_scale_sent_ != b) { sub_scale_sent_ = b; mpv_.set_async("sub-scale", b); }
@@ -3021,6 +4209,9 @@ bool App::step_sub_fx(double t, double dt) {
 }
 
 void App::set_snap(double dark, double px, double gray) {
+  // a song's mini player: a song change is a quick, light dissolve, never the big grey blocks the
+  // full window uses (in a card they swallowed the whole cover)
+  if (mini_player_ && !mini_fx_.on) { px = std::max(1.0, px * 0.35); gray = 0; dark *= 0.4; }
   snap_.on = true;
   snap_.dark = std::clamp(dark, 0.0, 1.0);
   snap_.px = px;
@@ -3065,6 +4256,7 @@ void App::begin_fullscreen_motion() {
 }
 
 void App::settle_fullscreen_motion() {
+  stage_cover_.end();
   if(!fullscreen_transition_) return;
   if(fz_.entering!=fullscreen_) perform_fullscreen_switch();
   end_snap();
@@ -3081,7 +4273,7 @@ bool App::step_fullscreen_transition(double t) {
   if(!fullscreen_transition_) return false;
   if(fullscreen_stage_!=logged_fs_stage_) {
     logged_fs_stage_=fullscreen_stage_;
-    log("fullscreen snap stage "+std::to_string(fullscreen_stage_));
+    trace("fullscreen snap stage "+std::to_string(fullscreen_stage_));
   }
   const double frame=pacer_.ok()?pacer_.interval():1./60;
   auto go=[&](int stage) { fullscreen_stage_=stage; fz_.t0=t; };
@@ -3095,10 +4287,11 @@ bool App::step_fullscreen_transition(double t) {
     return t-fz_.ready_at>=2*frame;  // a couple of frames drawn at the new size, still black
   };
   auto done=[&] {
+    stage_cover_.end();
     end_snap();
     fullscreen_transition_=false; fullscreen_stage_=0; logged_fs_stage_=-1;
     play_.end_viewport_transition(t);  // the controls rise in on their spring
-    log("fullscreen snap done");
+    trace("fullscreen snap done");
     music_fit_window();  // a full screen of another shape may want the other composition
   };
   switch(fullscreen_stage_) {
@@ -3113,14 +4306,36 @@ bool App::step_fullscreen_transition(double t) {
       bool overlays=false;
       for(const auto& o:ov_) overlays|=o.shown||o.inflight||o.removing;
       if(overlays || t-fz_.t0<kSnapHold) break;
+      {
+        // the screen held black while the window changes size (the picture is black already):
+        // Windows composes the new place with the old contents for a frame or two otherwise
+        MONITORINFO mi{sizeof(mi)};
+        GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+        const RECT here=fullscreen_?mi.rcMonitor:client_screen();
+        RECT all=mi.rcMonitor;
+        UnionRect(&all,&all,&here);
+        stage_cover_.show(inst_,all,false,true);
+      }
       perform_fullscreen_switch();
+      // into full screen: the cover stays over everything (a pinned window rises into the
+      // topmost band with the switch, so the cover is put back on top of it); out of it, the
+      // cover shrinks to the window at once (the desktop around it is final). It leaves when the
+      // engine has drawn the window at its size
+      if(stage_cover_.on()) {
+        if(fullscreen_) {
+          MONITORINFO mi{sizeof(mi)};
+          GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
+          stage_cover_.show(inst_,mi.rcMonitor,false);
+        } else stage_cover_.show(inst_,client_screen(),!IsZoomed(hwnd_));
+      }
       fullscreen_changed_at_=t; fz_.ready_at=-1;
       set_snap(1.0, snap_px(1, ch_), 1.0);  // the new size gets the same black, biggest blocks
       go(3);
       break;
     }
     case 3:  // the engine draws at the new size (black): then it may come back
-      if(renderer_ready()) go(4);
+      if(renderer_ready()) { stage_cover_.end(); go(4); }
+      else if(t-fullscreen_changed_at_>0.6) stage_cover_.end();  // never held longer than that
       break;
     case 4: {  // in: light first, then the pixels halve and snap into focus, colour last
       double k=clamp01((t-fz_.t0)/kSnapIn);
@@ -3331,7 +4546,7 @@ void App::on_onboarding(ObAction a) {
       save_state();
       home_.set_size(cw_, ch_, s_);
       ob_.finish(t, home_.face.cx, home_.face.cy, home_.face.scale);
-      log("welcome done");
+      trace("welcome done");
       break;
     case ObAct::WinMin: ShowWindow(hwnd_, SW_MINIMIZE); break;
     case ObAct::WinPin: toggle_pin(); break;
@@ -3340,26 +4555,71 @@ void App::on_onboarding(ObAction a) {
   }
 }
 
-// The scale for a client area of cw x ch at the window's DPI.
-double App::scale_for(int cw, int ch, int choice) const { return ui_scale(dpi_, cw, ch, choice); }
+// The scale for a client area of cw x ch at the window's DPI. The mini player keeps the
+// interface's own size (a small window would otherwise shrink it): every path that sets the
+// scale goes through here, so a move or a resize that ends (refresh_ui_scale) or a new size chosen
+// in the menu no longer drops the card's menu and list to the small window's scale.
+double App::scale_for(int cw, int ch, int choice) const {
+  // (the mini players: the chosen size's own pixels, as far as the little window holds them)
+  if (mini_player_) return mini_scale(dpi_, cw, ch, choice, audio_only_);
+  return ui_scale(dpi_, cw, ch, choice);
+}
+
+// The player's own scale: portrait windows raise it (a compact dock), and so does music framed
+// close (Cover or Tall: the compact music bar), so its few controls are not lost in the window.
+double App::play_scale(int choice) const {
+  if (mini_player_) return s_;  // (one scale for the whole mini player: its bar and its menus; see mini_scale)
+  // (music keeps the screen's own size in a tall window: the film's portrait bar is raised to fill
+  // the width, but music's bar is short and its words grew with it, far too big)
+  double ps = audio_only_ ? s_ : portrait_scale(s_, cw_, ch_, choice);
+  if (audio_only_ && music_frame_stacked(music_frame_for(cw_, ch_, s_)))
+    ps = std::max(ps, music_compact_scale(s_, cw_, ch_, choice, ui_base_scale(dpi_, choice)));
+  return ps;
+}
 
 // After a move to another monitor or a display change: the same rule, applied right away.
 void App::refresh_ui_scale() {
   if (cw_ <= 0 || ch_ <= 0) return;
-  double ns = scale_for(cw_, ch_, store_.ui_scale);
-  if (ns == s_) return;
+  if (scale_for(cw_, ch_, store_.ui_scale) == s_) return;
+  rescale();
+}
+
+// A new interface scale (an edge let go, another screen, a size picked in Settings or with
+// Ctrl +/−): everything that is measured in it is laid out again, the same way as for a new
+// window size. Music's framing too: the composition (Centre, Tall, Cover...) is chosen in art px,
+// so a new scale can change it; it used to stay the old one (the words gone under a compact bar).
+void App::rescale() {
+  if (cw_ <= 0 || ch_ <= 0) return;
+  const double ns = scale_for(cw_, ch_, store_.ui_scale);
   // music: the cover glides to its new place (the bar it stays above has a new size, and the
-  // composition may change) instead of jumping there when the person lets go of the edge
-  if (mode_ == Mode::Play && audio_only_ && cover_scene_ && play_.in.music_view.f > 0 && !reduce_motion()) {
+  // composition may change) instead of jumping there
+  if (ns != s_ && mode_ == Mode::Play && audio_only_ && cover_scene_ && play_.in.music_view.f > 0 && !reduce_motion() && !mini_fx_.on) {
     view_from_ = play_.in.music_view;
     view_t0_ = now();
   }
+  if (ns != s_) trace("ui scale " + std::to_string(ns));
   s_ = ns;
-  log("ui scale " + std::to_string(s_));
+  relayout();
+  // the phone remote's scene and the news over the window: laid out at the new scale too (they
+  // followed only the window's own moves and sizes)
+  scene_.follow(hwnd_, s_);
+  news_host_.follow(hwnd_, s_);
+}
+
+// The window's size or the interface's scale changed: the home, the welcome and the player laid
+// out for them, music framed for them, the overlays sent in this same message (no frame with a
+// stale interface)
+void App::relayout() {
   home_.set_size(cw_, ch_, s_);
   ob_.set_size(cw_, ch_, s_);
-  play_.set_base_scale(s_); play_.resize(cw_, ch_, portrait_scale(s_, cw_, ch_, store_.ui_scale));
-  if (mode_ == Mode::Play) play_.changed(now());
+  play_.set_base_scale(s_); play_.resize(cw_, ch_, play_scale(store_.ui_scale));
+  if (mode_ == Mode::Play) {
+    music_fit_window();  // the cover follows the window, also mid-drag
+    play_.changed(now());
+    apply_style(true);  // only what changed (normally just the lifted subtitle position)
+    play_.prepare(now());
+    upload_overlays();
+  }
   ensure_anim();
 }
 
@@ -3373,7 +4633,7 @@ void App::apply_language(bool relayout) {
   i18n::Lang chosen;
   if (i18n::parse_tag(store_.language, chosen)) pref = (int)chosen;
   play_.in.language = home_.language = pref;
-  log(std::string("language ") + i18n::tag(l) + (pref < 0 ? " (Windows)" : " (chosen)"));
+  trace(std::string("language ") + i18n::tag(l) + (pref < 0 ? " (Windows)" : " (chosen)"));
   if (!relayout) return;
   if (engine_failed_) home_.engine_problem = engine_text(engine_err_);
   show_update_state();  // its labels are words too
@@ -3381,7 +4641,8 @@ void App::apply_language(bool relayout) {
   if (cw_ > 0 && ch_ > 0) {
     home_.relayout();
     ob_.set_size(cw_, ch_, s_);
-    play_.set_base_scale(s_); play_.resize(cw_, ch_, portrait_scale(s_, cw_, ch_, store_.ui_scale));
+    play_.set_base_scale(s_); play_.resize(cw_, ch_, play_scale(store_.ui_scale));
+    if (mode_ == Mode::Play) music_fit_window();  // (the words' new width: the composition follows)
   }
   play_.changed(now());
   if (mode_ == Mode::Play && loaded_) refresh_file_info();
@@ -3416,20 +4677,7 @@ void App::set_ui_scale(int v) {
   store_.ui_scale = v;
   play_.in.ui_scale = v;
   save_state();
-  double ns = scale_for(cw_, ch_, v);
-  if (ns != s_) {
-    s_ = ns;
-    log("ui scale " + std::to_string(s_));
-    home_.set_size(cw_, ch_, s_);
-    ob_.set_size(cw_, ch_, s_);
-    play_.set_base_scale(s_); play_.resize(cw_, ch_, portrait_scale(s_, cw_, ch_, store_.ui_scale));
-    if (mode_ == Mode::Play) play_.changed(now());
-  } else {
-    // same base scale, but a portrait window still follows the chosen size
-    play_.set_base_scale(s_); play_.resize(cw_, ch_, portrait_scale(s_, cw_, ch_, v));
-    play_.changed(now());
-  }
-  ensure_anim();
+  rescale();  // (the same base scale too: a portrait window, music framed close and the card follow the chosen size)
 }
 
 // Right click > salvar frame: exactly the frame on screen, without any of the UI.
@@ -3496,9 +4744,10 @@ void App::video_geometry_reply(const mpv_event* event) {
   if(!media_geometry_.accept(event->reply_userdata,shape)) return;
   vid_w_=shape.width; vid_h_=shape.height; vid_rot_=shape.rotation;
   if(user_sized_) return; // only respected until the next file is opened
-  if(geom_done_ && std::fabs(previous-shape.aspect())<.00001) return;
+  // (the same shape, within rounding: a film whose shape was read from its file at load keeps it)
+  if(geom_done_ && previous>0 && std::fabs(previous-shape.aspect())<=previous*0.004) return;
   geom_done_=false;
-  log("media geometry "+std::to_string(vid_w_)+"x"+std::to_string(vid_h_)+" rotate "+std::to_string(vid_rot_));
+  trace("media geometry "+std::to_string(vid_w_)+"x"+std::to_string(vid_h_)+" rotate "+std::to_string(vid_rot_));
   maybe_adapt_window();
 }
 
@@ -3517,6 +4766,8 @@ void App::decide_window() {
   bool big = std::max(vid_w_, vid_h_) > 2600 || std::min(vid_w_, vid_h_) > 1600;
   std::string sync = big ? "audio" : "display-resample";
   if (sync != video_sync_) { mpv_.set_async("video-sync", sync); video_sync_ = sync; }
+  sync_decided_ = true;
+  send_sync();  // smoothing on, or covered: the film's own timing wins over the size's
   if (!logged_hw_) { logged_hw_ = true; hw_log_t_ = now() + 1.5; }
   double w = (double)vid_w_, h = (double)vid_h_;
   if (vid_rot_ % 180 == 90) std::swap(w, h);  // phone videos: stored sideways, shown upright
@@ -3529,6 +4780,7 @@ void App::adapt_window(double ar) {
   if (ar <= 0) return;
   if (fullscreen_) { pending_ar_ = ar; return; }  // fullscreen just letterboxes; adapt on the way out
   if (IsIconic(hwnd_)) return;
+  if (mini_player_) { animate_window_to(mini_keep_place(mini_aspect())); return; }  // the next file keeps the mini player where it is
   pending_ar_ = 0;
   MONITORINFO mi{sizeof(mi)};
   GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
@@ -3565,6 +4817,9 @@ void App::adapt_window(double ar) {
 }
 
 void App::animate_window_to(const RECT& r) {
+  // already there (the same shape again, the next episode): nothing moves, nothing waits for it
+  if (const RECT now_at = window_rect(); EqualRect(&now_at, &r)) { geom_.on = false; geom_.kind = 0; geom_end_t_ = -10; return; }
+  geom_.kind = 0;  // (a caller that wants another curve sets it right after)
   geom_.from = window_rect();
   geom_.to = r;
   geom_.t0 = now();
@@ -3588,7 +4843,7 @@ void App::step_geom(double t) {
   if (!geom_.on) return;
   double k = geom_.dur <= 0 ? 1.0 : std::clamp((t - geom_.t0) / geom_.dur, 0.0, 1.0);
   // fullscreen: a spring's gentle start and long landing; shape changes keep their ease-out
-  double e = geom_.kind ? spring_ease(k) : 1 - std::pow(1 - k, 3);
+  double e = geom_.kind == 2 ? bounce_ease(k) : geom_.kind ? spring_ease(k) : 1 - std::pow(1 - k, 3);
   auto L = [&](LONG a, LONG b) { return (int)std::lround(a + (b - a) * e); };
   int x = L(geom_.from.left, geom_.to.left), y = L(geom_.from.top, geom_.to.top);
   int r = L(geom_.from.right, geom_.to.right), b = L(geom_.from.bottom, geom_.to.bottom);
@@ -3596,6 +4851,7 @@ void App::step_geom(double t) {
   if (k >= 1) {
     geom_.on = false;
     geom_.kind = 0;
+    geom_end_t_ = t;
     refresh_ui_scale();  // normally already right (taken from the target at the start)
   }
 }
@@ -3603,7 +4859,7 @@ void App::step_geom(double t) {
 // ── atmosphere: dynamic accent + ambient light ──────────────────────
 bool App::background_ready(double delay) const {
   return !audio_only_ && mode_ == Mode::Play && loaded_ && first_frame_ &&
-         background_warmup_.ready(now(), play_.iris_active() || geom_.on || in_sizemove_, delay);
+         background_warmup_.ready(now(), play_.iris_active() || geom_.on || resizing_, delay);
 }
 
 bool App::atmosphere_ready() const {
@@ -3678,11 +4934,12 @@ bool App::step_atmosphere(double dt) {
     play_.changed(now());
     redraw = play_.dock_signature() != before;
   }
-  bool show = store_.ambient && atmosphere_sampled_ && atmosphere_ready() && !in_sizemove_ && !fullscreen_ && !IsZoomed(hwnd_) &&
+  bool show = store_.ambient && !mini_player_ && !mini_fx_.on && atmosphere_sampled_ && atmosphere_ready() && !resizing_ && !fullscreen_ && !IsZoomed(hwnd_) &&  // the mini player: no light around it (back when it ends)
               !fullscreen_transition_ &&
               !IsIconic(hwnd_) && !play_.iris_active() && vid_w_ > 0;
   if (show) ambient_.create(inst_);  // allocate halo windows only after playback has settled
-  if (store_.ambient || ambient_.active()) ambient_.update(hwnd_, e, li, show, store_.ambient_strength, dt, in_sizemove_);
+  ambient_.hold(in_sizemove_);
+  if (store_.ambient || ambient_.active()) ambient_.update(hwnd_, e, li, show, store_.ambient_strength, dt, resizing_);
   return redraw;
 }
 
@@ -3691,22 +4948,40 @@ bool App::step_atmosphere(double dt) {
 // Read at the poll's 30 Hz, only while it can be seen; the halo outside stays the films'.
 bool App::step_music_light(double dt) {
   const double t = now();
-  const bool on = store_.ambient && mode_ == Mode::Play && loaded_ && cover_scene_ && first_frame_ && music_look_on_ != 2;
+  if (wing_hold_ && wing_hold_t_ > 0 && t >= wing_hold_t_) { wing_hold_ = false; wing_hold_t_ = 0; update_blur_cloud(); }
+  // (music's light is part of its look: always on, at 30%, but for the cover alone; the films'
+  // switch and strength are the films')
+  const bool on = (!mini_player_ || audio_only_) && mode_ == Mode::Play && loaded_ && cover_scene_ && first_frame_ && music_look_on_ != 2;
   if (light_cover_job_ && light_cover_job_->done.load()) {
     light_found_ = light_cover_job_->lit;
     const FrameColors& fc = light_cover_job_->colors;
     if (light_found_) light_accent_ = fc.accent;
     // eight colours round the cover, from the left, clockwise: the zones of its border
     static const int zone_a[8] = {23, 0, 3, 7, 10, 13, 16, 20}, zone_b[8] = {23, 0, 4, 7, 10, 13, 17, 20};
+    Rgb pal[8];
     for (int i = 0; i < 8; ++i) {
-      if (!light_found_) { light_pal_[i] = {150, 152, 168}; continue; }
+      if (!light_found_) { pal[i] = {150, 152, 168}; continue; }
       Rgb a = fc.zone[zone_a[i]], b = fc.zone[zone_b[i]];
       double la = 0.35 + 0.65 * fc.zone_light[zone_a[i]], lb = 0.35 + 0.65 * fc.zone_light[zone_b[i]];
-      light_pal_[i] = {(uint8_t)std::lround((a.r * la + b.r * lb) / 2), (uint8_t)std::lround((a.g * la + b.g * lb) / 2),
-                       (uint8_t)std::lround((a.b * la + b.b * lb) / 2)};
+      pal[i] = {(uint8_t)std::lround((a.r * la + b.r * lb) / 2), (uint8_t)std::lround((a.g * la + b.g * lb) / 2),
+                (uint8_t)std::lround((a.b * la + b.b * lb) / 2)};
     }
     light_cover_job_.reset();
-    bg_ready_t_ = now();  // the room's light fades in with the cover's own colours
+    if (room_kept_ && bg_ready_t_ >= 0 && !reduce_motion()) {
+      // song to song: the room was lit all along; its colours cross to the new cover's
+      for (int i = 0; i < 8; ++i) { light_pal_from_[i] = light_pal_[i]; light_pal_to_[i] = pal[i]; }
+      pal_t0_ = now();
+    } else {
+      for (int i = 0; i < 8; ++i) light_pal_[i] = pal[i];
+      bg_ready_t_ = now();  // the room's light fades in with the cover's own colours
+    }
+    room_kept_ = false;
+    update_blur_cloud();
+  }
+  if (pal_t0_ >= 0) {
+    const double k = std::clamp((t - pal_t0_) / 0.45, 0.0, 1.0), e = k * k * (3 - 2 * k);
+    for (int i = 0; i < 8; ++i) light_pal_[i] = mix(light_pal_from_[i], light_pal_to_[i], e);
+    if (k >= 1) pal_t0_ = -1;
     update_blur_cloud();
   }
   const bool show = on && !hidden_now() && !IsIconic(hwnd_);
@@ -3726,7 +5001,7 @@ bool App::step_music_light(double dt) {
   bool kicking = false;
   for (double& kick : light_kick_) { kick *= std::exp(-dt / 0.7); if (kick < 0.01) kick = 0; else kicking = true; }
   // in slowly, out a bit faster; the strength is the ambient light's own
-  double target = show ? std::clamp(store_.ambient_strength * 1.6, 0.25, 1.0) : 0.0;
+  double target = show ? std::clamp(kMusicLight * 1.6, 0.25, 1.0) : 0.0;
   double nk = light_k_ + std::clamp(target - light_k_, -dt / 0.45, dt / 0.8);
   bool moving = music_light_.moving() || kicking || std::fabs(nk - light_k_) > 1e-4;
   light_k_ = nk;
@@ -3736,6 +5011,7 @@ bool App::step_music_light(double dt) {
 
 void App::toggle_maximize() {
   if (fullscreen_) return;
+  if (mini_player_) { exit_mini(true); return; }  // maximize from the mini player: back to the full player
   ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
 }
 
@@ -3745,6 +5021,12 @@ void App::begin_window_drag() {
   KillTimer(hwnd_, T_GEOM);
   play_.handoff_window_drag(now());
   if (fullscreen_) return;
+  if (mini_player_) {  // the mini window keeps its size under the pointer (no Snap resizing it)
+    RECT wr = window_rect(); POINT c; GetCursorPos(&c);
+    mini_drag_ = true;
+    mini_drag_size_ = {wr.right - wr.left, wr.bottom - wr.top};
+    mini_grab_ = {c.x - wr.left, c.y - wr.top};
+  }
   // Let Windows move/restore/Snap the parent directly. Polling the cursor from
   // the animation timer caused synchronous parent/child moves and visible jumps.
   // Post the handoff so it starts after the current mpv event has been drained.
@@ -3878,6 +5160,7 @@ void App::on_play_mouse(int x, int y) {
   if (x == last_cursor_.x && y == last_cursor_.y) return;
   last_cursor_ = {x, y};
   if (!play_.dock_visible()) play_.changed(now()); // catch up the clock before showing the cached dock
+  play_.set_shift(GetKeyState(VK_SHIFT) < 0);  // (a dragged bar: centred while Shift is held)
   play_.mouse_move(x, y, now());
   run_actions();
   kick();
@@ -4187,20 +5470,56 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       pacer_.consumed();
       if (anim_on_) frame();
       return 0;
-    case WM_DISPLAYCHANGE: refresh_display_rate(); refresh_ui_scale(); break;
+    case WM_DISPLAYCHANGE: refresh_display_rate(); refresh_ui_scale(); if (mode_ == Mode::Play && loaded_) apply_smooth(); break;  // a new refresh rate: smoothing re-decides
+    case WM_POWERBROADCAST:
+      if (w == PBT_APMPOWERSTATUSCHANGE && mode_ == Mode::Play && loaded_) apply_smooth();  // plugged in or out
+      break;
     case WM_APP_THUMB: {
       auto* tm = reinterpret_cast<ThumbMsg*>(l);
       if (w == 1 && tm) { on_thumb(tm); delete tm; }
       return 0;
     }
+    case WM_WINDOWPOSCHANGING:
+      // moving the mini window: it stays its size, under the pointer, wherever Snap would put it
+      if (mini_drag_ && in_sizemove_) {
+        auto* wp = reinterpret_cast<WINDOWPOS*>(l);
+        if (!(wp->flags & SWP_NOSIZE) || !(wp->flags & SWP_NOMOVE)) {
+          POINT c; GetCursorPos(&c);
+          wp->x = c.x - mini_grab_.x; wp->y = c.y - mini_grab_.y;
+          wp->cx = mini_drag_size_.cx; wp->cy = mini_drag_size_.cy;
+          wp->flags &= ~(SWP_NOSIZE | SWP_NOMOVE);
+        }
+      }
+      break;
     case WM_SIZE: {
+      // maximized from the mini player another way (a shortcut): it is the full player again
+      if (w == SIZE_MAXIMIZED && mini_player_) {
+        mini_player_ = play_.in.mini_player = false; mini_drag_ = false;
+        SetWindowLongPtrW(hwnd_, GWL_STYLE, GetWindowLongPtrW(hwnd_, GWL_STYLE) | WS_MAXIMIZEBOX);
+        set_pin(mini_was_pinned_);
+        log("mini player off (maximized)");
+      }
       // minimized, nothing follows the pointer or animates: the poll wakes 4 times a second instead
       // of 30 (the media card, the taskbar buttons and the phone still hear in time)
       if (bool iconic = w == SIZE_MINIMIZED; iconic != poll_slow_) { poll_slow_ = iconic; SetTimer(hwnd_, T_POLL, iconic ? 250 : 33, nullptr); }
-      if (w == SIZE_MINIMIZED) return 0;
+      if (w == SIZE_MINIMIZED) { was_iconic_ = true; return 0; }
+      // back from the taskbar at the very same size: nothing to rebuild. The engine's window is
+      // not resized again and the overlays it already holds stay (re-sending them made the engine
+      // redo its frame at the moment it comes back, and music could stumble there)
+      if (was_iconic_) {
+        was_iconic_ = false;
+        if (LOWORD(l) == cw_ && HIWORD(l) == ch_ && cw_ > 0) {
+          home_.chrome.maximized = play_.chrome.maximized = IsZoomed(hwnd_) != 0;
+          if (mode_ == Mode::Play) play_.changed(now());
+          ensure_anim();
+          return 0;
+        }
+      }
       apply_window_corners();
       cw_ = LOWORD(l);
       ch_ = HIWORD(l);
+      // an edge held (not only a move): the light around the window steps out until it is let go
+      if (in_sizemove_ && !resizing_ && (cw_ != sizemove_start_.cx || ch_ != sizemove_start_.cy)) resizing_ = true;
       home_.chrome.maximized = play_.chrome.maximized = IsZoomed(hwnd_) != 0;
       if (video_) SetWindowPos(video_, nullptr, 0, 0, cw_, ch_, SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW | SWP_NOCOPYBITS);
       // the engine's own window gets the new size right away, asynchronously (its thread does the
@@ -4213,26 +5532,15 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       if (cw_ > 0 && ch_ > 0 && !in_sizemove_) {
         int tw = cw_, th = ch_;
         if (geom_.on) { tw = geom_.to.right - geom_.to.left; th = geom_.to.bottom - geom_.to.top; }
-        double ns = scale_for(tw, th, store_.ui_scale);
+        double ns = scale_for(tw, th, store_.ui_scale);  // (the mini player keeps the interface's own size)
         if (ns != s_) {
           s_ = ns;
-          log("ui scale " + std::to_string(s_));
+          trace("ui scale " + std::to_string(s_));
           // previews already decoded stay (a size off for a while costs nothing); restarting the
           // preview engine here is what used to make fullscreen changes stutter
         }
       }
-      home_.set_size(cw_, ch_, s_);
-      ob_.set_size(cw_, ch_, s_);
-      play_.set_base_scale(s_); play_.resize(cw_, ch_, portrait_scale(s_, cw_, ch_, store_.ui_scale));
-      if (mode_ == Mode::Play) music_fit_window();  // the cover follows the window, also mid-drag
-      if (mode_ == Mode::Play) {
-        play_.changed(now());
-        apply_style(true);  // only what changed (normally just the lifted subtitle position)
-        // the overlays follow the new size in this same message: no frame with stale UI
-        play_.prepare(now());
-        upload_overlays();
-      }
-      ensure_anim();
+      relayout();
       return 0;
     }
     case WM_DPICHANGED: {
@@ -4249,7 +5557,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         // the client area of the suggested window rect, at the new DPI
         RECT wr, cr; GetWindowRect(hwnd_, &wr); GetClientRect(hwnd_, &cr);
         int fw = (wr.right - wr.left) - cr.right, fh = (wr.bottom - wr.top) - cr.bottom;  // frame
-        s_ = ui_scale(dpi_, (r->right - r->left) - fw, (r->bottom - r->top) - fh, store_.ui_scale);
+        s_ = scale_for((r->right - r->left) - fw, (r->bottom - r->top) - fh, store_.ui_scale);  // (the mini player's rule too)
       }
       SetWindowPos(hwnd_, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top, SWP_NOZORDER | SWP_NOACTIVATE);
       return 0;
@@ -4262,12 +5570,54 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
     case WM_GETMINMAXINFO: {
       auto* mm = reinterpret_cast<MINMAXINFO*>(l);
       // the smallest window where the layout still fits at this monitor's base scale (not the
-      // current one: that grows with the window and would stop it from getting smaller)
-      double bs = ui_base_scale(dpi_, store_.ui_scale);
+      // current one: that grows with the window and would stop it from getting smaller), the
+      // medium size's: the larger sizes do not make the smallest window larger (at "maior" a
+      // film's window could not get under 1280 x 720 px at 150%); in a window that small, their
+      // pixels step down to what it holds (ui_scale fits the 320 x 180 canvas)
+      double bs = ui_base_scale(dpi_, kDefaultUiSize);
       mm->ptMinTrackSize.x = 240 * bs;  // narrow enough for a portrait video, the dock recomposes
       mm->ptMinTrackSize.y = 180 * bs;
+      // playing, the window stops where the player still looks right: a film keeps a bar that
+      // holds its playback and leaves the picture room (320 x 180: below it the bar covered most
+      // of the picture); a song keeps its cover, its words or bar and some air (260 x 220). The
+      // small window for watching beside other work is the mini player (Ctrl+M)
+      // (not under our own animations: the way back from the mini player starts smaller)
+      if (mode_ == Mode::Play && !fullscreen_ && !mini_player_ && !geom_.on) {
+        RECT wr, cr; GetWindowRect(hwnd_, &wr); GetClientRect(hwnd_, &cr);
+        const int fx = (wr.right - wr.left) - cr.right, fy = (wr.bottom - wr.top) - cr.bottom;  // invisible borders
+        const bool song = audio_only_ && loaded_;
+        mm->ptMinTrackSize.x = (LONG)std::lround((song ? 260 : 320) * bs) + fx;
+        mm->ptMinTrackSize.y = (LONG)std::lround((song ? 220 : 180) * bs) + fy;
+      }
+      if (mini_player_) {
+        // the mini player stays a mini player: its long side between 300 and 720 px at 100% (a
+        // song's card between 400 and 640), in its own shape (WM_SIZING holds it)
+        RECT wr, cr; GetWindowRect(hwnd_, &wr); GetClientRect(hwnd_, &cr);
+        const int fx = (wr.right - wr.left) - cr.right, fy = (wr.bottom - wr.top) - cr.bottom;
+        SIZE lo = mini_client(true), hi = mini_client(false);
+        mm->ptMinTrackSize = {lo.cx + fx, lo.cy + fy};
+        mm->ptMaxTrackSize = {hi.cx + fx, hi.cy + fy};
+      }
       return 0;
     }
+    case WM_SIZING:
+      // the mini player keeps its shape while an edge or a corner is dragged
+      if (mini_player_) {
+        auto* r = reinterpret_cast<RECT*>(l);
+        RECT wr, cr; GetWindowRect(hwnd_, &wr); GetClientRect(hwnd_, &cr);
+        const int fx = (wr.right - wr.left) - cr.right, fy = (wr.bottom - wr.top) - cr.bottom;
+        const double ar = mini_aspect();
+        int cw = (r->right - r->left) - fx, ch = (r->bottom - r->top) - fy;
+        const bool by_height = w == WMSZ_TOP || w == WMSZ_BOTTOM;
+        if (by_height) cw = (int)std::lround(ch * ar); else ch = (int)std::lround(cw / ar);
+        SIZE lo = mini_client(true), hi = mini_client(false);
+        cw = std::clamp(cw, (int)lo.cx, (int)hi.cx); ch = (int)std::lround(cw / ar);
+        // the edge that is not held stays where it is
+        if (w == WMSZ_LEFT || w == WMSZ_TOPLEFT || w == WMSZ_BOTTOMLEFT) r->left = r->right - cw - fx; else r->right = r->left + cw + fx;
+        if (w == WMSZ_TOP || w == WMSZ_TOPLEFT || w == WMSZ_TOPRIGHT) r->top = r->bottom - ch - fy; else r->bottom = r->top + ch + fy;
+        return TRUE;
+      }
+      break;
     case WM_ENTERSIZEMOVE:
       in_sizemove_ = true;
       settle_fullscreen_motion();
@@ -4276,6 +5626,9 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       break;
     case WM_EXITSIZEMOVE: {
       in_sizemove_ = false;
+      resizing_ = false;
+      if (mini_player_) mini_settle();  // where it was let go, or into a corner right beside it
+      mini_drag_ = false;
       refresh_display_rate();  // it may have moved to a monitor with another refresh rate
       refresh_ui_scale();      // the size it was given while the edge was held
       ambient_.follow(hwnd_);
@@ -4317,7 +5670,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
     case WM_TIMER:
       if (w == T_ANIM) frame();
       else if (w == T_WAKE) { KillTimer(hwnd_, T_WAKE); ensure_anim(); }
-      else if (w == T_SAVE) save_position();
+      else if (w == T_SAVE) { save_position(); cue_log_flush(); }
       else if (w == T_PERSIST) save_now();
       else if (w == T_MAINTENANCE) {
         bool idle_home = mode_ == Mode::Home && pending_open_.empty() && mpv_ok_;
@@ -4401,10 +5754,18 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
           ensure_anim();  // lets the dock notice 2 s of stillness and leave
         }
         update_cursor(now());
+        // Shift pressed or let go with the pointer still: a dragged bar follows at once
+        if (play_.dock_dragging() && play_.set_shift(GetKeyState(VK_SHIFT) < 0)) ensure_anim();
         if (hw_log_t_ > 0 && now() > hw_log_t_) {
           hw_log_t_ = 0;
-          log("video " + std::to_string(vid_w_) + "x" + std::to_string(vid_h_) + ", decode " +
-              (hwdec_.empty() || hwdec_ == "no" ? std::string("software") : hwdec_) + ", sync " + video_sync_);
+          // which codec and pixel format: what decides whether the graphics card can decode it
+          // (software decoding of a film costs a processor core or more, even minimized)
+          std::string codec = mpv_.get_string("current-tracks/video/codec"), profile = mpv_.get_string("current-tracks/video/codec-profile"),
+                      pix = mpv_.get_string("video-params/hw-pixelformat");
+          if (pix.empty()) pix = mpv_.get_string("video-params/pixelformat");
+          log("video " + std::to_string(vid_w_) + "x" + std::to_string(vid_h_) + " " + (codec.empty() ? "?" : codec) +
+              (profile.empty() ? "" : " (" + profile + ")") + (pix.empty() ? "" : " " + pix) + ", decode " +
+              (hwdec_.empty() || hwdec_ == "no" ? std::string("software") : hwdec_) + ", sync " + (sync_sent_.empty() ? video_sync_ : sync_sent_));
         }
         {
           // atmosphere at ~30 Hz from this timer, never on the 120 Hz animation path
@@ -4414,7 +5775,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         // Sample colours independently of drawing the light. No repeated decode
         // while paused; spatial interpolation continues at the UI poll's ~30 Hz.
-        if (atmosphere_ready() && preview_.loaded && !preview_.failed && now() - accent_req_t_ > (store_.ambient ? 0.9 : 4.0) &&
+        if (atmosphere_ready() && preview_.loaded && !preview_.failed && now() - accent_req_t_ > (store_.ambient && ambient_.active() && !mini_player_ ? 1.5 : 4.0) &&
             (accent_media_t_ < 0 || std::fabs(play_.in.time - accent_media_t_) >= 0.25) &&
             !hidden_now()) {
           accent_req_t_ = now();
@@ -4483,6 +5844,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         else if (a.a == HomeAct::Remote) open_remote_scene();
         else if (a.a == HomeAct::News) show_news(true);
         else if (a.a == HomeAct::NewsClose) close_news_line();
+        else if (a.a == HomeAct::Survey || a.a == HomeAct::SurveyClose) answer_survey(a.a == HomeAct::Survey);
         else if (a.a == HomeAct::SkipUpdate) {
           store_.update_skipped = upd_rel_.version;
           upd_ = Upd::Idle;
@@ -4524,13 +5886,13 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       {
         // remember the window for next time (the normal rect, even if maximized or fullscreen)
         WINDOWPLACEMENT pl{sizeof(pl)};
-        if (fullscreen_) pl = wp_; else GetWindowPlacement(hwnd_, &pl);
+        if (fullscreen_) pl = wp_; else if (mini_player_) pl = mini_restore_; else GetWindowPlacement(hwnd_, &pl);  // the mini player's window is never the one remembered
         RECT r = pl.rcNormalPosition;  // workspace coordinates: shift to screen coordinates
         MONITORINFO pmi{sizeof(pmi)};
         GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &pmi);
         OffsetRect(&r, pmi.rcWork.left - pmi.rcMonitor.left, pmi.rcWork.top - pmi.rcMonitor.top);
         if (r.right - r.left > 200 && r.bottom - r.top > 120) {
-          bool mx = fullscreen_ ? pl.showCmd == SW_SHOWMAXIMIZED : IsZoomed(hwnd_) != 0;
+          bool mx = (fullscreen_ || mini_player_) ? pl.showCmd == SW_SHOWMAXIMIZED : IsZoomed(hwnd_) != 0;
           store_.win = {true, (int)r.left, (int)r.top, (int)(r.right - r.left), (int)(r.bottom - r.top), (int)dpi_, mx};
         }
       }

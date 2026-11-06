@@ -1,4 +1,6 @@
+#define private public
 #include "../src/ui/play.h"
+#undef private
 #include "../src/ui/atmosphere.h"
 #include "../src/core/store.h"
 #include <cassert>
@@ -28,8 +30,15 @@ int main(){
   int pause=0;for(auto a:p.take_actions())pause+=a.a==PA::TogglePause;assert(pause==1); // empty space passes to video
   p.in.controls_free=false;p.changed(t);settle(p,t);assert(layer.c.w==original);
   p.open_panel_for_preview(3,t);settle(p,t);auto& menu=p.layers[PlayView::L_PANEL];assert(menu.x>=0&&menu.y>=0&&menu.y+menu.c.h<=400*scale);
+  // the controls' style lives in Settings (the "..." menu opens it): its last row is the language
+  p.open_panel_for_preview(11,t);settle(p,t);
+  // by the keyboard, up from the last row ("about Cue"); in a short window the interface's two
+  // choices are one row deeper ("interface >")
   p.take_actions();for(int i=0;i<20;++i)p.key("down",false,false,t);
-  p.key("up",false,false,t);p.key("up",false,false,t);p.key("up",false,false,t);p.key("right",false,false,t);  // past "about", "remote control" and "language"
+  for(int i=0;i<20&&p.pfocus_>=0&&p.rows_[p.pfocus_].id!=PlayView::R_CONTROLS_FREE&&p.rows_[p.pfocus_].id!=PlayView::R_INTERFACE;++i)p.key("up",false,false,t);
+  if(p.rows_[p.pfocus_].id==PlayView::R_INTERFACE){p.key("enter",false,false,t);settle(p,t);for(int i=0;i<20;++i)p.key("down",false,false,t);}
+  assert(p.rows_[p.pfocus_].id==PlayView::R_CONTROLS_FREE);
+  p.key("right",false,false,t);
   bool selected=false;for(auto a:p.take_actions())if(a.a==PA::ControlsFree&&a.v==1)selected=true;assert(selected);
  }
  for(bool audio:{false,true}){PlayView p;p.in.audio_only=audio;p.in.audios={{1,"audio"},{2,"audio"}};p.resize(480,360,2);double t=1;p.reset(t);p.open_panel_for_preview(3,t);settle(p,t);auto& menu=p.layers[PlayView::L_PANEL];assert(menu.y>=0&&menu.y+menu.c.h<=360);}

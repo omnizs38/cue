@@ -5,6 +5,7 @@
 #include <vector>
 #include "../src/core/audio_mode.h"
 #include "../src/core/store.h"
+#include "../src/core/ui_scale.h"
 #define private public
 #include "../src/ui/play.h"
 #include "../src/ui/queue_view.h"
@@ -38,8 +39,37 @@ int main(){
     { std::string g1=audio_waveform_graph(1,2,S);
       assert(g1.find("pad=1920:1080:0:0:black[cue_bg]")!=std::string::npos && g1.find("scale=1920:1080")==std::string::npos);
       assert(g1.find("[cue_beat]crop=2:2")!=std::string::npos && g1.find("vignette")==std::string::npos); }
-    assert(music_frame_for(1280,720,1)==MusicFrame::Scene && music_frame_for(2560,1440,2)==MusicFrame::Scene);
+    // roomy windows: the cover in the middle, its words under it, the bar along the foot
+    assert(music_frame_for(1280,720,1)==MusicFrame::Centre && music_frame_for(2560,1440,2)==MusicFrame::Centre);
+    assert(!music_frame_stacked(MusicFrame::Centre) && music_frame_stacked(MusicFrame::Tall) && music_frame_stacked(MusicFrame::Cover));
+    for(auto [w,h]:std::vector<std::pair<int,int>>{{1280,720},{2160,1215},{1910,1370},{2560,1440},{1000,780},{1500,700}}){
+      const int bar=h-(int)(h*0.16),above=52;const double below=120;
+      MusicView v=music_view(S,MusicFrame::Centre,w,h,bar,below,above);
+      const double side=S.side*v.f,cx=v.ox+(S.x+S.side/2.0)*v.f,top=v.oy+S.y*v.f;
+      const double l=v.ox+S.left_x()*v.f,r=v.ox+(S.right_x()+S.wing_w)*v.f;
+      assert(v.frame==MusicFrame::Centre&&!v.words_beside()&&std::abs(cx-w/2.0)<1e-6);  // centred
+      assert(l>=0&&r<=w&&top>=above&&top+side+below<=bar+0.5&&side<=h*0.45+1e-6);     // whole, its words above the bar
+      // the list open: the group in the left half, whole
+      MusicView o=music_view(S,MusicFrame::Centre,w,h,bar,below,above,-1,true);
+      const double ol=o.ox+S.left_x()*o.f,orr=o.ox+(S.right_x()+S.wing_w)*o.f;
+      assert(ol>=0&&orr<=w*0.5+std::min(w,h)*0.04&&o.f<=v.f+1e-9);
+      // the engine's zoom and pan put it there
+      MpvFraming f=mpv_framing(S,o,w,h);double f0=std::min(w/(double)S.W,h/(double)S.H);assert(std::abs(f0*std::pow(2.0,f.zoom)-o.f)<1e-9);
+    }
     assert(music_frame_for(720,1000,1)==MusicFrame::Tall && music_frame_for(600,450,1)==MusicFrame::Cover);
+    // square windows (the report: 1363x1447, 600x640 at 1x) show the words under the cover
+    assert(music_frame_for(1363,1447,2)==MusicFrame::Tall && music_frame_for(600,640,1)==MusicFrame::Tall);
+    // the picture reaches every edge of a wide window framed on the cover (the report: a black
+    // band faded in at the left of a 1260x780 window at 250%)
+    {MusicScene S=MusicScene::wide();MusicFrame m=music_frame_for(1260,780,2.5);assert(m==MusicFrame::Cover);
+     MusicView v=music_view(S,m,1260,780,780-100);assert(v.ox<=0.5&&v.ox+S.W*v.f>=1259.5&&v.oy<=0.5&&v.oy+S.H*v.f>=779.5);}
+    // the wings are never cut: the cover and both wings inside the window in every framing
+    for(auto sz:{std::pair{1363,1447},std::pair{600,640},std::pair{700,520},std::pair{480,900},std::pair{360,360}})
+      for(MusicFrame m:{MusicFrame::Tall,MusicFrame::Cover}){
+        MusicScene S=MusicScene::wide();MusicView v=music_view(S,m,sz.first,sz.second,sz.second-80);
+        double l=v.ox+S.left_x()*v.f,r=v.ox+(S.right_x()+S.wing_w)*v.f;
+        assert(l>=0&&r<=sz.first);
+      }
     // the engine's zoom and pan put the cover exactly where the view says
     for(MusicFrame m:{MusicFrame::Scene,MusicFrame::Tall,MusicFrame::Cover}){
       int w=m==MusicFrame::Tall?720:m==MusicFrame::Cover?600:1280,h=m==MusicFrame::Tall?1000:m==MusicFrame::Cover?450:720;
@@ -59,6 +89,10 @@ int main(){
     const MusicScene S=MusicScene::wide();
     for(auto [w,h,bar]:std::vector<std::tuple<int,int,int>>{{2246,1475,1215},{1690,1085,900},{1800,900,800},{1000,780,700},{2560,1080,980},{1800,600,520}}){
       MusicView v=music_view(S,MusicFrame::Scene,w,h,bar);
+      if(w>=h*kMusicSplitRatio){  // a strip: the split composition (checked below)
+        assert(v.split());continue;
+      }
+      assert(!v.split());
       double fit=std::min(w/1920.0,h/1080.0);
       assert(v.f>=fit-1e-9&&v.f<=fit*1.33+1e-9);
       double mg=std::min(w,h)*0.035;
@@ -69,17 +103,51 @@ int main(){
     }
     MusicView v=music_view(S,MusicFrame::Scene,1920,1080,980);assert(std::abs(v.f-1)<1e-9&&std::abs(v.ox)<1e-9&&std::abs(v.oy)<1e-9);
   }
+  // a wide, short window (a strip at the screen's edge): the cover with its wings, whole, above the
+  // bar, and its words beside it, centred together as one group (the same margin left and right);
+  // nothing past the edges. Before, the cover alone between two dark sides; then a fixed half and
+  // half that left the group to the left of a short title.
+  {
+    const MusicScene S=MusicScene::wide();
+    for(auto [w,h,bar]:std::vector<std::tuple<int,int,int>>{{2340,520,400},{2100,680,560},{1800,600,520},{1600,300,230},{3840,900,780}}){
+      assert(music_frame_for(w,h,w>2000?2.5:2)==MusicFrame::Scene||h/2.5<150);
+      MusicView v=music_view(S,MusicFrame::Scene,w,h,bar);
+      assert(v.split()&&v.f>0);
+      const double l=v.ox+S.left_x()*v.f,r=v.ox+(S.right_x()+S.wing_w)*v.f;
+      const double top=v.oy+std::min(S.y,S.wing_y())*v.f,bottom=v.oy+std::max(S.y+S.side,S.wing_y()+S.wing_h)*v.f;
+      const double mg=std::min(w,h)*0.035;
+      assert(l>=mg-0.5&&r<v.wx&&v.wx-r>=2*mg-0.5);
+      assert(top>=0&&bottom<=bar+0.5);
+      assert(v.wx+v.ww<=w-mg+0.5&&scene_words_x(S,v)==v.wx&&scene_words_w(S,v)==v.ww);
+      // centred: the words (as wide as drawn, here the default) end as far from the right edge as
+      // the wings start from the left
+      for(double words_px:{-1.0,300.0,w*0.2}){
+        MusicView u=music_view(S,MusicFrame::Scene,w,h,bar,-1,0,words_px);
+        const double ul=u.ox+S.left_x()*u.f,words=std::min(words_px>0?words_px:w*0.3,u.ww);
+        assert(u.split()&&std::abs(ul-(w-(u.wx+words)))<1.0);
+      }
+      // the framing the engine gets puts the cover exactly there
+      MpvFraming f=mpv_framing(S,v,w,h);double f0=std::min(w/(double)S.W,h/(double)S.H);assert(std::abs(f0*std::pow(2.0,f.zoom)-v.f)<1e-9);
+    }
+    // a glide into it moves the words too, from where the scene put them
+    MusicView a=music_view(S,MusicFrame::Scene,1920,1080,980),b=music_view(S,MusicFrame::Scene,2340,520,400);
+    MusicView m=mix_views(a,b,0.5);assert(m.split()&&m.wx>std::min(scene_words_x(S,a),b.wx)-1&&m.wx<std::max(scene_words_x(S,a),b.wx)+1);
+    // the window's colour around it is the room's far light, black while the light is out
+    struct C{int r,g,b;};C dark=music_backdrop(C{150,152,168},0);assert(dark.r==0&&dark.g==0&&dark.b==0);
+    C lit=music_backdrop(C{150,152,168},1);assert(lit.r>8&&lit.r<30&&lit.b>lit.r);
+  }
   // the choice is saved for all music
   auto file=std::filesystem::temp_directory_path()/"cue-music-look.json";
   Store st; st.music_look=1; assert(st.save(file)); Store back; assert(back.load(file)&&back.music_look==1);
   { Store st2; st2.music_look=2; assert(st2.save(file)); Store b2; assert(b2.load(file)&&b2.music_look==2); }
   { Store t0; assert(t0.cover_tilt); t0.cover_tilt=false; assert(t0.save(file)); Store t1; assert(t1.load(file)&&!t1.cover_tilt); }
   {
-    // the cover's tilt is a choice in the picture's menu, on by default; off, the cover stays still
+    // the cover's tilt is a choice in Settings (music's own group), on by default; off, the cover stays still
     PlayView p;p.in.dur=200;p.in.audio_only=true;p.in.has_cover=true;p.in.cover_scene=true;p.in.cover_art=true;p.in.music_title="Song";
     p.in.music_scene=MusicScene::wide();p.resize(1280,720,2);double t=1;p.reset(t);p.changed(t);settle(p,t,40);
     Rect c=p.cover_screen_rect();assert(c.w>0);
-    p.right_click(c.cx(),c.cy(),t);settle(p,t);
+    p.open_panel_for_preview(11,t);settle(p,t);
+    for(auto& r:p.rows_)assert(r.id!=PlayView::R_SMOOTH);  // a film's choice: not in music's Settings
     int row=-1;for(int i=0;i<(int)p.rows_.size();++i)if(p.rows_[i].id==PlayView::R_COVER_TILT)row=i;
     assert(row>=0&&p.rows_[row].checked);
     p.take_actions();p.panel_click(row,-1,0,t);
@@ -87,9 +155,13 @@ int main(){
     p.close_panel();settle(p,t);
     p.mouse_move(c.x+4,c.y+4,t);settle(p,t,40);auto k=p.cover_tilt();
     assert(std::abs(k.rx)<0.01&&std::abs(k.ry)<0.01);
-    // the spectrum alone has no cover to tilt: no such row
-    p.in.music_look=1;p.changed(t);p.right_click(c.cx(),c.cy(),t);settle(p,t);
-    for(auto& r:p.rows_)assert(r.id!=PlayView::R_COVER_TILT);
+    // the spectrum alone has no cover to tilt: the row is there (the panel keeps its shape), dimmed and inert
+    p.in.music_look=1;p.changed(t);p.open_panel_for_preview(11,t);settle(p,t);
+    row=-1;for(int i=0;i<(int)p.rows_.size();++i)if(p.rows_[i].id==PlayView::R_COVER_TILT)row=i;
+    assert(row>=0&&!p.rows_[row].enabled);p.take_actions();p.panel_click(row,-1,0,t);assert(p.take_actions().empty());
+    // and the picture's menu is the file's: no looks there any more
+    p.close_panel();settle(p,t);p.right_click(c.cx(),c.cy(),t);settle(p,t);
+    for(auto& r:p.rows_)assert(r.id!=PlayView::R_COVER_TILT&&r.id!=PlayView::R_MUSIC_LOOK&&r.id!=PlayView::R_MUSIC_COLOR);
   }
   {
     // the cover alone, the lightest look: no spectrum and no light show, two pictures a second led
@@ -97,7 +169,7 @@ int main(){
     std::string g2=audio_waveform_graph(1,2,MusicScene::wide(),2);
     assert(g2.find("[aid1]asplit=2[ao][cue_wave];")==0 && g2.find("[vid2]")!=std::string::npos && g2.find("[vo]")!=std::string::npos);
     assert(g2.find("showfreqs")==std::string::npos && g2.find("lagfun")==std::string::npos && g2.find("drawgrid")==std::string::npos);
-    assert(g2.find("showwaves=s=2x2:r=2")!=std::string::npos && g2.find("r=60")==std::string::npos && g2.find("pad=1920:1080:0:0:black")!=std::string::npos);
+    assert(g2.find("showwaves=s=2x2:r=60")!=std::string::npos && g2.find("pad=1920:1080:0:0:black")!=std::string::npos);
     assert(audio_waveform_graph(1,0,MusicScene::wide(),2).find("color=c=0x0e0e0e")!=std::string::npos);  // Cue's tile
   }
   std::filesystem::remove(file); std::filesystem::remove(file.string()+".bak");
@@ -113,22 +185,93 @@ int main(){
     auto k=p.cover_tilt();assert(k.ry<-3&&std::abs(k.rx)<1&&k.k>0.9);
     p.mouse_move(c.cx(),c.y+4,t);settle(p,t);k=p.cover_tilt();assert(k.rx<-3);
     p.pointer_left();settle(p,t,90);k=p.cover_tilt();assert(std::abs(k.rx)<0.1&&std::abs(k.ry)<0.1&&k.k<0.01);
-    // wide: the words to the right of the cover, level with it; tall: under it
+    // wide (the cover in the middle) and tall: the words under the cover, centred on it
     p.compose(t);auto& M=p.layers[PlayView::L_MUSIC];assert(M.visible&&M.x>=0&&M.x+M.c.w<=W);
-    if(tall) assert(M.y>=c.b());
-    else assert(M.x>=c.r()&&M.y>=c.y&&M.y+M.c.h<=c.b());
-    // the right-click menu offers the three looks, with icons; choosing one asks for it
-    p.right_click(c.cx(),c.cy(),t);settle(p,t);assert(p.panel_open());
+    assert(M.y>=c.b()&&std::abs(M.x+M.c.w/2-c.cx())<=(int)scale+1);
+    // Settings offers the three looks, with icons; choosing one asks for it
+    p.open_panel_for_preview(11,t);settle(p,t);assert(p.panel_open());
     int row=-1;for(int i=0;i<(int)p.rows_.size();++i)if(p.rows_[i].id==PlayView::R_MUSIC_LOOK)row=i;
     assert(row>=0&&p.rows_[row].segs.size()==3&&p.rows_[row].seg_icons.size()==3&&p.rows_[row].seg==0);
     p.take_actions();p.panel_click(row,1,0,t);
     bool asked=false;for(auto& a2:p.take_actions())asked|=a2.a==PA::MusicLook&&a2.v==1;assert(asked);
     p.close_panel();
-    // no scene (the engine could not draw it): no choice to make
+    // no scene (the engine could not draw it): no choice to make (the row stays, dimmed)
     p.in.has_cover=false;p.in.cover_scene=false;p.changed(t);settle(p,t);
-    p.right_click(c.cx(),c.cy(),t);settle(p,t);
-    for(auto& r:p.rows_)assert(r.id!=PlayView::R_MUSIC_LOOK);
+    p.open_panel_for_preview(11,t);settle(p,t);
+    for(auto& r:p.rows_)if(r.id==PlayView::R_MUSIC_LOOK)assert(!r.enabled);
     p.close_panel();settle(p,t,30);p.compose(t);assert(!p.layers[PlayView::L_MUSIC].visible);
+  }
+  {
+    // music's list never pops up: in a small window (the cover alone) and a tall one (the words
+    // under it) it opens in its header composition (the cover a thumbnail, the words beside it,
+    // the list, the bar), and closes back to the composition it came from
+    for(auto [W,H,m]:std::vector<std::tuple<int,int,MusicFrame>>{{960,620,MusicFrame::Cover},{900,1300,MusicFrame::Tall},{760,300,MusicFrame::Cover}}){
+      PlayView p;p.in.dur=200;p.in.audio_only=true;p.in.has_cover=true;p.in.cover_scene=true;p.in.music_title="Song";p.in.music_artist="Artist";
+      p.in.music_scene=MusicScene::wide();p.in.music_view=music_view(p.in.music_scene,m,W,H,H-100);
+      p.in.queue_active=true;for(uint32_t i=1;i<=6;++i)p.in.queue.push_back({i,"song "+std::to_string(i)+".mp3",i==2,true});p.in.queue_revision=1;
+      p.resize(W,H,W<800?1.5:2.5);double t=1;p.reset(t);p.changed(t);settle(p,t);
+      p.open_panel(PlayView::Panel::Queue,PlayView::B_QUEUE,t);settle(p,t,40);
+      assert(p.scene_list()&&p.queue_view_.bare()&&p.list_layout().on&&p.list_cover().w>0);
+      assert(p.list_veil()==0);
+      Rect r=p.panel_rect();assert(r.x>=0&&r.r()<=W&&r.y>=0&&r.b()<=H);
+      p.close_panel();settle(p,t,60);assert(p.list_cover().w==0&&!p.list_header_);
+    }
+  }
+  {
+    // every window shape, a short title and a long one: the list opens without a popup, whole in
+    // the window; beside the words it never covers the cover, over the cover it dims it. The
+    // framing is App's (the bar's place, the words' width, the list's room), let to land
+    for(int W:{700,960,1280,1600,1910,2160,2560,3200,3840})for(int H:{300,420,560,720,900,1080,1370,1600,2160})for(bool shortname:{true,false}){
+      if(H>W*2.2)continue;
+      const double scale=W>=2400?3:W>=1500?2.5:W>=900?2:1.5;
+      PlayView p;p.in.dur=200;p.in.audio_only=true;p.in.has_cover=true;p.in.cover_scene=true;p.in.cover_art=true;
+      p.in.music_title=shortname?"DNA":"Jane Remover - Dream Sequence (audio)";p.in.music_artist="Number Teddie";
+      p.in.music_scene=MusicScene::wide();
+      p.in.queue_active=true;for(uint32_t i=1;i<=4;++i)p.in.queue.push_back({i,"song "+std::to_string(i)+".mp3",i==4,true});p.in.queue_revision=1;
+      const double ss=std::max(scale,!music_frame_stacked(music_frame_for(W,H,scale))?scale:music_compact_scale(scale,W,H,2,scale));
+      p.set_base_scale(scale);p.resize(W,H,ss);double t=1;p.reset(t);p.changed(t);
+      auto frame=[&]{for(int i=0;i<4;++i){
+        int top=H;Rect d=p.blur_cloud().controls;if(d.h>0&&d.cy()>H/2)top=d.y;MusicFrame m=music_frame_for(W,H,scale);
+        Rect lc=p.list_cover();
+        if(lc.w>0){MusicView v;v.frame=m;v.f=lc.w/(double)p.in.music_scene.side;v.ox=lc.x-p.in.music_scene.x*v.f;v.oy=lc.y-p.in.music_scene.y*v.f;p.in.music_view=v;}
+        else if(m==MusicFrame::Centre)p.in.music_view=music_view(p.in.music_scene,m,W,H,top,p.music_centre_below(),p.music_stack_above(),-1,p.music_list_beside());
+        else p.in.music_view=m!=MusicFrame::Scene&&p.music_stacked()?music_view(p.in.music_scene,m,W,H,top,p.music_stack_below(),p.music_stack_above()):music_view(p.in.music_scene,m,W,H,top,-1,0,p.music_words_w());
+        p.changed(t);settle(p,t,12);}};
+      frame();
+      p.open_panel(PlayView::Panel::Queue,PlayView::B_QUEUE,t);settle(p,t,10);frame();settle(p,t,40);
+      assert(p.queue_open()&&p.scene_list());
+      Rect r=p.panel_rect();assert(r.x>=0&&r.y>=0&&r.r()<=W&&r.b()<=H&&r.w>0&&r.h>0);
+      Rect c=p.cover_screen_rect();
+      if(p.list_over()){
+        // the header: the cover is the thumbnail on the list's left, the words beside it, the bar
+        // under the list, all inside the window, nothing overlapping
+        auto L=p.list_layout();if(!L.on){assert(p.list_veil()>0.9);continue;}  // too short for a header: dimmed cover
+        assert(std::abs(c.x-L.thumb.x)<=2&&std::abs(c.w-L.thumb.w)<=2&&c.b()<=r.y);
+        Rect d=p.dock_rect();if(!(d.y>=r.b()&&d.b()<=H&&d.x>=0&&d.r()<=W)){std::fprintf(stderr,"W%d H%d short%d d %d %d %d %d r %d %d %d %d lay bar %.0f dh %d\n",W,H,(int)shortname,d.x,d.y,d.w,d.h,r.x,r.y,r.w,r.h,p.list_layout().bar_y,p.dh_);}
+        assert(d.y>=r.b()&&d.b()<=H&&d.x>=0&&d.r()<=W);
+        p.compose(t);auto& M=p.layers[PlayView::L_MUSIC];
+        assert(M.visible&&M.x>=c.r()&&M.x+M.c.w<=W&&M.y+M.c.h<=r.y);
+        // a short list: the group stands in the middle, not stuck to the top
+        const int above=c.y-p.chrome_room(),below=H-d.b();assert(above>=0);
+        if(below>H*0.2) assert(above>=below*0.5);
+      }
+      else assert(r.x+20>=c.r()&&p.list_veil()==0);
+    }
+  }
+  {
+    // the menus: "..." ends with Settings; Settings ends with About Cue; the picture's menu is
+    // the file's (about it, up next, the mini player, close), music's looks are in Settings
+    for(bool audio:{false,true}){
+      PlayView p;p.in.dur=200;p.in.audio_only=audio;p.in.cover_scene=audio;p.resize(1600,900,2);double t=1;p.reset(t);
+      p.open_panel_for_preview(3,t);settle(p,t);assert(p.rows_.back().id==PlayView::R_SETTINGS);
+      for(auto& r:p.rows_)assert(r.id!=PlayView::R_AMBIENT&&r.id!=PlayView::R_ABOUT);
+      p.open_panel_for_preview(11,t);settle(p,t);assert(p.rows_.back().id==PlayView::R_ABOUT);
+      bool amb=false,look=false;for(auto& r:p.rows_){amb|=r.id==PlayView::R_AMBIENT;look|=r.id==PlayView::R_MUSIC_LOOK;}
+      assert(amb!=audio&&look==audio);  // (music's room light is part of its look: no switch for it)
+      p.close_panel();settle(p,t);p.right_click(400,300,t);settle(p,t);
+      for(auto& r:p.rows_)assert(r.k!=PlayView::RK::Segmented&&r.k!=PlayView::RK::Toggle);
+      assert(p.rows_.back().id==PlayView::R_CLOSE);
+    }
   }
   {
     // a small window keeps only the cover: no words, the cover centred above the bar
@@ -195,7 +338,8 @@ int main(){
     PlayView m;m.in.dur=200;m.in.audio_only=true;m.resize(1920,1080,2);m.reset(t);m.changed(t);settle(m,t);
     assert(m.dw_<v.dw_);
     int film=v.dw_,music=m.dw_;
-    v.in.audio_only=true;v.changed(t);t+=1./60;v.tick(t,1./60);t+=1./60;v.tick(t,1./60);t+=1./60;v.tick(t,1./60);
+    // (music's bar holds shuffle and the mini player's button too: a few pixels narrower only)
+    v.in.audio_only=true;v.changed(t);for(int i=0;i<6;++i){t+=1./60;v.tick(t,1./60);}
     assert(v.dw_<film&&v.dw_>music);  // on its way
     settle(v,t,60);assert(v.dw_==music);
   }
@@ -223,14 +367,14 @@ int main(){
     // cover's place, so the words and the list sit beside it the same way
     std::string ph=audio_waveform_graph(1,0,MusicScene::wide(),0),sp=audio_waveform_graph(1,0,MusicScene::wide(),1);
     assert(ph.find("[vid")==std::string::npos&&ph.find("drawbox")!=std::string::npos&&ph.find("pad=1920:1080")!=std::string::npos);
-    assert(sp.find("pad=1920:1080:282:297")!=std::string::npos&&sp.find("[vid")==std::string::npos);
+    assert(sp.find("pad=1920:1080:576:297")!=std::string::npos&&sp.find("[vid")==std::string::npos);
     assert(audio_waveform_graph(1,2,MusicScene::wide(),1).find("[vid")==std::string::npos);  // the spectrum never waits on a cover
     // the spectrum look: no tilt, but the words beside it
     PlayView p;p.in.dur=200;p.in.audio_only=true;p.in.cover_scene=true;p.in.cover_art=false;p.in.music_title="Song";
     p.resize(1280,720,1);double t=1;p.reset(t);p.changed(t);settle(p,t);
     Rect c=p.cover_screen_rect();p.mouse_move(c.r()-4,c.cy(),t);settle(p,t);assert(std::abs(p.cover_tilt().ry)<0.01);
     p.compose(t);assert(p.layers[PlayView::L_MUSIC].visible&&p.layers[PlayView::L_MUSIC].x>=c.r());
-    p.right_click(c.cx(),c.cy(),t);settle(p,t);bool look=false;for(auto& r:p.rows_)look|=r.id==PlayView::R_MUSIC_LOOK;assert(look);
+    p.open_panel_for_preview(11,t);settle(p,t);bool look=false;for(auto& r:p.rows_)look|=r.id==PlayView::R_MUSIC_LOOK&&r.enabled;assert(look);
   }
   {
     // the list beside the cover ends with a line that adds songs; dragging files in opens the

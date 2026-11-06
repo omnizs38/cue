@@ -1,5 +1,452 @@
 # Changelog
 
+## 1.3 — 2026-11-06
+
+- Less repeated work during playback: Windows media-card words are cached until the file or music tags change; opening and list animations avoid redundant shader calculation before the overlay update; matching cover decode requests reuse work through a four-entry weak cache.
+
+- Video audio mixes are prepared before the first frame, avoiding a second audio transition during opening. Opening shader updates are bounded to one request in flight, and the iris skips video sampling outside its visible area.
+
+- Reopening a video with multiple audio tracks enabled uses the fullscreen-style pixel fade while restoring the mix.
+
+- Subtitle choices in the full and mini player are sent even when the last observed track
+  still matches the new choice. Rapid A/B/A clicks keep the last choice, stale replies cannot
+  overwrite it, and the menu reconciles with the actual engine result when the command ends.
+  Audio-refresh suppression is cleared for manual choices and new files; visibility changes
+  during a transition are kept when the subtitles return.
+
+- The cover stands in the middle of the music's picture (x 700): a roomy window's picture reaches
+  as far on both sides of it, so the room's light is the same left and right (it was a lit band
+  on the right and the window's colour on the left). The room's light gained a wash over the whole
+  room (a wide, faint glow in the cover's border colours) and the window's colour around the
+  picture matches its far end (music_backdrop 0.13), so the window reads as one room of the
+  cover's colours, like a blurred cover.
+- Music's list beside the centred cover is as tall as its songs and stands level with the cover
+  and its words (it hung from the top of the window).
+- Settings is short by default: the "i" in its header shows each setting at work (the picture
+  and its line), remembered (`settings_examples`). Beside the rows, the picture's column and the
+  rows' now agree at half-step scales (a resize left the rows over the picture).
+- The card's turn: the window draws the shadow too, cross-fading with the engine's over 0.12 s
+  at the start and at the end (`cov_hide` now says how much of the engine's shadow is gone), so
+  the shadow turns with the cover even while the engine draws nothing; the next cover turns in
+  as soon as it is in hand, through the edge in one movement, and the covers of the songs either
+  side are read ahead at the card's size a second after a song starts; the drawing thread runs
+  at the highest priority.
+- The news say more: the mini player for films and songs, the bar and the new music layout, the
+  settings' examples.
+- Wide, short windows (the split composition): the cover with its wings and the words beside it
+  are centred as one group, with an even gap between them (the group sat to the left).
+- The card's words: the title a size smaller (at most 1.5x) and the artist right under it.
+- The film's mini player opens a short subtitles panel instead of the full one: on or off, the
+  track by its arrows (round the list), and three sizes for the mini player alone (as the full
+  player's, larger, largest; `mini_sub_size`), with a line that leaves the style and the sync to
+  the full player.
+- Music's list beside the words is laid out again when the composition moves (it kept the width
+  it opened with and could pass the window's edge); the list's icon keeps a word's space before
+  its count at every scale.
+- Music's bar no longer jumps between songs: the app redrew the interface while it set the next
+  song up, with the scene off for that moment, and the full bar took the film's place and came
+  back. The scene stays as it was until the song's own is decided, and the bar now follows a
+  scene change on its own (it waited for the next change of framing).
+- With the bar's background, music has the film's compact bar (buttons over the timeline,
+  centred low); the bar along the window's foot is for the style without background.
+- The list button shows its count beside the icon, in the bar's own type a shade quieter, its
+  capitals the icon's height ("99+" past that), in both bars; its slot grows with it.
+- Music's list is always music's (beside the cover, in the card), empty too: it ends on its line
+  that adds songs ("add tracks, or drop them here"), never the films' popover over the cover.
+- The card in the spectrum-alone look shows the song's cover, drawn by Cue over the card's square
+  (the cover read ahead at the card's size, with its shadow); nothing is reopened, the sound never
+  stops, and back in the full player the spectrum is there. Skipping turns it like any cover.
+  The whole spectrum steps out of the card there (`wing_all`), and the card has the cover look's
+  room light.
+- A song picked in music's list plays and the list stays open (Esc, its button or a click
+  elsewhere closes it); a film's up next over the picture still closes on a pick.
+- The survey's invitation: a small card on the home (Cue's eyes writing on a notepad, "help make
+  Cue better?", answer / no thanks), for people who updated or a week after Cue first ran; only
+  on the home, only where it covers nothing; answered or declined, never again. It opens the
+  survey in the browser; Cue sends nothing.
+- Shuffle for music: a button on music's bar (and in "..." when the bar is short) plays every
+  song of the list once a round in a random order, never the one playing next; back is the songs
+  played, newest first; songs added join the round, songs removed leave it; when a round ends a
+  new one is dealt, repeat or not, so shuffle never runs out (`ShuffleDeck`, `shuffle` in
+  state.json).
+- A song's mini player has its own button on music's bar (and in "..."); a film keeps the menu
+  on the picture (its bar is full enough). Right-click in the mini player does nothing.
+- The card in the spectrum-alone look: the spectrum is kept out of the card on every path, song
+  to song included (it came back behind the cover after a skip). The card's cover is the last one
+  until the next is read (no black instant), and only the songs either side are read ahead, at
+  the card's size, and dropped when the mini player ends.
+- Clearing music's list: its rows leave top to bottom where they are, the list closes up round
+  its middle (no jump of its top), and the line that adds songs fades in after them.
+- Settings shows its examples by default (saved under a new name, `settings_hints`, so the old
+  "off" from when they were off by default does not carry over). Too short for them on top, the
+  picture goes beside the rows where the window is wide enough, then the rows close up (the
+  interface one row deeper, then the groups closer), and only then the settings go alone; a new
+  window or interface size decides it again (at the large sizes the examples did not come back).
+  The interface's own page (Settings short of room): a size picked there that leaves room for all
+  of Settings brings it back, the sizes in place (it stayed on the page).
+- Settings' pictures keep inside their frame at every scale: they were measured in whole art px
+  (2.5x as 2x, 4.5x as 4x), so at the half-step sizes the art filled its strip to the edge, and
+  the spectrum's dots and the light crossed it.
+- The credits' summary (the license reader's first page) and the installed sources note said
+  1.2.3; they say 1.3, and a test now checks every version written in them.
+- A song's card at the large interface sizes keeps a mini player's window, and its pixels step
+  down by half art px until the card fits (`card_scale`: 250 x 130 art px at least). The title
+  used to vanish (no room above the playback) and the controls climbed under the window's buttons.
+- A new interface scale (a size picked in Settings, Ctrl + / Ctrl −, an edge let go, another
+  screen) is laid out like a new window size (`App::rescale`/`relayout`): music's composition is
+  chosen again for it (going from "maior" to "média" left the cover framed close, its words gone
+  under a compact bar), the overlays are sent at once, the welcome scene and the news follow; a
+  move to another screen keeps the mini player's rule; a new language frames music again.
+- The smallest player window is the medium size's at every size (at "maior" a film's window could
+  not get under 1280 x 720 px at 150%); a window that small steps the larger sizes down to fit.
+- A song picked in music's open list: the list stays music's while the song changes (in the card
+  it became the films' popover over the turning cover for a moment), and beside the cover the new
+  song is framed with the list beside it (it was framed centred, the list over the cover, and
+  stayed so: the first framing came before the frame was known).
+- "..." folded at a large size unfolds again when a smaller size is picked; About is as wide as
+  all of Settings, its picture's column included.
+- Menus fit at every interface size (`panel_fit_`, `panel_room_h`): a menu that still cannot sit
+  whole in the window, clear of the window's buttons and of the control bar, steps its pixels
+  down by half art px. The subtitles' style has its own band (under the window's buttons and the
+  back arrow, clear of the bar; it reached under them and over the bar's volume at "grande" and
+  "maior"); the subtitle list and up next step down in a small window instead of opening over the
+  bar; the picture's menu opened by the top edge goes under the window's buttons and the back
+  arrow. `menu_fit_test`: every menu, four sizes, twelve windows.
+- The mini player's button is on a film's bar too (the first to step into "..."); the mini
+  player's "..." has "back to full size" by name.
+- The mini players keep their pixels small enough for their window at every interface size
+  (`mini_scale`: the chosen size's base scale, stepped down by half art px until a film's mini
+  player has 288 x 162 art px and a song's card 250 x 130): at "grande" and "maior" the controls,
+  the window's buttons and the menus were far too big for the little window, and the menus came
+  out at another size than the bar. One scale for the whole mini player, its menus included
+  (they may reach over its floating controls, never over its window's buttons).
+- A film opens sooner and smoother: its window takes the film's shape at load, from what the
+  file says (its size, `demux-par`, `demux-rotation`), while the engine starts its decoder; the
+  picture opens with its first frame. It waited for the engine's first picture, 60 ms more and
+  the 0.26 s glide (about 0.4 s of black), and the glide (and the engine's switch of video-sync
+  for a large film) happened while the film had started. The engine's own measure, a moment
+  later, changes nothing when it agrees within 0.4%. cue.log notes "picture opens (open N ms)"
+  for a film and "song plays (open N ms)" for a song.
+- Reliability fixes from omnizs38 (#17): a song's cover is decoded within bounds (no fallback to
+  the full frame when scaling fails: a crafted cover could ask for about 1 GB; inputs over 4 GiB
+  and non-positive sizes refused); the phone remote's thumbnail and cover renders wait 8 s at most
+  for a free slot and are cancelled when sharing stops or changes (503 meanwhile; `remote_gate.h`,
+  `remote_gate_test`); the engine's DLL is let go when it is too old and never loaded twice; the
+  installer checks every destination before it moves anything (no escaping, duplicate or linked
+  paths); a worker thread that cannot start is cleaned up; a failed settings save leaves no stale
+  `.tmp`, and off Windows the good file is never replaced without its backup.
+- A menu closed and faded lets go of its pixels (about 10 MB at 4K in two copies); it is drawn
+  again when it opens.
+- The ambient light turned off and on again over a paused film shows at once (the halo's
+  windows stayed hidden until the next frame changed its colours).
+- Shift held while the bar is dragged keeps the bar's centre on the window's middle: it moves
+  only up and down and lands centred (pressed mid-drag, the bar centres at once).
+- Music's room light is part of its look: always on at 30%, off only with the cover alone; the
+  ambient light's switch and strength in Settings are for films.
+- About Cue is a page of Settings: it opens in Settings' place, as wide, over the "..." (the
+  shortcut sheet stays centred).
+- The card: the artist close under the title (over the title's descenders' room when the title
+  is larger), the list's line further down, closer again in a small card before it goes.
+- The mini player is a quick look: no menu on the picture, no up next in a film's mini player
+  (its "..." and its shortcut too), no "up next" notice in either.
+- The mini player's subtitle arrows change the track: the panel set the interface's track at
+  once, so the app took the pick for the current track and asked the engine for nothing.
+- Home: the eyes with their line and the recent files are centred in the window as one group,
+  the same air on both sides, each block's middle on the window's middle.
+- Home: entries further apart, their lines and rule in the middle of their highlight, the "···"
+  ending where the entries end, level with "Recentes"; its menu is the player's menu (icons,
+  18 px rows, a hairline before "clear recents", the same sheet), its right edge under the "···",
+  and in a short window its rows close up and it rises to fit.
+
+- Music in a roomy window: the cover with its wings in the middle, the title (twice the type) and
+  the artist (a size up) centred under it, and the bar along the window's foot, nearly edge to
+  edge: the timeline across it with the time at each end, under it the volume and speed on the
+  left, previous, play (larger) and next in the middle, the list, repeat, full screen and "..." on
+  the right (`MusicFrame::Centre`). The list's count moved from under the artist to the list's
+  button. The album's list opens beside the cover: the cover and its words glide into the left
+  half, the list takes the right. Wide, short windows keep the split composition (the words beside
+  the cover), with the same bar; tall and small windows keep the stacked one. The bar's background
+  follows the setting.
+- The song's mini player (the card): the cover low on the left, three quarters of the height, and
+  one centred column beside it: the title, the artist and the list's line from the cover's top;
+  previous, play and next, the timeline with the time where it ends, the volume and "..." at the
+  foot, level with the cover's bottom edge (the volume's icon starts where the timeline starts,
+  "..." ends where the time ends). A small card brings the words a size down rather than crowd
+  the controls. With the list open, previous, play and next step down beside the volume (they
+  glide there) and the list takes the column down to the timeline. No play or pause sign over the
+  cover any more (the film's mini player keeps it).
+- The film's mini player: two rows along its foot, with no bar behind them (the bar's background
+  comes back with the full player): the volume, back 15 s, play, forward 15 s (previous and next
+  with a list) and "...", then the timeline with the time at each end.
+- The card's turning cover is drawn by Cue itself (`CoverTurnWindow`): a click-through window over
+  the cover, its own thread, one picture per screen refresh from the clock alone, the same camera
+  and rim as the engine's cover pass (`core/cover_turn.h`). The engine leaves the cover out
+  meanwhile (`cov_hide`) and keeps the room and the shadow, which follows the turn. The next
+  song's cover is read at the card's size while the old one turns away; it turns in once the song
+  starts (or a moment after the edge), lands, and the window fades once the engine shows the same
+  cover. Before, the turn could only move when the engine drew a picture, which around a song
+  change it barely does: it stepped however its curves were tuned. The engine's own turn stays as
+  the fallback.
+- Settings in a window too short for its picture on top: the picture beside the settings, on the
+  left, as tall as the column, larger (the two states one over the other), with its words under
+  it. Narrow and short windows still drop it.
+- Version 1.3 (it was going to be 1.2.4).
+
+- Music's list where the words' column cannot hold it (small, tall, square and narrow windows)
+  has a composition of its own instead of lying over a dimmed cover: one column centred in the
+  window, a header (the cover glides down to a thumbnail on the column's left, the title and
+  artist beside it), the list under it, the bar under the list; when the list is short the three
+  stand together a little above the window's middle, when it is long the list takes the height.
+  The wings step out under the header and the room's light goes quiet round the thumbnail.
+  Closing the list glides everything back. A window too short even for that keeps the list over
+  the dimmed cover. The list opens on a whole row above the song playing, never a cut one.
+- The card's turn is one movement through the edge: away with an ease-in that is fastest at the
+  edge (0.20 s), in with an ease-out-back that leaves the edge at that same speed, passes flat by
+  about 5 degrees and lands (0.42 s), from the new song's first picture (no head start: its
+  pictures come at 60 a second from the first). Edge-on is 88.5 degrees, a hair instead of a lit
+  sliver hanging while the next song opens.
+- Settings is grouped like a settings page, on the same black sheet as every other menu: the
+  groups (the picture and its words, music's looks, the light, the interface, language and
+  about) a little further apart, a hairline in the middle of the space between them, segmented
+  choices on the usual quiet track. (Grey cards behind the groups were tried and dropped: the
+  sheet turned muddy.)
+- Back from the mini player, a song opened in it has its spectrum again at once (see the card
+  below); it used to stay off until the next song.
+
+- The cover-only picture (the cover-only look) runs at 60 pictures a
+  second again. While a song plays the engine draws only when a picture comes (a redraw asked for
+  in between waits for the next one), so at one or two a second the card's turning cover, the
+  cover's tilt and the interface over the picture moved in jumps. Each of these pictures is a
+  black frame with the cover laid on it: still far lighter than the spectrum.
+- The card's turn: the old cover eases away (cubic, 0.17 s), the new one turns in on a damped
+  spring that passes flat by a whisper and settles (0.46 s), a beat after the song starts.
+- Music's list, wherever it opens, is the same list: two lines a song and the footer wherever
+  they fit (one line a song only where they do not: a strip, a small window). Beside the words
+  the composition glides to make room for it (the words' width it centres on is the list's
+  column while the list is open): a short title used to leave the list no room at the window's
+  edge, and it popped up. Where the words' column cannot hold it, it opens over the cover. Placed
+  by the composition the window is gliding to, so it never starts in one place and jumps to the
+  other. Over the cover, a short list stands in the middle of its room.
+- The window's colour around the music's picture dims with the cover under the list (it stayed
+  lit: a band at the picture's edge).
+- Subtitles' style: three groups (the typeface; size, line spacing and letter spacing; text,
+  background and outline), the typeface chooser is a track like the menus' other choices, every
+  slider has a notch at Cue's own value (the handle sticks to it), and the panel breathes like the
+  others. Line spacing goes down to -16 (was -10).
+
+- "..." is the file and places to go: open, close, the phone remote and **settings >**, last.
+  Settings holds everything Cue keeps between files: for music, its looks first (cover and
+  spectrum, the spectrum alone or the cover alone; colour or black and white; the cover's tilt,
+  each with its picture, dimmed when the look in use has nothing for it); the ambient light and its
+  strength; for films, smooth motion; the interface's size and the controls' background; the
+  language; and **about Cue**, at the end. Esc walks back the same way (About, then Settings, then
+  "..."). A window too short for the whole panel drops the picture, then folds the interface's
+  two choices into **interface >**.
+- The picture's menu is the file's for music too (about the file · up next, mini player · close):
+  its looks moved to Settings.
+- Music's list never pops up. Beside the cover as before; in a strip, one line per song (the
+  card's rows) from the words down to the bar; in the close compositions (the cover alone, or the
+  words under it) it opens over the cover, which steps back into the dark (a `veil` pass), the
+  words under the cover stepping out; one line per song where two lines and the footer do not fit.
+- Music in a tall window kept the film's portrait bar scale (raised to fill the width) and its
+  title at twice the type: both far too big. Music keeps the screen's own size, and under the
+  cover (and in the card) the title is one and a half times the type at most and no wider than
+  a little past the cover.
+- A song's card turns its new cover in a beat (0.12 s) after the song starts: the engine holds
+  redraws for 0.1 s after a start, and the turn's quick first part was lost there (a jump). The
+  cover-only picture is one frame a second instead of two (the engine also holds a redraw asked
+  for in the last 0.1 s before its next frame: the card's movements stalled a fifth of the time,
+  now a tenth), lighter as well.
+- Full screen: the black cover is painted and on screen (one composition pass) before the window
+  changes size; shown and not yet painted, it was composed empty and the L still showed through.
+  A pinned window rising with the switch no longer covers it.
+- Settings (first round): what Cue keeps between files moves to **settings >**: the ambient light and
+  its strength, smooth motion (always there now: a choice for every film, acting only where the
+  film's rhythm and the screen's differ), the interface's size, the controls' background and the
+  language. The row under the pointer (or the keyboard) shows itself at work in a small picture
+  at the top: the light off and on round a little screen, a pan that jumps and one that glides,
+  the bar at the size pointed at (before it is taken), the bar with and without its sheet, the
+  language written in itself; one line under it says what the setting does. A short window gets
+  the settings without the picture. The language list opened there comes back to Settings.
+- The picture's menu (right-click) in three groups instead of a rule between every line: the
+  picture (about the file, save frame), where it goes next (up next, mini player), and closing it,
+  last and apart. Its lines breathe like the other menus when the window has room.
+- Music in a wide, short window (a strip at the edge of the screen, about 2.2:1 and wider) keeps
+  its words: half and half, the cover with its wings centred in the left half, the title, artist
+  and list from the middle. It used to show the cover alone between two dark sides. The window
+  around the music's picture now takes the room's far light in the cover's colours (the engine's
+  background, and the edge pass fades into it), grey in black and white, black for films.
+- The album's list is one list wherever it opens: beside the cover it has the popover's footer
+  (+ files, + folder, clear), and the popover ends with the same "add tracks / or drag them here"
+  line as the list beside the cover. End scrolls to that last line.
+- Mini player: the flying picture had Windows 11's grey 1 px outline (every rounded popup gets
+  one); it has none now, like the window itself.
+- Full screen: Windows composed a frame or two of the window at its new place with its old
+  contents (a black L over the desktop) while the window changed size. A black cover holds the
+  screen still for that moment, and leaves as soon as the engine has drawn the new size (0.6 s
+  at most).
+- Opening a film: the picture opens once the window has taken the film's shape (it used to open
+  while the window was still gliding to it, so the iris was drawn in the old shape, moved every
+  frame and the engine drew a new size every frame: the stutter). At most 0.9 s after the first
+  frame it opens anyway. A window already at the right size does not glide at all.
+- The opening iris is drawn by the video shader, on the picture, in the picture's own
+  proportions. It was a full-window bitmap made and sent to the engine 60 times a second (33 MB
+  a frame in 4K) while the film was starting.
+
+- The control bar fits every window: one row of controls and the timeline, always. As a window
+  narrows, the bar first shortens the volume line, then hands its least needed buttons to "..."
+  (speed, repeat, up next, audio, subtitles, in that order), folds the volume into its icon (a
+  click opens it upward, as a column), and with a playlist lets the 15-second steps go while
+  previous and next stay. Play stays centred and "..." at the right end; buttons glide to their
+  new places and fade where they leave; a window held at a threshold never flickers between two
+  folds. Every key keeps working. Portrait and square windows lose their old three-row bar.
+- What leaves the bar waits at the top of "..." as one row of the bar's own icons, lit when on.
+  In a window too short for the whole menu, its interface section folds into "interface >".
+- Mini player: right-click the picture (the item has its own line, under up next) or press Ctrl+M,
+  and the video goes to a small window in a corner of the screen. Its bar is play, volume (a
+  click opens the column upward), the timeline and "..." (no "back to full size" row: the arrow
+  in its corner is that, and the space goes to the controls); subtitles grow to
+  stay readable and the controls keep a comfortable size. The whole picture moves the window, and
+  so do the bar's empty places (with the pin on, the bar stays shown and covered most of a small
+  window, so a drag there was dead; the pin is only "above other windows"),
+  and it stays where it is let go (kept whole on the screen); let go right beside a corner and it
+  glides into it (within 40 px at 100%, so a window let go near an edge stays put). Windows' Snap never resizes it while it moves. It stays above other windows
+  when its pin is on (remembered for the next time). Esc brings the normal window back (a second
+  Esc goes home). Full screen (F, a double-click) and the shortcuts sheet (?) belong to the full
+  player: the mini player ignores them. The ambient light rests while the window is
+  small. The next file keeps the mini window where it is. The flight is one continuous
+  movement: the picture breaks into Cue's pixels where it is (0.12 s, the controls stepping
+  aside), then a live picture of the window (a DWM thumbnail, composed by Windows on the graphics
+  card, the film still playing in it) shrinks from the window's place into the corner, landing a
+  hair past its place and settling (0.46 s), sharpening out of the pixels; the window itself is
+  already there, out of sight, at its new size, and shows where the picture lands. Coming back,
+  the picture opens out from the mini player to the old place and size (maximized too, 0.40 s,
+  no overshoot past it). The window changes size once, out of sight (changing it on every frame
+  of the flight left the engine's picture a frame behind: black edges, a cut picture, worse with
+  4K), and the picture is always cropped to its own shape, never stretched. Where Windows gives
+  no thumbnail, the flight is the plain one (out of sight for 80 ms, then a spring into the
+  corner). A film's mini
+  player shows the time on each side of its timeline when it has room. In the mini player the
+  arrow at the top-left is "back to full size" (an expand arrow; home is a step further), the
+  cover does not tilt under the pointer, and a song's list opens in the card's column, scrolled to the song playing, the words stepping
+  aside for it. The card's list has its own rows, made for its narrow column: one line per song at
+  the card's type size (the artist line's size), a small cover, the title and the artist dimmed
+  beside it ("Artist - Title" file names are read as such; labels at a title's end such as
+  "(audio)", "[Official Video]" or "(320 Kbps)" are left out there), the song playing lit with
+  its play or pause mark on its cover. About three songs show at once, readable (the full list's
+  two-line rows, shrunk to fit, came out smaller than the card's words). A song change in the card
+  turns the cover over: it turns away edge-on about its upright axis as the song breathes out
+  (0.15 s), the next song opens while it is edge-on, and as it plays its cover turns in from the
+  other side, settling with a little overshoot (0.42 s); the words step out with the old cover and
+  the next ones slide in. The cover's shadow narrows as it turns, and the room's light fills the
+  place it uncovers from all four sides (the light borrowed from one side made a hard cross). The
+  sound is never held: the old song fades for those 0.15 s, the new one starts at its full level.
+  The card never shows the spectrum (its wings are masked, also through a song change, where it
+  used to show for a moment with a black room and the whole scene small); a song opened in the
+  card keeps the person's look underneath, so back in the full player its spectrum is there at
+  once (it used to stay off on that song until the next). A song that
+  follows keeps the card (it used to fall back to the wide composition and its spectrum). A song's mini player is
+  its own card: the cover on the left, the title, artist and list at the top of the column
+  beside it, and at its foot the timeline over volume · previous · play · next · "...", with the
+  song's light behind (the spectrum's wings step out, drawn away by the graphics card; the sound
+  is never touched). The mini player keeps its shape when an edge is dragged, and stays a mini
+  player: a film's long side between 480 and 800 px at 100% (540 to start), a song's card between
+  440 and 640 (480 to start). The card's cover starts under the window's top strip, clear of the
+  back arrow. Leaving gives back the window's place,
+  size and pin. A window made very small becomes the mini player's bar on its own.
+- A song opening after a song (in the card or the full player) no longer flashes the last song's
+  bare picture while the engine reads the next: the passes over it (the card's mask on the
+  spectrum, the room's light, the cover) and its framing stay as they were (the framing is the
+  engine's own zoom and pan now, set by every file as the engine reads it, a film back to none),
+  and the room's light keeps its colours and crosses to the new cover's in 0.45 s instead of going
+  black and fading in again.
+- The mini player's menu and list keep the interface's own size after the window is moved or
+  resized, and after a size chosen in the menu (they dropped to the small window's scale: on a
+  150% screen, 2 instead of 2.5, about a fifth smaller than the card's words).
+- While something plays, Windows never slows Cue down for not being the window in front (a mini
+  player beside other work, a film on a second screen); at home Windows decides again. The
+  scene's colour samples for a film in the mini player (no ambient light there) are taken every
+  4 s instead of every 0.9 s.
+- Super resolution: on a PC with an NVIDIA RTX card and "RTX Video Super Resolution" turned on in
+  NVIDIA's app (that switch decides; Cue has none), a film smaller than the screen is upscaled by
+  the driver, decided as the film opens (no pause), never on battery. Only films up to 1080p:
+  1440p and 4K are left as they are. When Cue cannot read that switch, it leaves the picture as
+  it is.
+- Smooth motion: films whose frames do not land evenly on the screen's refreshes (24 fps on a
+  60 Hz screen) blend frames at their changes, no judder on pans and no "soap opera" frames. Off by
+  default (the effect is subtle by design); "smooth motion" in "..." appears only for such films,
+  and cue.log says when it is on. A film with it on is timed by the display whatever its size (the
+  engine ignores the blend otherwise, which is why it did nothing on 4K films). Never on battery.
+- Music in square windows keeps its title and artist, under the cover, and the spectrum's wings
+  always fit inside the window (the cover is a little smaller in narrow windows instead).
+- Small and portrait music windows get a compact bar: previous, play, next, the timeline, volume
+  and "..." (full screen and repeat wait there).
+- The wide music composition is back to its original place (the cover 406 px in, the words from
+  1262): moving it further in pushed long titles to the window's edge, and the picture was let
+  stop short of the right edge (a black fade beside the title where the light should be). The
+  picture now always covers the window; close framings of a wide, short window let the cover sit
+  up to 10% right of the middle instead of leaving a dark band on the left.
+- Music framed close (a small window, a portrait one, and a song's mini player) is one
+  composition: the cover, its title, artist and list under it (when there is room), and the bar
+  right under them, its timeline above previous · play · next, all of it centred a little above
+  the window's middle, the bar centred on the cover and staying up (it is part of the picture).
+  No more hole between the words and a bar pinned to the window's floor. Its size is the
+  screen's standard one (what the wide composition shows): a small window, whose own scale
+  shrinks, gets it back; a bigger one never gets more.
+- Music framed close (a small or tall window) no longer leaves a dark band along one side: the
+  cover sits further into the scene's picture, so the picture reaches the window's left edge, and
+  in very wide, short windows the cover moves a little right of the middle instead.
+- A song that follows a song keeps the window exactly as the person sized it.
+- The wide composition is centred on what is there, from the wings to the end of the title as it
+  is drawn (it was centred on the picture, so a long title ran to the window's edge while the
+  left stayed empty); the picture may stop up to 7% short of the right edge for it, fading there.
+  It glides to its new place when the next song's title is longer or shorter.
+- The bar no longer stays off-centre when its width changes in place (a song's framing changing).
+- The bar "without background" can be moved too: drag it from an empty place between its
+  controls (a click there is still a click on the picture).
+- In a narrow window (a phone video), dragging the bar can only centre it: left, centre and right
+  are a few pixels apart there, and a corner chosen there threw the bar to the side once the
+  window was widened.
+- A jump in the sound (a click on the timeline, the arrows, the 15-second steps) no longer pops:
+  the sound breathes out in 16 ms, jumps and breathes back in over 50 ms (the engine's gain,
+  under the person's volume). The sound keeps 0.25 s ready (the engine's default is 0.2): every
+  jump first fills that much, and the music's picture for it, so at 0.75 s it stalled.
+- The light around the window: a resize takes it away at once (its old frame no longer stays
+  behind as an outline) and it comes back for the new size when the edge is let go; moving the
+  window keeps it, moving with it. A window dragged partly past the screen's edge and back keeps
+  its whole halo: the halo's shape is made for the whole window once per size, and only what
+  falls on a screen (any of them: the halo reaches onto a monitor beside) is sent to Windows;
+  coming back into view, the part that was off screen is cut from that shape at once (it used to
+  come back without that side, cut on a straight line in the middle of the screen, until the drag
+  ended or the window was let go).
+- A playing window stops shrinking where the player still looks right: 320 x 180 px of art for a
+  film (below that the bar covered most of the picture), 260 x 220 for a song. The small window
+  to watch beside other work is the mini player.
+- Fewer writes: where a film is playing is saved every 5 minutes (it was every minute), and when
+  it is paused, stopped or closed; a song's place is never saved. The colour samples for the
+  light around the window are taken every 1.5 s, and only while that light shows (every 4 s
+  otherwise): the preview helper used 40% of a core on a 4K film doing it every 0.9 s.
+- Cue's folder moves from `%APPDATA%\tinyoffice\Cue` to `%APPDATA%\tinypeep\Cue`, the studio's
+  name: the running Cue renames it once, at its first start, everything inside coming along (if
+  something holds a file there, the old folder stays in use and the move waits for the next start).
+  The uninstaller removes both. The names Windows knows Cue by (file associations, the
+  single-window handoff, the update's handoff) do not change, so the default player and updates
+  carry on.
+- state.json is swapped in with one Windows call that keeps the previous file as the backup (a
+  rename: one write less each time), and waits up to two seconds for an antivirus or indexer
+  holding the file (it gave up after 0.3 s: "could not save state").
+- cue.log names a film's codec and pixel format beside how it is decoded (the graphics card or
+  the processor), so a film decoded by the processor can be explained.
+- cue.log writes far less: routine steps only with --log, lines reach the disk together (once a
+  minute, or at once for a failure), the file stays under 256 KB (the older half as cue.log.1,
+  was 1 MB each) and a log older than 5 days is cleared when Cue starts. The engine's own
+  warnings about the sound or picture falling behind are noted (a dozen per file at most).
+- Music never stumbles when the window comes back from the taskbar: back at the same size,
+  nothing is rebuilt (the engine's window is not resized and the overlays stay), and the sound
+  keeps 0.75 s ready instead of 0.2 s, so a hiccup on the picture's side never reaches the ear.
+  Volume stays instant (it is applied as the sound leaves).
+- What's new in 1.3 opens once on the home screen.
+
 ## 1.2.3 — 2026-11-03
 
 - Music is lighter to draw all the time: the room around the cover (its soft light) is no longer

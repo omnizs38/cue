@@ -11,7 +11,8 @@
 std::wstring widen(const std::string& s);
 std::string narrow(const std::wstring& s);
 std::wstring exe_dir();
-std::wstring data_dir();  // %APPDATA%\tinyoffice\Cue (created)
+std::wstring data_dir();  // %APPDATA%\tinypeep\Cue (the old tinyoffice\Cue until it is moved)
+bool migrate_data_dir();  // the running Cue moves the old folder once (false: not this time)
 // The names of the files (not folders) directly in `dir`, at most `max`, read in one pass with
 // the attributes Windows already returns (no per-file look-up: a Downloads folder of thousands
 // of files lists in a few milliseconds).

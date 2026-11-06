@@ -34,7 +34,7 @@ Omni supplies palette tokens, bitmap typography, icons, and motion conventions. 
 
 The frameless control style uses a masked, separable Gaussian shader before subtitle/OSD composition. Later beta tuning reduced the cloud to a 6 px radius, 35% maximum strength, and 95% brightness. Passes become inactive when hidden. Control-style changes use reversible interpolation. The dock uses a critically damped trajectory. Subtitles use a finite 300 ms lift / 360 ms return, preserving position and velocity on reversal. Cached target geometry prevents repeated layout retargeting.
 
-Fullscreen uses shader parameters `cue_on`, `cue_dark`, `cue_px`, and `cue_gray`: exit, wait for the dark frame and overlay removal, resize, wait for the new renderer geometry, then enter. Native rounded corners are requested through DWM in windowed mode and disabled when fullscreen/maximized.
+Fullscreen uses shader parameters `cue_on`, `cue_dark`, `cue_px`, and `cue_gray`: exit, wait for the dark frame and overlay removal, resize, wait for the new renderer geometry, then enter. During the resize a black click-through topmost popup (`StageCover`, `win/flight_ghost.*`) covers the monitor (going out, the restored window's client area), so DWM's frames of the window at its new place with its old contents never show; it leaves when the renderer is ready (0.6 s at most). The opening iris is the same pass (`cue_ir`: black outside an ellipse of the picture's proportions, in blocks of `cue_cell`), driven from `PlayView::iris_open` while `PlayInput::iris_engine`; it starts once the window has the file's shape (`App::window_settled`, at most 0.9 s after the first frame). Native rounded corners are requested through DWM in windowed mode and disabled when fullscreen/maximized.
 
 ## Previews and ambient lighting
 
@@ -42,7 +42,7 @@ Fullscreen uses shader parameters `cue_on`, `cue_dark`, `cue_px`, and `cue_gray`
 
 Color sampling starts 1.5 seconds after the first frame; thumbnails wait 3 seconds. Both restart on file changes. Hover output is reduced before pipe transfer/cache storage, while color-sampling resolution stays unchanged. As of 1.1.1, timeline requests are on demand with a 12 MiB / 256-entry LRU cache; colour-only probes are transient, and there is no speculative full-timeline scan.
 
-`atmosphere.cpp` chooses representative scene colors and smooths changes. Ambient lighting uses click-through layered windows below the player, cached geometry and color ramps, and approximately 30 Hz updates. Dragging reuses existing images and defers sampling/rebuilds until the gesture ends.
+`atmosphere.cpp` chooses representative scene colors and smooths changes. Ambient lighting uses click-through layered windows below the player, cached geometry and color ramps, and approximately 30 Hz updates. Dragging reuses existing images and defers sampling/rebuilds until the gesture ends. The halo's shape is built for the whole window once per size; its layered surfaces hold only the part on the virtual screen. When a move reveals a part the surfaces lack, they are cut again from the shape at once (the whole strips while the window is held), and trimmed back a moment after it settles.
 
 ## Audio-only files
 
@@ -66,7 +66,7 @@ The page (`assets/remote/index.html`) is embedded by `tools/gen_remote_page.py` 
 
 `SettingsStore` uses schema 2 (`prefs`, `session`, `media`), migration, defaults, atomic writes, a backup, and a 400 ms debounce. Immutable snapshots are saved by one worker at a time. Per-media state includes position, duration, selected tracks/languages, subtitle delay, visibility, and style.
 
-State remains in `%APPDATA%\tinyoffice\Cue` for compatibility. Font and “Open with” registration run after startup. Compatible compiled shaders are cached. `cue.log` records startup milestones; verbose mpv logging requires `--log`.
+State lives in `%APPDATA%\tinypeep\Cue` (moved once from `tinyoffice\Cue` by the running Cue, `migrate_data_dir`; registry ProgIDs, the mutex and window classes keep their `tinyoffice` names, so associations and the update handoff stay intact). Font and “Open with” registration run after startup. Compatible compiled shaders are cached. `cue.log` records startup milestones; verbose mpv logging requires `--log`.
 
 On close, visible windows and lighting disappear first; playback pauses and state is saved before engine teardown. Preview work is terminated separately.
 
@@ -81,6 +81,124 @@ g++ -std=c++20 -O1 -DWITH_PLAY -o preview tools/preview.cpp tools/preview_play.c
 Asset generators: `gen_assets.py`, `gen_action_icons.py`, `build_fonts.py`, and `gen_fallback_glyphs.py`. `brand_images.cpp` renders the cover, banner, icon, and layers; `brand_psd.py` assembles PSDs. Regenerate branding from the repository root and place outputs in `docs/`.
 
 [Languages](LANGUAGES.md) · [Performance and evidence](PERFORMANCE.md) · [Release process](UPDATES.md)
+
+## Mini player
+
+The mini players are laid out in art px: a film's needs about 288 x 162 of them, a song's card
+`kCardMinW x kCardMinH` (250 x 130, its title above the playback). Their windows keep a mini
+player's range at every interface size, and `mini_scale` (ui_scale.h, through `App::scale_for`)
+gives them the chosen size's base scale, stepped down by half art px until that room is there;
+`play_scale` returns the same scale in the mini player, so its bar and its menus match.
+
+Scale: `ui_scale` (DPI, window, chosen size; capped so the 320 x 180 canvas fits) gives `s_`;
+`scale_for` gives the mini player `mini_scale`; `play_scale` raises a portrait film's bar and
+music framed close. Every change of window size or scale goes through
+`App::relayout` (scale held during an edge drag, then `refresh_ui_scale` → `rescale`): the views
+laid out, music's frame chosen again (`music_fit_window`, chosen in art px), the overlays sent.
+The smallest windows use the medium size's base scale at every size.
+Menus: after their own ways of fitting (Settings' stages, "..." folding, About's tighter rhythm,
+the lists' and the subtitle list's own scale steps), `layout_rows` steps any menu's pixels down
+by half art px (`panel_fit_`, read through `panel_draw_s()`) until it fits `panel_room_h()`: the
+window under its buttons, beside the bar. A closed menu frees its canvases.
+
+`App::enter_mini` / `exit_mini` run `step_mini_fx`: the picture breaks into pixels where it is
+(the snap pass, 0.12 s), then `FlightGhost` (`win/flight_ghost.*`) shows a DWM thumbnail of the
+window in a click-through topmost popup at the same place (for the way in, the part in the mini
+player's shape), the window is cloaked and switched to its destination at once (`mini_switch`),
+and the thumbnail's popup flies from rect to rect (0.46 s in, ease-out with a little overshoot;
+0.40 s out, no overshoot), the source cropped to the popup's shape every frame, the pixels
+resolving. On landing the window is uncloaked and the popup goes the frame after. Without a
+thumbnail the plain flight remains (cloaked 80 ms, then the window springs into its corner).
+
+Music in a roomy window is `MusicFrame::Centre` (`music_frame_for`; very wide, short windows stay
+`Scene`, the split composition; `music_frame_stacked` is Tall and Cover): `music_view` centres the
+cover with its wings over its words (`PlayView::music_centre_below`) between the top strip and the
+bar, and with the list open (`music_list_beside`) centres the group in the left half while
+`centre_list_rect` holds the list in the right. The bar there is `music_full_` (`kMusicDockH`): the
+timeline over the buttons, nearly the window's width (`music_full_place`). The card's turning cover
+is `CoverTurnWindow` (src/win/cover_turn_window.cpp): a layered, click-through window owned by the
+player, drawn on its own thread at each DwmFlush by `cover_turn_draw` (core/cover_turn.h, the
+cover pass's camera) with its shadow; the engine gets `cov_hide` > 0 (no cover; its shadow scaled
+by 1 - cov_hide, which follows the window's `shadow()`: the two cross-fade at the start and the
+end); `request_cover_art` reads covers at the card's size (`card_art_prefetch` keeps the current
+one and the songs either side ready). The scene's cover is in its middle across (x 700), so the
+picture reaches equally both sides; the room pass adds a faint wash over the whole room and
+`music_backdrop` matches its far end. A song's mini player is the card (`PlayView::card_`). Its list is `QueueView` bare and compact:
+one 24 art px line per song at the card's scale (`scene_list_scale`), `split_artist_title` and
+`plain_title` for the names. A song opened in the card is built with the person's look like any
+other: the card masks the spectrum's wings (`wing_on`), so back in the full player the spectrum is
+there at once, with nothing reopened (a still graph used to stay on that song until the next). A song change through the queue in the card (`queue_play`) runs
+`step_card_flip`: the cover pass's turn (`flip_ry_`, added to `cov_ry`) to 86° in 0.15 s with the
+gain fading, `queue_play_now`, edge-on until the new song's `PLAYBACK_RESTART` (2 s at most), then
+from -86° to flat with an ease-out-back in 0.42 s; `PlayInput::music_leaving` steps the words out.
+The cover pass narrows its shadow with the turn and fills what the cover uncovers from the
+light just outside its four sides.
+
+`App::scale_for` gives the mini player its own scale (`mini_scale`) on every path (`WM_SIZE`,
+`refresh_ui_scale`, `set_ui_scale`, a new DPI).
+
+A film's mini player opens `Panel::SubMini` where the full player opens `Panel::CC`
+(`open_panel` redirects it; leaving the mini player closes it): the switch, an `RK::Picker`
+(the track, its arrows round the list) and a three-way `RK::Segmented` for the size
+(`PA::MiniSubSize`, `Store::mini_sub_size`), which `App::step_sub_fx` multiplies into the
+subtitles' scale only while the mini player is on (1, 1.25, 1.5), after the readable floor.
+The panel shows a picked track at once through `sub_pick_` and leaves `in.sid` to the engine:
+the app compares a pick with `in.sid`, so changing it early made the pick look current.
+`film_mini()` keeps the film's mini player a quick look: `right_click` opens nothing, up next
+leaves "..." and `open_panel`, and `next_notice`/`next_wanted` show nothing in either mini player.
+
+The card in the spectrum-alone look (`App::card_drawn`): the engine has no cover, so the view
+draws the read-ahead cover (`in.card_art`) in its lowest layer, `L_ART`, over the card's square
+with its shadow (`cover_turn_draw`, flat), redrawn only for a new cover or place; hidden while a
+turn draws it (`cov_hide_`), shown again when the turn would hand the cover back.
+
+The survey's invitation is a HomeView card (`layout_survey`, `draw_survey`); the app says when
+(`survey_wanted`: updated, or a week after `Store::installed`; not over the welcome, the news or a
+scene) and records the answer (`Store::survey`). Its scene steps 8 times a second for two pages,
+then rests, so `next_event` asks only for its blinks.
+
+Music's bar: `music_full` (the bar along the foot) only without the bar's background
+(`style_mix_ >= 0.5`, so a style change swaps them halfway); with it, the film's compact bar.
+`layout_scene_` relays the bar when `in.cover_scene` changes, and `configure_audio_mode` keeps a
+song's scene until its own is known (its `apply_smooth()` redraws the interface on the way). The
+list button's count is a tag (`queue_badge_*`); `layout_badge_` relays when its digits change.
+
+## Settings
+
+"..." holds the file (open, close) and places to go (phone remote, settings last).
+`Panel::Settings` holds the kept choices: music's looks (for music), the ambient light and its
+strength, smooth motion (films), the interface size, the controls' background, the language and
+About (its back arrow and Esc return to Settings). Music's list always opens in the scene
+(`scene_list`): beside the words, in the card's column, or over the cover in the close
+compositions as its own composition (`list_layout`: a centred column, the cover framed as the
+header's thumbnail by `App::music_view_target` from `list_cover`, the words beside it, the bar under
+the list; the wing pass steps the wings out and the room light goes quiet); only a window too short
+for that dims the cover under the list (`list_veil` → the shader's `veil` pass); `list_compact`
+picks the one-line rows. Its
+first row (`RK::Preview`, `render_preview`) shows the setting under the pointer or the keyboard at
+work (`settings_demo_track`: the last one pointed at stays), redrawn at 30 frames a second only
+while something in it moves (on by default, `settings_hints` in state.json). A window too short
+for the whole panel steps through `settings_stage` (`kSettingsStages`: the picture on top, then
+beside the rows where `(settings_w_ + kSettingsSide) * s` fits the window, then the rows closing
+up, the interface folded into its page and the groups closer, on top or beside; the settings
+alone last), from
+`settings_restart()` at every open, "i", and change of size or interface scale. Its pictures are
+measured in the panel's own rounded px (`px(n) = lround(n * s)`), so half-step scales keep them
+inside their frame.
+
+Shuffle (`ShuffleDeck`, core/queue.h): a deck of the list's other songs dealt from an `mt19937`,
+synced to the queue each time (added songs join, removed ones leave), with the songs played as
+the way back; `App::queue_following` and `PreviousInQueue` ask it when `store_.shuffle` and music.
+A dragged bar with Shift held (`PlayView::set_shift`, read from `GetKeyState` on every move and
+at the 30 Hz poll while held) keeps `x = (w - dw) / 2` and only the centred anchors.
+
+## Music in a strip
+
+A window at least `kMusicSplitRatio` (2.2) times wider than tall, that no picture of the scene's
+shape covers with the cover above the bar, is framed half and half (`music_view`, `MusicView::wx/ww`,
+`scene_words_x/w`): the cover and its wings centred in the left half, the words from the middle.
+Around any music picture the engine's `background-color` is `music_backdrop` (the room's far light
+in the cover's average border colour) and the edge pass fades toward it (`edge_c*`).
 
 ## Session queue
 
@@ -144,9 +262,15 @@ on those sides, over a quarter of the frame's smaller side at most and never ove
 wings: the picture and its light can only paint inside the picture's own frame, and would
 otherwise meet the black on a straight line. A new interface scale when a resize ends glides
 the framing too (`refresh_ui_scale`). The framing is mpv's
-`video-zoom` / `video-pan-x/y` as file-local options (`mpv_framing`), updated on every
+`video-zoom` / `video-pan-x/y` (`mpv_framing`), updated on every
 `WM_SIZE` including mid-drag and glided for 0.34 s across frames (`App::music_fit_window`,
-`step_music_view`); nothing is rebuilt. The shader's `cov_*` coordinates are taken in the
+`step_music_view`); nothing is rebuilt. They are the engine's own options, not file-local ones:
+every file sets them in `configure_audio_mode` (a film and a song without a picture back to none,
+`frame_plain`; a song to its framing, synchronously, before its first picture), so the last
+song's picture, still on screen while the next opens, stays framed. During that gap
+(`music_gap_`, from `open` to `configure_audio_mode`) the music passes of the shader options are
+sent as they last were (`music_opts_`), and the room's light keeps its colours (`room_kept_`),
+crossing to the new cover's in 0.45 s. The shader's `cov_*` coordinates are taken in the
 shown part of the picture (`music_visible`). A reopened song, or the next song of an album,
 keeps the window's size (no `request_video_geometry`). The 24x20 spectrum (`showfreqs` at 60 fps:
 4096-sample window, 0.92 overlap) is turned sideways, mirrored around the bass and drawn

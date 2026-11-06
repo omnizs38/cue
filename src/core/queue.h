@@ -1,4 +1,6 @@
 #pragma once
+#include <unordered_set>
+#include <random>
 #include <algorithm>
 #include <cstdint>
 #include <string>
@@ -90,4 +92,50 @@ class MediaQueue {
   uint64_t revision_=0;
   int cursor_=-1;
   bool explicit_=false;
+};
+
+// Shuffle (music): a deck of the list's songs in a random order, each once a round; repeat-all
+// deals a new round when it runs out. The songs played this round, newest last, are the way back.
+// The deck keeps its order for the songs still in the list; songs added later go in at random
+// places, songs removed leave it.
+class ShuffleDeck {
+ public:
+  explicit ShuffleDeck(uint32_t seed = std::random_device{}()) : rng_(seed) {}
+  void reset() { deck_.clear(); played_.clear(); back_.clear(); rev_ = ~0ull; cur_ = 0; }
+  void sync(const MediaQueue& q, bool loop_all) {
+    const uint32_t cur = q.current();
+    if (q.revision() == rev_ && cur == cur_ && !(deck_.empty() && loop_all)) return;
+    if (cur != cur_) {
+      if (cur_) played_.insert(cur_);
+      if (!back_.empty() && back_.back() == cur) back_.pop_back();  // back to the song before
+      else if (cur_ && q.get(cur_)) { back_.push_back(cur_); if (back_.size() > MediaQueue::kLimit) back_.erase(back_.begin()); }
+      cur_ = cur;
+    }
+    rev_ = q.revision();
+    std::vector<uint32_t> deck;
+    for (uint32_t id : deck_) if (id != cur && q.get(id) && !played_.count(id)) deck.push_back(id);
+    for (const auto& i : q.items())
+      if (i.id != cur && !played_.count(i.id) && std::find(deck.begin(), deck.end(), i.id) == deck.end()) {
+        std::uniform_int_distribution<size_t> at(0, deck.size());
+        deck.insert(deck.begin() + (std::ptrdiff_t)at(rng_), i.id);
+      }
+    if (deck.empty() && loop_all && q.items().size() > 1) {  // a new round
+      played_.clear();
+      for (const auto& i : q.items()) if (i.id != cur) deck.push_back(i.id);
+      std::shuffle(deck.begin(), deck.end(), rng_);
+    }
+    deck_ = std::move(deck);
+  }
+  const MediaQueue::Item* next(const MediaQueue& q) const { return deck_.empty() ? nullptr : q.get(deck_.front()); }
+  const MediaQueue::Item* previous(const MediaQueue& q) const {
+    for (auto it = back_.rbegin(); it != back_.rend(); ++it) if (const auto* i = q.get(*it)) return i;
+    return nullptr;
+  }
+  const std::vector<uint32_t>& deck() const { return deck_; }
+ private:
+  std::vector<uint32_t> deck_, back_;
+  std::unordered_set<uint32_t> played_;
+  uint64_t rev_ = ~0ull;
+  uint32_t cur_ = 0;
+  std::mt19937 rng_;
 };

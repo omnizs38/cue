@@ -48,10 +48,11 @@ static LONG WINAPI on_crash(EXCEPTION_POINTERS* ep) {
   std::snprintf(line, sizeof line, "crash: code 0x%08lx at %p in %s%s, %s thread", (unsigned long)er->ExceptionCode,
                 er->ExceptionAddress, where(er->ExceptionAddress).c_str(), access.c_str(),
                 GetCurrentThreadId() == g_ui_thread ? "ui" : "engine/other");
+  cue_log_flush(true);  // what led here first (the log keeps lines in memory between writes)
   std::ofstream f(std::filesystem::path(data_dir()) / "cue.log", std::ios::app);
   f << line << "\n";
   f.close();
-  MessageBoxW(nullptr, widen(i18n::format(str::win_crash, {{"path", "%APPDATA%\\tinyoffice\\Cue\\cue.log"}})).c_str(),
+  MessageBoxW(nullptr, widen(i18n::format(str::win_crash, {{"path", "%APPDATA%\\tinypeep\\Cue\\cue.log"}})).c_str(),
               L"Cue", MB_OK | MB_ICONWARNING);
   return EXCEPTION_EXECUTE_HANDLER;
 }

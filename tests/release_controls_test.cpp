@@ -1,4 +1,6 @@
+#define private public
 #include "../src/ui/play.h"
+#undef private
 #include "../src/core/store.h"
 #include "../src/core/viewport_gate.h"
 #include <cassert>
@@ -21,10 +23,19 @@ int main(){
   p.in.audios={{1,"audio","eng"}};p.changed(t);settle(p,t);
   assert(empty==p.layers[PlayView::L_DOCK].c.px); // one audio stream adds no selector
   p.in.audios.push_back({2,"audio","por"});p.in.aid=1;p.changed(t);settle(p,t);
-  auto& d=p.layers[PlayView::L_DOCK];assert(empty!=d.c.px);
-  double dw=d.c.w/scale;
-  int x=d.x+(width<300?33.5:dw-57.5)*scale,y=d.y+(width<300?34:13)*scale;
-  p.take_actions();p.mouse_move(x,y,t);p.mouse_down(x,y,t);p.mouse_up(x,y,t);
+  auto& d=p.layers[PlayView::L_DOCK];
+  p.take_actions();
+  if(p.in_bar(PlayView::B_AUDIO)){
+    assert(empty!=d.c.px);  // the selector appears on the bar
+    Rect r;for(auto& h:p.hots_)if(h.id==PlayView::B_AUDIO)r=h.r;
+    int x=d.x+r.cx(),y=d.y+r.cy();p.mouse_move(x,y,t);p.mouse_down(x,y,t);p.mouse_up(x,y,t);
+  }else{
+    // a narrow bar hands it to "...": its row of the bar's buttons opens the audio menu
+    assert(p.overflowed(PlayView::B_AUDIO));
+    p.activate(PlayView::B_MORE,t);int row=-1;for(int i=0;i<(int)p.rows_.size();++i)if(p.rows_[i].k==PlayView::RK::Tools)row=i;
+    assert(row>=0);int part=-1;for(int k=0;k<(int)p.tool_ids_.size();++k)if(p.tool_ids_[k]==PlayView::B_AUDIO)part=k;
+    assert(part>=0);p.panel_click(row,part,0,t);assert(p.panel_==PlayView::Panel::Audio);
+  }
   assert(p.panel_open());
   for(int i=0;i<2;++i)p.key("down",false,false,t);
   p.key("enter",false,false,t);

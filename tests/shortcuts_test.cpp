@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
           for (auto& row : p.rows_) if (row.k == PlayView::RK::Keys) {
             if (row.kh.section) ++sections; else { ++entries; assert(!row.kh.caps.empty() && !row.kh.label.empty()); }
           }
-          assert(entries == 21 && (sections == 4 || (sections == 0 && size.second <= 240 * scale)));  // titles go only in the tiniest
+          assert(entries == 22 && (sections == 4 || (sections == 0 && size.second <= 240 * scale)));  // titles go only in the tiniest
           two_cols += p.keys_cols_ == 2;
           ++sheets;
           // nothing to focus in it; ? again closes it, and so does Esc
@@ -81,10 +81,10 @@ int main(int argc, char** argv) {
     }
   }
 
-  // black and white: a second choice in the music picture's menu, beside cover / spectrum
+  // black and white: a second choice in music's Settings, beside cover / spectrum
   {
     PlayView p; p.in.dur = 200; p.in.audio_only = true; p.in.cover_scene = true; p.resize(1280, 720, 2); double t = 1; p.reset(t);
-    p.right_click(400, 300, t); settle(p, t);
+    p.open_panel_for_preview(11, t); settle(p, t);
     const PlayView::Row* tone = nullptr;
     for (auto& r : p.rows_) if (r.id == PlayView::R_MUSIC_COLOR) tone = &r;
     assert(tone && tone->icons_only && tone->segs.size() == 2 && tone->seg == 0);  // colour by default
@@ -102,11 +102,11 @@ int main(int argc, char** argv) {
     // and follows a change made elsewhere (the saved choice, another window of the menu)
     p.in.music_mono = false; p.changed(t); settle(p, t);
     for (auto& r : p.rows_) if (r.id == PlayView::R_MUSIC_COLOR) assert(r.seg == 0);
-    // the cover alone has no spectrum or light to grey: no such row, and three looks to choose from
+    // the cover alone has no spectrum or light to grey: the row is dimmed, and three looks to choose from
     { PlayView c; c.in.dur = 200; c.in.audio_only = true; c.in.cover_scene = true; c.in.music_look = 2; c.resize(1280, 720, 2); double tc = 1; c.reset(tc);
-      c.right_click(400, 300, tc); settle(c, tc);
+      c.open_panel_for_preview(11, tc); settle(c, tc);
       bool looks = false;
-      for (auto& r : c.rows_) { assert(r.id != PlayView::R_MUSIC_COLOR); if (r.id == PlayView::R_MUSIC_LOOK) looks = r.segs.size() == 3 && r.seg == 2; }
+      for (auto& r : c.rows_) { if (r.id == PlayView::R_MUSIC_COLOR) assert(!r.enabled); if (r.id == PlayView::R_MUSIC_LOOK) looks = r.segs.size() == 3 && r.seg == 2; }
       assert(looks); }
     // a film's menu has no such row
     PlayView v; v.in.dur = 200; v.resize(1280, 720, 2); double t2 = 1; v.reset(t2);

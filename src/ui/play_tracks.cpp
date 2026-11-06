@@ -5,6 +5,19 @@
 void PlayView::layout_sub_list() {
   cc_drag_=false;
   cc_scale_=std::min({panel_s(),w_/220.,h_/180.});
+  // the menu clear of the bar and of the window's buttons with at least two tracks in view: in a
+  // small window at a large size its pixels step down (it covered the bar there)
+  {
+    const Rect dock=dock_rect();
+    const int top=in.fullscreen?0:chrome_room();
+    const bool bar=dock.h>0&&(vis_.target>0||vis_.v>0);
+    int fixed=0;for(int i=0;i<(int)rows_.size();++i)if(rows_[i].id!=R_SUB_TRACK&&i>0)fixed+=rows_[i].k==RK::Separator?5:18;
+    for(double sc=cc_scale_;sc>1;sc-=0.5) {
+      const int room=(bar?std::max(dock.y-top,h_-dock.b()):h_-top)-(int)std::lround(12*sc);
+      if((24+4+fixed+2*18)*sc<=room) break;
+      cc_scale_=std::max(1.0,sc-0.5);
+    }
+  }
   double s=cc_scale_;
   int width=210;
   for(const auto& row:rows_)if(row.id!=R_SUB_TRACK) {
@@ -18,8 +31,10 @@ void PlayView::layout_sub_list() {
   double footer=4*s;
   for(int i=cc_first_+cc_count_;i<(int)rows_.size();++i)footer+=(rows_[i].k==RK::Separator?5:18)*s;
   double header=24*s,natural=header+cc_count_*cc_row_h_+footer;
-  Rect dock=dock_rect();int room=std::max(dock.y,h_-dock.b())-12*s;
-  int available=room>=150*s?room:h_-16*s;
+  Rect dock=dock_rect();
+  const int top=in.fullscreen?0:chrome_room();
+  int room=std::max(dock.y-top,h_-dock.b())-12*s;
+  int available=room>=std::min(150.0,natural/s)*s?room:h_-top-16*s;
   ph_=std::max(1,(int)std::min(natural,(double)available));
   cc_viewport_={2*s,header,pw_-4*s,std::max(0.,ph_-header-footer)};
   if(!rows_.empty()) {rows_[0].r={2*s,4*s,pw_-4*s,20*s};rows_[0].parts.clear();}

@@ -9,21 +9,40 @@ static void settle(PlayView& p, double& t) {
 }
 
 int main() {
+  // a roomy window: About opens where Settings is, its right edge on Settings' (over "..."),
+  // as wide, above the bar
+  for (bool audio : {false, true}) {
+    PlayView p;
+    p.in.audio_only = audio; p.in.cover_scene = audio; p.in.dur = 120;
+    p.resize(1600, 900, 2); double t = 1; p.reset(t);
+    p.open_panel_for_preview(11, t); settle(p, t);
+    const Rect st = p.panel_rect();
+    for (int i = 0; i < 20; ++i) p.key("down", false, false, t);
+    p.key("enter", false, false, t); settle(p, t);
+    assert(p.panel_ == PlayView::Panel::About);
+    const Rect ab = p.panel_rect(), d = p.dock_rect();
+    assert(ab.w == st.w && std::abs(ab.r() - st.r()) <= 2 && ab.b() <= d.y);
+  }
   for (bool audio : {false, true}) for (double scale : {1., 1.5, 2., 2.5, 3., 4.}) {
     PlayView p;
     const int w = (int)(400 * scale), h = (int)(220 * scale);
     p.in.audio_only = audio; p.in.dur = 120;
     p.resize(w, h, scale); double t = 1; p.reset(t);
-    p.open_panel_for_preview(3, t);
-    // The last item in More opens About with either Enter or the right arrow.
+    p.open_panel_for_preview(11, t);
+    // The last item in Settings opens About with either Enter or the right arrow.
     for (int i = 0; i < 20; ++i) p.key("down", false, false, t);
     p.key(audio ? "enter" : "right", false, false, t);
     settle(p, t);
     const Layer& panel = p.layers[PlayView::L_PANEL];
     assert(panel.visible && panel.x >= 0 && panel.y >= 0);
     assert(panel.x + panel.c.w <= w && panel.y + panel.c.h <= h);
-    assert(std::abs(panel.x * 2 + panel.c.w - w) <= 1);
-    assert(std::abs(panel.y * 2 + panel.c.h - h) <= 1);
+    // a page of Settings: where Settings was (over the "..."), as wide as Settings, clear of the bar
+    const Rect d = p.dock_rect();
+    assert(panel.c.w >= (int)std::lround(p.settings_sheet_w_ * p.panel_draw_s()) - 1);  // (at its own scale: a small window steps it down)
+    // (clear of the bar when the window has the room above it; a very short window at a large
+    // size has not, like Settings itself there)
+    if (d.y - p.chrome_room() - 4 * scale >= panel.c.h) assert(panel.y + panel.c.h <= d.y);
+    assert(panel.y >= 0 && panel.y + panel.c.h <= h);
     p.take_actions();
     // Static credits are skipped by keyboard navigation. The name opens LinkedIn.
     // The name opens LinkedIn; the contact row is one stop whose icons the arrows walk.
@@ -60,7 +79,9 @@ int main() {
     p.key("esc", false, false, t); settle(p, t);
     assert(p.panel_ == PlayView::Panel::About);
     p.key("esc", false, false, t); settle(p, t);
-    assert(p.panel_open());
+    assert(p.panel_ == PlayView::Panel::Settings);  // About lives in Settings
+    p.key("esc", false, false, t); settle(p, t);
+    assert(p.panel_ == PlayView::Panel::More);
     p.key("esc", false, false, t); settle(p, t);
     assert(!p.panel_open());
     // An outside click dismisses About without pausing the content underneath.

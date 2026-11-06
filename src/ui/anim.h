@@ -176,6 +176,17 @@ inline double spring_ease(double t) {
   return (1 - (1 + w * t) * std::exp(-w * t)) / end;
 }
 
+// A landing with a little life: a spring that passes its mark by about 2.5% and settles by the
+// end (damping 0.76). For a window flying into place (the mini player), not for UI that must
+// never pass its edge.
+inline double bounce_ease(double t) {
+  t = clamp01(t);
+  if (t >= 1) return 1;
+  constexpr double z = 0.76, w = 11.0;
+  const double wd = w * std::sqrt(1 - z * z);
+  return 1 - std::exp(-z * w * t) * (std::cos(wd * t) + z * w / wd * std::sin(wd * t));
+}
+
 struct Rng {
   uint64_t s = 0x9E3779B97F4A7C15ull;
   explicit Rng(uint64_t seed = 1) : s(seed * 0x9E3779B97F4A7C15ull + 1) {}

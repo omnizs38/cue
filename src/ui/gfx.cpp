@@ -61,6 +61,12 @@ const BitmapDef* bmp(std::string_view name) {
         {"box-on", 7, 7, "#######" "#.....#" "#....##" "##..#.#" "#.##..#" "#.....#" "#######"},
         // back to how it was: an arrow going round, anticlockwise (drawn mirrored, it is "undo")
         {"reset", 7, 7, "###.##." "##....#" "#.#...#" "......#" "#.....#" ".#...#." "..###.."},
+        // the mini player: a small picture in the corner of a big one
+        // back to the full player: the picture grows from the corner it was in
+        {"expand", 9, 7, "#########" "#.......#" "#.###...#" "#.##....#" "#.#.#...#" "#....#..#" "#########"},
+        {"mini", 9, 7, "#########" "#.......#" "#.......#" "#...###.#" "#...###.#" "#.......#" "#########"},
+        // smooth motion: a ball gliding, its trail behind it
+        {"smooth", 9, 5, "....###.." "##.#####." "...#####." "##.#####." "....###.."},
         {"mixer", 9, 7, ".#..#..#." ".#.###.#." ".#..#..#." ".#..#.###" "###.#..#." ".#..#..#." ".#..#..#."},
     };
     for (auto& b : extra) m[b.name] = &b;

@@ -18,7 +18,7 @@ struct HomeRow {
 };
 
 enum class HomeAct { None, OpenDialog, OpenFolder, OpenRecent, ClearRecents, EggSeen, WinMin, WinMax, WinClose, WinPin, Update, SkipUpdate,
-                     Language, Remote, News, NewsClose };  // Language: index -1 automatic, else i18n::Lang
+                     Language, Remote, News, NewsClose, Survey, SurveyClose };  // Language: index -1 automatic, else i18n::Lang
 struct HomeAction { HomeAct a = HomeAct::None; int index = -1; };
 
 struct HomeView {
@@ -35,6 +35,13 @@ struct HomeView {
   bool update_busy = false;     // checking / downloading / starting the installer
   bool news = false;            // "what's new" at the bottom until it is closed (once per version)
   bool remote_available = true;  // the platform has the phone remote (the ports do not yet)
+  // the survey's invitation: a small card in the bottom-right corner (the app decides when; the
+  // card shows only where it covers nothing, and goes for good once answered or declined)
+  bool survey = false;
+  bool survey_shown() const { return survey_vis_.v > 0.01; }
+  Rect survey_rect() const { return r_survey_; }        // (for previews and tests)
+  Rect survey_answer_rect() const { return r_survey_go_; }
+  Rect survey_close_rect() const { return r_survey_no_; }
 
   Face face;
   WindowChrome chrome;
@@ -54,6 +61,7 @@ struct HomeView {
   void drag_over(int x, int y, double now);
   void drag_leave(double now);
   bool dragging() const { return drag_; }
+  Rect dots_rect() const { return r_dots_; }  // the ··· beside Recentes (for previews)
   // opening a video: the home bows out (swallow = a dropped file gets eaten first)
   void leave(double now, bool swallow);
   bool leaving() const { return leave_t0_ > 0; }
@@ -72,7 +80,7 @@ struct HomeView {
   // the ··· menu next to Recentes: "idioma ›", "controle remoto" and "limpar recentes"; language opens automatic plus the supported catalogs
   enum : int { kOpen = 100, kDots = 101, kMenuClear = 102, kUpdate = 103, kUpdateSkip = 104, kMenuLang = 105,
                kLangOpt = 106 /* ..114: automatic, then eight languages */, kMenuPad = 115, kMenuRemote = 116, kNews = 117,
-               kNewsClose = 118, kMenuFolder=119, kHitIds = 20 };
+               kNewsClose = 118, kMenuFolder=119, kSurveyGo = 120, kSurveyNo = 121, kSurveyPad = 122, kHitIds = 23 };
   int hover_ = -1, focus_ = -1;
   bool kb_ = false, menu_ = false, menu_lang_ = false, drag_ = false;
   std::vector<int> menu_ids_;
@@ -94,6 +102,15 @@ struct HomeView {
   double shake_t_ = -1;
 
   Rect r_open_, r_title_, r_dots_, r_menu_, r_list_, r_update_, r_update_skip_, r_news_, r_news_close_;
+  Rect r_survey_, r_survey_go_, r_survey_no_;
+  bool survey_fits_ = false;
+  Fade survey_vis_{0, 0, 0.35, 0.18};
+  double survey_t0_ = -1;    // the card's little scene: when it started writing (it writes twice, then rests)
+  bool survey_hot_ = false;  // the pointer on the card: it looks up and writes again
+  int survey_drawn_step_ = -2;
+  void layout_survey();
+  void draw_survey(Canvas& c, double now, double a) const;
+  int survey_step(double now) const;  // the scene's frame (8 a second while it writes; -1 resting)
   void layout_update();
   std::vector<Rect> r_rows_;
   std::vector<HomeRow> all_rows_;  // what was given; `rows` is the part that fits the window

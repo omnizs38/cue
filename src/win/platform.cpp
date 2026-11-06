@@ -33,26 +33,46 @@ std::wstring exe_dir() {
   return k == std::wstring::npos ? L"." : p.substr(0, k);
 }
 
-std::wstring data_dir() {
+// Cue's folder in %APPDATA%. It is %APPDATA%\tinypeep\Cue (the studio's name); it used to be
+// %APPDATA%\tinyoffice\Cue (and before that tinyoffice\Player). The running Cue moves the old
+// folder once (migrate_data_dir); until it has, the old one is the one in use, so nothing is
+// ever read from an empty folder while settings sit in the other.
+static std::wstring roaming_dir() {
   PWSTR base = nullptr;
   std::wstring dir;
-  if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &base))) {
-    dir = base;
-    CoTaskMemFree(base);
-  } else {
-    dir = exe_dir();
-  }
-  dir += L"\\tinyoffice";
-  CreateDirectoryW(dir.c_str(), nullptr);
-  std::wstring old = dir + L"\\Player";
-  dir += L"\\Cue";
-  // the app used to be called Player: its folder (settings, Recentes, positions) comes along once
-  if (GetFileAttributesW(dir.c_str()) == INVALID_FILE_ATTRIBUTES && GetFileAttributesW(old.c_str()) != INVALID_FILE_ATTRIBUTES)
-    if (!MoveFileExW(old.c_str(), dir.c_str(), 0) && CreateDirectoryW(dir.c_str(), nullptr))
-      for (const wchar_t* f : {L"\\state.json", L"\\state.json.bak"})  // something still holds it open: copy what matters
-        CopyFileW((old + f).c_str(), (dir + f).c_str(), TRUE);
-  CreateDirectoryW(dir.c_str(), nullptr);
+  if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_RoamingAppData, 0, nullptr, &base))) { dir = base; CoTaskMemFree(base); }
+  else dir = exe_dir();
   return dir;
+}
+static bool dir_exists(const std::wstring& p) {
+  DWORD a = GetFileAttributesW(p.c_str());
+  return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+std::wstring data_dir() {
+  const std::wstring root = roaming_dir();
+  const std::wstring now = root + L"\\tinypeep\\Cue", was = root + L"\\tinyoffice\\Cue", older = root + L"\\tinyoffice\\Player";
+  if (dir_exists(now)) return now;
+  if (dir_exists(was)) return was;
+  if (dir_exists(older)) return older;
+  CreateDirectoryW((root + L"\\tinypeep").c_str(), nullptr);
+  CreateDirectoryW(now.c_str(), nullptr);
+  return now;
+}
+
+bool migrate_data_dir() {
+  const std::wstring root = roaming_dir();
+  const std::wstring now = root + L"\\tinypeep\\Cue", was = root + L"\\tinyoffice\\Cue", older = root + L"\\tinyoffice\\Player";
+  if (dir_exists(now)) return true;
+  const std::wstring from = dir_exists(was) ? was : dir_exists(older) ? older : std::wstring();
+  if (from.empty()) return true;
+  CreateDirectoryW((root + L"\\tinypeep").c_str(), nullptr);
+  // one rename on the same disk: everything comes along at once, or nothing moves (something
+  // still holds a file inside, such as a Cue that is closing during an update): then the old
+  // folder stays in use and the next start tries again
+  if (!MoveFileExW(from.c_str(), now.c_str(), 0)) return false;
+  RemoveDirectoryW((root + L"\\tinyoffice").c_str());  // only if nothing else lives there
+  return true;
 }
 
 std::vector<std::string> open_file_dialog(HWND owner, DialogKind kind) {

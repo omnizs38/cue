@@ -28,9 +28,13 @@ inline int64_t audio_visual_track(const std::vector<Track>& tracks, int64_t pref
 // MusicFrame). The UI and the shader read these numbers to find the cover on screen.
 struct MusicScene {
   int W = 1920, H = 1080;
-  int side = 520, x = 406, y = 237;  // the cover
+  // (the cover in the middle, across: every composition puts the words beside or under it on its
+  // own, and a picture with the cover in its middle reaches as far on both sides of it, so the
+  // room's light is the same left and right of the cover. With the cover at 406 the left of a
+  // roomy window was the window's colour, the right the room's light: a lit band, a dark side)
+  int side = 520, x = 700, y = 237;  // the cover
   int wing_w = 220, wing_h = 528, wing_gap = 36;
-  int text_x = 1262, text_w = 540;    // the words' column, centred on the cover's middle
+  int text_x = 1520, text_w = 380;    // the picture's own words' column (only where nothing sets them apart)
   // the cover's own picture inside flat black bars (a video's frame boxed into the file's
   // picture, see core/image_trim.h), as shares of the picture; all of it when there are none
   double crop_x = 0, crop_y = 0, crop_w = 1, crop_h = 1;
@@ -43,29 +47,98 @@ struct MusicScene {
 
 // How the scene sits in the window. The engine always draws the wide scene; the window frames
 // it with the engine's zoom and pan (no rebuild, no pause, live while an edge is dragged):
-//   Scene: all of it, the words beside the cover (wide, roomy windows)
-//   Tall:  the cover with its wings, the words under it (portrait windows)
+//   Centre: the cover with its wings in the middle, the words under it, the bar along the
+//          window's foot (roomy windows); with the album's list open, the cover and its words
+//          glide into the left half and the list takes the right
+//   Scene: all of it, the words beside the cover (a wide, short window: the split composition)
+//   Tall:  the cover with its wings, the words under it, the bar right under them (portrait windows)
 //   Cover: the cover and its wings alone (small windows)
-enum class MusicFrame { Scene, Tall, Cover };
+//   Card:  a song's mini player: the cover on the left, its words and the bar beside it, the
+//          wings stepped out (the app frames it from the card's own layout)
+enum class MusicFrame { Scene, Tall, Cover, Card, Centre };
+// the close compositions: the cover, its words and a compact bar stand together as one group
+inline bool music_frame_stacked(MusicFrame f) { return f == MusicFrame::Tall || f == MusicFrame::Cover; }
 // screen = (ox, oy) + scene * f
 struct MusicView {
   double f = 0, ox = 0, oy = 0;
   MusicFrame frame = MusicFrame::Scene;
+  // the words beside the cover, on screen (x of their column and its width), when the window
+  // sets them apart from the scene's own column (the split composition of a wide, short window);
+  // < 0: where the scene puts them
+  double wx = -1, ww = -1;
+  bool split() const { return wx >= 0; }
   bool words_beside() const { return frame == MusicFrame::Scene; }
   bool words_under() const { return frame == MusicFrame::Tall; }
 };
+// A window at least this much wider than tall that the whole picture cannot cover: the split
+// composition (the cover and its wings in the left half, the words in the right half)
+constexpr double kMusicSplitRatio = 2.2;
+// The words' column on screen: the split composition's own, or the scene's
+inline double scene_words_x(const MusicScene& S, const MusicView& v) { return v.split() ? v.wx : v.ox + S.text_x * v.f; }
+inline double scene_words_w(const MusicScene& S, const MusicView& v) { return v.split() ? v.ww : S.text_w * v.f; }
 // w, h: the window; s: the interface's pixel scale (sizes below are in its art pixels)
 inline MusicFrame music_frame_for(int w, int h, double s) {
   double aw = w / std::max(0.5, s), ah = h / std::max(0.5, s);
-  if (aw * 4 >= ah * 5 && aw >= 620 && ah >= 330) return MusicFrame::Scene;
-  if (ah >= aw * 1.15 && aw >= 280 && ah >= 460) return MusicFrame::Tall;
+  // a wide, short window (a strip on the side of the screen): the words keep their place beside
+  // the cover, half and half (see music_view), instead of the cover alone between dark sides
+  if (aw >= ah * kMusicSplitRatio && aw >= 560 && ah >= 150) return MusicFrame::Scene;
+  if (aw * 4 >= ah * 5 && aw >= 620 && ah >= 330) return MusicFrame::Centre;
+  // square windows too keep the words, under the cover, whenever there is height for them
+  if (ah >= aw * 0.8 && aw >= 280 && ah >= 460) return MusicFrame::Tall;
   return MusicFrame::Cover;
 }
 // controls_top: where the control bar begins (the cover stays above it)
-inline MusicView music_view(const MusicScene& S, MusicFrame m, int w, int h, int controls_top) {
+// below >= 0 (Tall and Cover only): the stacked composition. The cover, then what goes under it
+// as one group (its words and the bar: `below` px), the whole of it a little above the window's
+// middle, under the window's top strip (`above` px). Nothing is pinned to the window's floor, so
+// a tall window has no hole between the words and the bar.
+// words_px (Scene): how wide the words beside the cover are drawn, when known; the composition is
+// then centred on what is really there (the wings to the end of the title), not on the picture
+// Centre: `below` is the words' height under the cover (with the air above them), `above` the
+// window's top strip, `list_open` the album's list in the right half.
+inline MusicView music_view(const MusicScene& S, MusicFrame m, int w, int h, int controls_top, double below = -1, double above = 0, double words_px = -1,
+                            bool list_open = false) {
   MusicView v;
   v.frame = m;
   if (w <= 0 || h <= 0) return v;
+  if (m == MusicFrame::Centre) {
+    // The cover with its wings, centred over its words, the group in the middle of the room left
+    // between the window's top strip and the bar (a touch more air under it than over it). The
+    // cover keeps to under half the height (the room's light around it is part of the picture).
+    // The list open: the group moves into the left half, a little smaller if the half needs it.
+    const double span = (S.side + 2.0 * (S.wing_gap + S.wing_w)) / S.side;
+    const double tall = std::max(S.side, S.wing_h) / (double)S.side;
+    const double words = std::max(0.0, below);
+    const double mg = std::min(w, h) * 0.035;
+    const double top = above + h * 0.03, bottom = std::max(top + 40.0, std::min((double)controls_top, h - mg) - h * 0.035);
+    const double room_w = list_open ? w * 0.5 - 2 * mg : w - 2 * mg;
+    double side = std::min({room_w * 0.94 / span, ((bottom - top) - words) / tall, h * 0.45});
+    side = std::max(side, 24.0);
+    const double group = side * tall + words;
+    const double y0 = top + std::max(0.0, (bottom - top - group) * 0.46) + side * (tall - 1) / 2;
+    const double cx = list_open ? w * 0.25 + mg * 0.5 : w / 2.0;
+    v.f = side / S.side;
+    v.ox = cx - (S.x + S.side / 2.0) * v.f;
+    v.oy = y0 - S.y * v.f;
+    return v;
+  }
+  if (below >= 0 && m != MusicFrame::Scene) {
+    const double span = (S.side + 2.0 * (S.wing_gap + S.wing_w)) / S.side;  // the cover with its wings, wide
+    const double tall = std::max(S.side, S.wing_h) / (double)S.side;           // the wings reach a hair past it
+    const double air = h * 0.05;
+    double side = std::min({w * 0.92 / span, (h - above - below - 2 * air) / tall, m == MusicFrame::Tall ? w * 0.62 : w * 0.56});
+    side = std::max(side, 24.0);
+    const double group = side * tall + below;
+    // the free height: a little more under the group than over it (the eye's middle sits high)
+    const double top = above + std::max(0.0, h - above - group) * 0.44 + side * (tall - 1) / 2;
+    v.f = side / S.side;
+    v.ox = w / 2.0 - (S.x + S.side / 2.0) * v.f;
+    v.oy = top - S.y * v.f;
+    // a wide, short window: what the picture leaves dark on the left, the cover gives back by
+    // sitting a little right of the middle (the bar under it follows)
+    if (v.ox > 0 && S.W * v.f >= w) v.ox = std::max({0.0, v.ox - w * 0.10, w - S.W * v.f});
+    return v;
+  }
   if (m == MusicFrame::Scene) {
     // All of the picture fits; then it grows toward filling the window, so no black bar is left
     // where the light cannot reach, as far as the cover, its wings and the start of the words
@@ -73,23 +146,52 @@ inline MusicView music_view(const MusicScene& S, MusicFrame m, int w, int h, int
     // (never more than a third larger: past that the cover would crowd a very wide window)
     const double fit = std::min(w / (double)S.W, h / (double)S.H);
     const double fill = std::min(std::max(w / (double)S.W, h / (double)S.H), fit * 1.33);
-    const double cx0 = S.left_x(), cx1 = S.text_x + S.text_w * 0.55;
+    const double cx0 = S.left_x();
     const double cy0 = std::min(S.y, S.wing_y()), cy1 = std::max(S.y + S.side, S.wing_y() + S.wing_h);
     const double mg = std::min(w, h) * 0.035, mgy = std::max(mg, h * 0.07);
     const double floor_y = std::min(h - mgy, (double)controls_top - mg * 0.5);
     // the place for scale f: centred, still covering the window, the content inside the margins
-    auto place = [&](double f, double& ox, double& oy) {
-      auto axis = [&](double win, double size, double c0, double c1, double lo, double hi, double& o) {
-        double a = size >= win ? win - size : (win - size) / 2, b = size >= win ? 0.0 : a;  // covering
+    auto place = [&](double f, double& ox, double& oy, double slack = 0) {
+      // the words' end: as drawn (their width does not scale with the picture), or a guess
+      const double cx1 = words_px > 0 ? S.text_x + words_px / f : S.text_x + S.text_w * 0.55;
+      auto axis = [&](double win, double size, double c0, double c1, double lo, double hi, double pref, double& o, double give = 0) {
+        double a = (size >= win ? win - size : (win - size) / 2) - give, b = size >= win ? 0.0 : a + give;  // covering
         double ca = lo - c0 * f, cb = hi - c1 * f;                                          // content inside
         double l = std::max(a, std::min(ca, cb)), r = std::min(b, cb);
         if (ca > cb) return false;
         if (l > r) { if (size >= win && f > fit + 1e-9) return false; l = ca; r = cb; }  // at fit: content first
-        o = std::clamp((win - size) / 2, std::max(l, ca), std::min(r, cb));
+        o = std::clamp(pref, std::max(l, ca), std::min(r, cb));
         return true;
       };
-      return axis(w, S.W * f, cx0, cx1, mg, w - mg, ox) && axis(h, S.H * f, cy0, cy1, mgy, floor_y, oy);
+      // across: the content centred (as far as the picture still covers the window); down: the
+      // picture centred, as before
+      const double pref_x = words_px > 0 ? (w - (cx1 - cx0) * f) / 2 - cx0 * f : (w - S.W * f) / 2;
+      return axis(w, S.W * f, cx0, cx1, mg, w - mg, pref_x, ox, slack) && axis(h, S.H * f, cy0, cy1, mgy, floor_y, (h - S.H * f) / 2, oy);
     };
+    // Split: a window so wide that no picture of the scene's shape covers it while the cover and
+    // its wings stay above the bar. The cover with its wings as large as the height allows (above
+    // the bar, inside the margins, at most half the width), the words beside it, level with the
+    // cover, and the two centred together in the window as one group (the words as wide as they
+    // are drawn: a short title does not leave the window's right half empty). The window's colour
+    // (music_backdrop) and the edge pass make the rest one room with the picture's light.
+    if (w >= h * kMusicSplitRatio) {
+      const double gw = S.right_x() + S.wing_w - S.left_x(), gh = cy1 - cy0;
+      const double top = std::max(mg, h * 0.06), bottom = std::min(h - mg, (double)controls_top - mg * 0.6);
+      double f = std::min((w / 2.0 - 2 * mg) / gw, (bottom - top) / gh);
+      if (f > 0 && S.W * std::max(fit, f) < w - 1) {
+        f = std::max(f, 0.02);
+        const double gap = std::max(2 * mg, gw * f * 0.08);
+        const double room = w - 2 * mg - gw * f - gap;  // what the words may take
+        const double words = std::clamp(words_px > 0 ? words_px : w * 0.3, 0.0, std::max(0.0, room));
+        const double gx = mg + std::max(0.0, (w - 2 * mg - (gw * f + gap + words)) / 2);  // the group's left edge
+        v.f = f;
+        v.ox = gx - cx0 * f;
+        v.oy = top + (bottom - top - gh * f) / 2 - cy0 * f;
+        v.wx = gx + gw * f + gap;
+        v.ww = std::max(0.0, std::min(room, w - mg - v.wx));
+        return v;
+      }
+    }
     double ox, oy, lo = fit, hi = fill;
     if (!place(fit, ox, oy)) {  // not even the whole picture leaves room: as before, centred
       v.f = fit; v.ox = (w - S.W * fit) / 2; v.oy = (h - S.H * fit) / 2;
@@ -97,6 +199,8 @@ inline MusicView music_view(const MusicScene& S, MusicFrame m, int w, int h, int
     }
     if (place(fill, ox, oy)) lo = fill;
     else for (int i = 0; i < 24; ++i) { double mid = (lo + hi) / 2; if (place(mid, ox, oy)) lo = mid; else hi = mid; }
+    // (the picture always covers the window: a picture stopping short left a black fade beside
+    // the words, where the light should be)
     place(lo, ox, oy);
     v.f = lo; v.ox = ox; v.oy = oy;
     return v;
@@ -105,14 +209,51 @@ inline MusicView music_view(const MusicScene& S, MusicFrame m, int w, int h, int
   double side, centre;
   if (m == MusicFrame::Tall) { side = std::min(w * 0.70, room * 0.52); centre = room * 0.40; }
   else { side = std::min(w * 0.62, room * 0.74); centre = room * 0.5; }
+  // the cover with both wings stays inside the window (3% from each side): the spectrum is
+  // never cut at the window's edge, a narrow window gets a smaller cover instead
+  const double span = (S.side + 2.0 * (S.wing_gap + S.wing_w)) / S.side;
+  side = std::min(side, w * 0.94 / span);
+  // the picture covers the whole window: the cover sits off the scene's middle (little picture
+  // to its left), so in a wide window it grows just enough for the picture to reach every edge,
+  // never so far that it would cut the wings or reach the control bar. Otherwise a black band
+  // faded in at the window's side.
+  {
+    const double c = S.x + S.side / 2.0, cy = S.y + S.side / 2.0;
+    double f_cover = std::max({(w / 2.0) / c, (w / 2.0) / (S.W - c), centre / cy, (h - centre) / (S.H - cy)});
+    const double cap = std::min(w * 0.94 / span, std::min(room * 0.92, (double)controls_top - centre - room * 0.04) * 2.0);
+    side = std::max(side, std::min(f_cover * S.side, cap));
+  }
   v.f = std::max(0.05, side / S.side);
   v.ox = w / 2.0 - (S.x + S.side / 2.0) * v.f;
   v.oy = centre - (S.y + S.side / 2.0) * v.f;
+  // a very wide, short window: what the picture still leaves dark on the left, the cover gives
+  // back by sitting a little right of the middle (10% of the width at most; the rest fades softly)
+  // (only while the picture still reaches the right edge; a picture narrower than the window
+  // keeps the cover in the middle)
+  if (v.ox > 0 && S.W * v.f >= w) v.ox = std::max({0.0, v.ox - w * 0.10, w - S.W * v.f});
   return v;
+}
+// The window's own colour around the music's picture (mpv's background-color, and what the edge
+// pass fades toward): the room's light as it is far from the cover, in the cover's colours, so a
+// window much wider or taller than the picture is one lit room instead of a picture between two
+// black bars. room: the cover's average border colour; k: how far the room's light is up (0..1).
+template <class Colour>
+inline Colour music_backdrop(Colour room, double k) {
+  k = std::clamp(k, 0.0, 1.0);
+  // (the room pass gives 0.5 at the cover's edge, its wash about 0.13 at a window's far corner)
+  auto c = [&](double v) { return (decltype(room.r))std::lround(std::min(255.0, v * 0.13 * k)); };
+  return Colour{c(room.r), c(room.g), c(room.b)};
 }
 inline MusicView mix_views(const MusicView& a, const MusicView& b, double k) {
   MusicView v = b;
   v.f = a.f + (b.f - a.f) * k; v.ox = a.ox + (b.ox - a.ox) * k; v.oy = a.oy + (b.oy - a.oy) * k;
+  // the words glide too (into or out of the split composition: from where the scene put them)
+  if (a.split() || b.split()) {
+    const MusicScene S;
+    const double ax = a.split() ? a.wx : a.ox + S.text_x * a.f, bx = b.split() ? b.wx : b.ox + S.text_x * b.f;
+    const double aw = a.split() ? a.ww : S.text_w * a.f, bw = b.split() ? b.ww : S.text_w * b.f;
+    v.wx = ax + (bx - ax) * k; v.ww = aw + (bw - aw) * k;
+  }
   return v;
 }
 // The engine's own words for that framing: it fits the video into the window (keeping its shape,
@@ -249,9 +390,13 @@ inline std::string audio_still_tail(int64_t cover, const MusicScene& S = MusicSc
     std::snprintf(c, sizeof c, "crop=w=iw*%.4f:h=ih*%.4f:x=iw*%.4f:y=ih*%.4f,", S.crop_w, S.crop_h, S.crop_x, S.crop_y);
     v += c;
   }
-  // the room: black, two pictures a second led by the music (it ends with the song), padded from
-  // a few pixels; the soft still light around the cover is the video shader's
-  return "[cue_wave]aresample=8000,showwaves=s=2x2:r=2:mode=point,format=yuv420p,lutyuv=y=16:u=128:v=128,"
+  // the room: black, led by the music (it ends with the song), padded from a few pixels; the soft
+  // still light around the cover is the video shader's. Sixty pictures a second, like the other
+  // looks: while a song plays the engine draws only when a picture comes (a redraw asked for in
+  // between waits for the next one), so the cover's tilt, the card's turning cover and the
+  // interface over the picture moved at the picture's rate (one or two a second: a jump). Each
+  // picture is a padded black frame and the cover laid on it: far lighter than the spectrum
+  return "[cue_wave]aresample=8000,showwaves=s=2x2:r=60:mode=point,format=yuv420p,lutyuv=y=16:u=128:v=128,"
          "pad=" + n(S.W) + ":" + n(S.H) + ":0:0:black[cue_base];" +
          v + "format=gbrp,"
          "scale=" + n(S.side) + ":" + n(S.side) + ":force_original_aspect_ratio=increase:flags=" + (cover > 0 ? "lanczos" : "neighbor") + ","

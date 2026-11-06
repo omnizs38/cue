@@ -31,7 +31,7 @@ bool App::remote_start() {
     log("remote: " + err);
     return false;
   }
-  log("remote on port " + std::to_string(remote_.port()));
+  trace("remote on port " + std::to_string(remote_.port()));
   remote_.set_tokens(store_.remote_tokens);
   remote_queue_revision_=~uint64_t(0);
   remote_boot();
@@ -336,7 +336,22 @@ void App::end_what(bool restore) {
 }
 
 // The queue's next item; with "repeat the list" the last one leads back to the first.
+// Shuffle (music): see ShuffleDeck (core/queue.h). It never runs out: when every song has played,
+// a new round is dealt, repeat or not (shuffle is "keep the music going, in any order"; a round
+// that ended left next with nothing to do)
+bool App::shuffle_on() const { return store_.shuffle && audio_only_ && queue_.active() && queue_.items().size() > 1; }
+void App::shuffle_reset() { shuffle_.reset(); }
+const MediaQueue::Item* App::shuffle_previous() const {
+  if (!shuffle_on()) return queue_.previous();
+  shuffle_.sync(queue_, true);
+  return shuffle_.previous(queue_);
+}
+
 const MediaQueue::Item* App::queue_following() const {
+  if (shuffle_on()) {
+    shuffle_.sync(queue_, true);
+    return shuffle_.next(queue_);
+  }
   const auto* next = queue_.next();
   if (!next && store_.loop_all && queue_.items().size() > 1 && queue_.current()) next = &queue_.items().front();
   return next;
@@ -351,7 +366,7 @@ void App::find_next_episode() {
     play_.set_next_details(file_name(next_ep_));
     next_thumb_job_.reset(); next_thumb_requested_=false;
     play_.in.has_next=!next_ep_.empty();
-    play_.in.has_prev=queue_.previous()!=nullptr;
+    play_.in.has_prev=shuffle_previous()!=nullptr;
     play_.in.next_title=audio_only_&&next_auto_&&!store_.loop?file_stem(next_ep_):"";  // repeating this one: nothing follows
     return;
   }

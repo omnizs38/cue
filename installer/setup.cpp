@@ -7,7 +7,7 @@
 //                                         installs over <folder>, opens Cue again
 //   <folder>\uninstall.exe --uninstall    the entry in Windows' "Apps" settings
 //
-// Per-user by default (%LOCALAPPDATA%\Programs\Cue): no administrator prompt, and Cue can
+// Per-user by default (C:\Cue, or the folder a former install used): no administrator prompt, and Cue can
 // update itself later without one. Everything Cue writes outside its folder is listed here
 // so the uninstaller can take it back out.
 #include <windows.h>
@@ -574,7 +574,11 @@ void uninstall(Job& job) {
   if (!job.keep) {
     job.say(tr(str::setup_deleting_prefs));
     std::error_code ec;
-    fs::remove_all(fs::path(known_folder(FOLDERID_RoamingAppData)) / L"tinyoffice" / L"Cue", ec);
+    const fs::path roaming = known_folder(FOLDERID_RoamingAppData);
+    fs::remove_all(roaming / L"tinypeep" / L"Cue", ec);    // where Cue keeps its things now
+    fs::remove_all(roaming / L"tinyoffice" / L"Cue", ec);  // and where it kept them before 1.3
+    fs::remove(roaming / L"tinypeep", ec);                 // the studio's folders, only if empty
+    fs::remove(roaming / L"tinyoffice", ec);
   }
   job.progress = 1.0;
   job.say(tr(str::setup_done));
@@ -880,8 +884,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
 
   // the installer speaks the language Cue would: a choice saved in Cue's preferences (updates,
   // reinstalls, the uninstaller), otherwise the first supported Windows display language
-  apply_ui_language(saved_language_pref(known_folder(FOLDERID_RoamingAppData) + L"\\tinyoffice\\Cue\\state.json"),
-                    windows_ui_languages());
+  {
+    const std::wstring roaming = known_folder(FOLDERID_RoamingAppData);
+    std::wstring state = roaming + L"\\tinypeep\\Cue\\state.json";
+    if (GetFileAttributesW(state.c_str()) == INVALID_FILE_ATTRIBUTES) state = roaming + L"\\tinyoffice\\Cue\\state.json";  // before 1.3
+    apply_ui_language(saved_language_pref(state), windows_ui_languages());
+  }
   ui.job.self = self_path();
   ui.job.payload = read_footer(ui.job.self);
   if (!ui.job.payload.ok && !want_uninstall) {

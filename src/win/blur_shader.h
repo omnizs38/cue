@@ -41,6 +41,9 @@ inline constexpr const char* kBlurCloudShader = R"CUE(
 //!PARAM cue_cell
 //!TYPE DYNAMIC float
 16
+//!PARAM cue_ir
+//!TYPE DYNAMIC float
+-1
 //!PARAM cue_ax
 //!TYPE DYNAMIC float
 0.5
@@ -78,6 +81,9 @@ inline constexpr const char* kBlurCloudShader = R"CUE(
 //!TYPE DYNAMIC float
 0
 //!PARAM cov_k
+//!TYPE DYNAMIC float
+0
+//!PARAM cov_hide
 //!TYPE DYNAMIC float
 0
 //!PARAM lit_on
@@ -125,6 +131,21 @@ inline constexpr const char* kBlurCloudShader = R"CUE(
 //!PARAM bg_k
 //!TYPE DYNAMIC float
 0
+//!PARAM wing_on
+//!TYPE DYNAMIC float
+0
+//!PARAM wing_all
+//!TYPE DYNAMIC float
+0
+//!PARAM wing_x
+//!TYPE DYNAMIC float
+0.5
+//!PARAM wing_y
+//!TYPE DYNAMIC float
+0.5
+//!PARAM wing_hw
+//!TYPE DYNAMIC float
+0.1
 //!PARAM edge_l
 //!TYPE DYNAMIC float
 0
@@ -135,6 +156,18 @@ inline constexpr const char* kBlurCloudShader = R"CUE(
 //!TYPE DYNAMIC float
 0
 //!PARAM edge_b
+//!TYPE DYNAMIC float
+0
+//!PARAM veil
+//!TYPE DYNAMIC float
+0
+//!PARAM edge_cr
+//!TYPE DYNAMIC float
+0
+//!PARAM edge_cg
+//!TYPE DYNAMIC float
+0
+//!PARAM edge_cb
 //!TYPE DYNAMIC float
 0
 //!PARAM lit_ry
@@ -327,6 +360,27 @@ vec4 hook() {
 }
 
 //!HOOK OUTPUT
+//!WHEN wing_on 0 >
+//!BIND HOOKED
+//!DESC Cue music card: the spectrum's wings step out (a song's mini player: the cover, its words and its light)
+// The picture keeps its wings (rebuilding the engine's graph would cut the sound): they are only
+// not shown, before the room's light and the light show are drawn over the black they leave.
+vec4 hook() {
+    vec4 o = HOOKED_tex(HOOKED_pos);
+    // the spectrum-alone look in the card: the whole spectrum steps out (Cue draws the cover over
+    // its square; the room's light is drawn over the black)
+    if (wing_all > 0.0) return vec4(o.rgb * (1.0 - clamp(wing_all, 0.0, 1.0)), o.a);
+    vec2 sz = HOOKED_size;
+    vec2 c = vec2(wing_x, wing_y) * sz;
+    float h = wing_hw * sz.x;
+    float u = h / 260.0;
+    vec2 q = HOOKED_pos * sz - c;
+    if (abs(q.x) > h + 18.0 * u && abs(q.x) < h + 290.0 * u && abs(q.y) < 300.0 * u)
+        return vec4(o.rgb * (1.0 - clamp(wing_on, 0.0, 1.0)), o.a);
+    return o;
+}
+
+//!HOOK OUTPUT
 //!WHEN bg_on 0 >
 //!BIND HOOKED
 //!DESC Cue music room light: a soft glow around the cover, centred on it, in its own colours
@@ -356,7 +410,9 @@ vec4 hook() {
     float u = fract(atan(q.y, q.x) / 6.2831853 + 0.5) * 8.0;
     int i = int(floor(u));
     vec3 col = mix(bg_p(i), bg_p(i == 7 ? 0 : i + 1), smoothstep(0.0, 1.0, u - floor(u)));
-    float g = 0.42 * exp(-(d / 2.1) * (d / 2.1)) + 0.07 * exp(-(d / 5.5) * (d / 5.5));
+    // (and, far from it, a wash of the same colours over the whole room, the way a blurred cover
+    // fills it: the window's own colour, music_backdrop, is where it ends)
+    float g = 0.36 * exp(-(d / 2.0) * (d / 2.0)) + 0.15 * exp(-(d / 9.0) * (d / 9.0));
     vec3 light = col * g * clamp(bg_k, 0.0, 1.0);
     // a whisper of noise: no banding in the soft gradient
     light += (fract(sin(dot(HOOKED_pos * sz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
@@ -571,15 +627,33 @@ vec4 hook() {
     float t = d * n.z / (n.x * q.x + n.y * q.y + n.z * d);
     vec3 P = vec3(t * q.x, t * q.y, t * d - d);
     vec2 uv = vec2(dot(P, e1), dot(P, e2)) / (1.0 + 0.025 * k);
-    // what lies under the cover: the light just outside the flat cover, and a soft shadow
+    // what lies under the cover: the light just outside the flat cover, blended from its four
+    // sides (the nearest side counts most), and a soft shadow
     float m = max(abs(q.x), abs(q.y));
-    vec2 bp = m < h + 2.0 ? c + q * ((h + 8.0) / max(m, 1.0)) : HOOKED_pos * sz;
-    vec3 bg = m < h + 2.0 ? HOOKED_tex(clamp(bp / sz, HOOKED_pt * .5, vec2(1.0) - HOOKED_pt * .5)).rgb : original.rgb;
-    vec2 so = vec2(-cov_ry * h * 0.35, h * 0.06 + cov_rx * h * 0.35);
-    float sd = cov_box(q - so, h, h * 0.02);
-    bg *= 1.0 - (0.42 + 0.12 * k) * exp(-max(sd, 0.0) / (h * 0.10));
+    vec3 bg = original.rgb;
+    if (m < h + 2.0) {
+        float e = h + 8.0;
+        vec2 cq = clamp(q, vec2(-e), vec2(e));
+        vec2 lo = HOOKED_pt * .5, hi = vec2(1.0) - HOOKED_pt * .5;
+        vec3 sl = HOOKED_tex(clamp((c + vec2(-e, cq.y)) / sz, lo, hi)).rgb;
+        vec3 sr = HOOKED_tex(clamp((c + vec2(e, cq.y)) / sz, lo, hi)).rgb;
+        vec3 st = HOOKED_tex(clamp((c + vec2(cq.x, -e)) / sz, lo, hi)).rgb;
+        vec3 sb = HOOKED_tex(clamp((c + vec2(cq.x, e)) / sz, lo, hi)).rgb;
+        float wl = 1.0 / max((q.x + e) * (q.x + e), 1.0), wr = 1.0 / max((e - q.x) * (e - q.x), 1.0);
+        float wt = 1.0 / max((q.y + e) * (q.y + e), 1.0), wb = 1.0 / max((e - q.y) * (e - q.y), 1.0);
+        bg = (sl * wl + sr * wr + st * wt + sb * wb) / (wl + wr + wt + wb);
+    }
+    // (the shadow leans with a tilt; it narrows with the cover when it turns right round, as a
+    // song changes in the mini player's card)
+    vec2 so = vec2(-clamp(cov_ry, -0.11, 0.11) * h * 0.35, h * 0.06 + cov_rx * h * 0.35);
+    vec2 sq = abs(q - so) - (vec2(h * max(abs(cy), 0.02), h) - vec2(h * 0.02));
+    float sd = length(max(sq, 0.0)) + min(max(sq.x, sq.y), 0.0) - h * 0.02;
+    // (the card's song change: the shadow is Cue's own window's, the engine's fades out under it)
+    bg *= 1.0 - (0.42 + 0.12 * k) * exp(-max(sd, 0.0) / (h * 0.10)) * (1.0 - clamp(cov_hide, 0.0, 1.0));
     float cover = clamp(0.5 - cov_box(uv, h, h * 0.02), 0.0, 1.0);
-    if (cover <= 0.0) return vec4(bg, original.a);
+    // (the card's song change: Cue draws the turning cover and its shadow itself, over the picture;
+    // the room stays the engine's)
+    if (cover <= 0.0 || cov_hide > 0.0005) return vec4(bg, original.a);
     vec3 art = HOOKED_tex(clamp((c + uv) / sz, HOOKED_pt * .5, vec2(1.0) - HOOKED_pt * .5)).rgb;
     // only the rim catches a little light while the cover is turned
     float rim = clamp((max(abs(uv.x), abs(uv.y)) - (h - 3.0)) / 3.0, 0.0, 1.0) * 0.14 * k;
@@ -590,10 +664,11 @@ vec4 hook() {
 //!HOOK OUTPUT
 //!WHEN edge_on 0 >
 //!BIND HOOKED
-//!DESC Cue music edges: where the picture stops short of the window, it fades into the window's black
+//!DESC Cue music edges: where the picture stops short of the window, it fades into the window's own colour
 // The music's picture (and its light, drawn above) can only paint inside the picture's own frame.
-// In a window much wider or taller than it, the black beyond would meet it on a straight line:
-// on those sides (edge_l/r/t/b: the fade's width, in shares of the frame) it eases to black.
+// In a window much wider or taller than it, the window's colour beyond (the engine's background,
+// the room's far light in the cover's colours: edge_c*) would meet it on a straight line: on those
+// sides (edge_l/r/t/b: the fade's width, in shares of the frame) it eases into that colour.
 vec4 hook() {
     vec4 o = HOOKED_tex(HOOKED_pos);
     vec2 p = HOOKED_pos;
@@ -602,7 +677,16 @@ vec4 hook() {
     if (edge_r > 0.0) k *= smoothstep(0.0, edge_r, 1.0 - p.x);
     if (edge_t > 0.0) k *= smoothstep(0.0, edge_t, p.y);
     if (edge_b > 0.0) k *= smoothstep(0.0, edge_b, 1.0 - p.y);
-    return vec4(o.rgb * k, o.a);
+    return vec4(mix(vec3(edge_cr, edge_cg, edge_cb), o.rgb, k), o.a);
+}
+
+//!HOOK OUTPUT
+//!WHEN veil 0 >
+//!BIND HOOKED
+//!DESC Cue music list: the cover steps back into the dark while the list is open over it
+vec4 hook() {
+    vec4 o = HOOKED_tex(HOOKED_pos);
+    return vec4(o.rgb * (1.0 - 0.86 * clamp(veil, 0.0, 1.0)), o.a);
 }
 
 //!HOOK OUTPUT
@@ -620,7 +704,7 @@ float mono_box(vec2 q, float h, float r) {
 vec4 hook() {
     vec4 o = HOOKED_tex(HOOKED_pos);
     float k = clamp(mono, 0.0, 1.0);
-    if (cov_on > 0.5) {
+    if (cov_on > 0.5 && cov_hide < 0.0005) {
         vec2 sz = HOOKED_size;
         float h = cov_hw * sz.x;
         vec2 q = HOOKED_pos * sz - vec2(cov_x, cov_y) * sz;
@@ -641,7 +725,7 @@ vec4 hook() {
 //!HOOK OUTPUT
 //!WHEN cue_on 0 >
 //!BIND HOOKED
-//!DESC Cue snap / subtitle edit: big pixels, grey, dark; the grey can spread in a pixel ring
+//!DESC Cue snap / subtitle edit / opening iris: big pixels, grey, dark; the grey can spread in a pixel ring
 // A ring of grey blocks grows from (ax, ay) as ar goes 0..1 (>= 9: everywhere at once); a second
 // ring from (bx, by) gives the colour back as br goes 0..1. Edges step in four levels, in blocks.
 float cue_ring(vec2 b, vec2 c, float k, vec2 sz, float cell) {
@@ -651,6 +735,15 @@ float cue_ring(vec2 b, vec2 c, float k, vec2 sz, float cell) {
     return ceil(x * 4.0) / 4.0;
 }
 vec4 hook() {
+    // Opening-only path: black pixels need no video sample, grayscale or ring calculations.
+    if (cue_ir >= 0.0) {
+        float bc = max(cue_cell, 1.0);
+        vec2 q = ((floor(HOOKED_pos * HOOKED_size / bc) + 0.5) * bc
+                  - 0.5 * HOOKED_size) / (0.5 * HOOKED_size);
+        float radius = cue_ir * 1.45;
+        if (dot(q, q) > radius * radius) return vec4(0.0, 0.0, 0.0, 1.0);
+        return HOOKED_tex(HOOKED_pos);
+    }
     vec2 cell = max(cue_px, 1.0) * HOOKED_pt;
     vec2 p = cue_px > 1.0 ? (floor(HOOKED_pos / cell) + 0.5) * cell : HOOKED_pos;
     vec4 c = HOOKED_tex(clamp(p, HOOKED_pt * .5, vec2(1.0) - HOOKED_pt * .5));
@@ -664,6 +757,15 @@ vec4 hook() {
     }
     float luma = dot(c.rgb, vec3(.2126, .7152, .0722));
     vec3 rgb = mix(c.rgb, vec3(luma), clamp(cue_gray, 0.0, 1.0) * m);
-    return vec4(rgb * (1.0 - clamp(cue_dark, 0.0, 1.0) * m), c.a);
+    rgb *= 1.0 - clamp(cue_dark, 0.0, 1.0) * m;
+    // the opening iris (cue_ir >= 0): black outside an ellipse of the picture's own proportions,
+    // in blocks of cue_cell, growing from the middle (0: all black, 1: past the corners)
+    if (cue_ir >= 0.0) {
+        vec2 sz = HOOKED_size;
+        float bc = max(cue_cell, 1.0);
+        vec2 q = ((floor(HOOKED_pos * sz / bc) + 0.5) * bc - 0.5 * sz) / (0.5 * sz);
+        rgb *= step(length(q), cue_ir * 1.45);
+    }
+    return vec4(rgb, c.a);
 }
 )CUE";

@@ -24,8 +24,13 @@ struct SettingsStore {
   int music_look = 0;          // music: 0 cover and spectrum, 1 spectrum only, 2 cover only
   bool music_mono = false;     // music in black and white (its spectrum and light); colour by default
   bool cover_tilt = true;      // the music's cover leans under the pointer
+  int mini_sub_size = 0;  // the film mini player's subtitles: 0 as the full player's, 1 larger, 2 largest
+  bool settings_examples = true;  // Settings shows each setting at work (a picture and a line); off: the settings alone
+  bool mini_pinned = false;    // the mini player stays above other windows (the pin, chosen in it)
+  bool smooth_motion = false;  // films: frames blend at their changes where the screen's rate does not match (a choice)
   bool loop = false;           // repeat the file (the dock's repeat button)
   bool loop_all = false;       // repeat the queue: after its last item, the first again
+  bool shuffle = false;        // music: the list in a shuffled order
   bool ambient = true;      // ambient light behind the window
   double ambient_strength = 0.15;  // 0.05..1: starts soft, the person turns it up
   bool resume = true;        // continue where a file was left
@@ -33,6 +38,8 @@ struct SettingsStore {
   bool onboarded = false;     // the first-run welcome was seen (or skipped)
   std::string news_seen;      // the last version whose "saiu do forno" was shown ("" before 1.1)
   std::string news_closed;    // the last version whose "what's new" line was closed on the home
+  int64_t installed = 0;      // when Cue first ran here (seconds since 1970; set on the first run that knew it)
+  std::string survey;         // the survey's invitation: "" not yet, "answered" or "declined" (never again)
   // interface language: "auto" follows Windows' display languages at every start; a tag
   // ("pt-BR", "en", "es", "fr", "zh-Hans") is the person's own choice and stays until changed.
   // Independent of slang/alang (subtitle and audio tracks).

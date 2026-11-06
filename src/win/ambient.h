@@ -14,6 +14,8 @@
 
 class Ambient {
  public:
+  // the window is held by the person (moved): the halo moves with it, and any rebuild waits
+  void hold(bool on) { held_ = on; }
   static constexpr int kZones = FrameColors::kZones;
   bool create(HINSTANCE inst);
   void destroy();
@@ -27,14 +29,16 @@ class Ambient {
 
  private:
   // four thin strips around the player (top and bottom include the corners): only pixels that
-  // can glow are ever stored or sent, never the big transparent middle
-  struct Px { uint32_t idx; uint16_t lut; uint8_t a; };
+  // can glow are ever stored or sent, never the big transparent middle. The shape is the whole
+  // strip's, made once per size; the surface sent to Windows is only the part on a screen.
+  struct Px { uint16_t x, y; uint16_t lut; uint8_t a; };  // x, y: in the whole strip
   struct Strip {
     HWND wnd = nullptr;
     HDC mem = nullptr;
     HBITMAP bmp = nullptr;
     uint32_t* bits = nullptr;
-    int x = 0, y = 0, w = 0, h = 0;  // relative to the halo's top-left
+    int fx = 0, fy = 0, fw = 0, fh = 0;  // the whole strip, relative to the halo's top-left
+    int x = 0, y = 0, w = 0, h = 0;      // its surface (the part on a screen), same coordinates
     std::vector<Px> shape;
   };
   Strip st_[4];
@@ -58,9 +62,15 @@ class Ambient {
   uint8_t lr_[kLut]{}, lg_[kLut]{}, lb_[kLut]{}, la_[kLut]{};
   std::vector<uint32_t> tint_;
   void build_shape(const RECT& r, int dpi);
-  // the strips are cut to the monitor: light that would fall off screen is never made or sent
-  void layout_strips(const RECT& r, int M, RECT out[4]) const;
-  bool rebuild_pending_ = false;
+  // the strips' surfaces are cut to the screens (all of them: a halo reaching onto the monitor
+  // beside is seen there); light off every screen is never sent. The shape itself is never cut,
+  // so a window coming back from past a screen's edge finds its whole halo (it used to come back
+  // without the side that had been off screen, until the drag ended)
+  void layout_cut(const RECT& r, RECT out[4]) const;
+  bool covers(const RECT cut[4]) const;   // the surfaces already hold all of that
+  bool cut_surfaces(const RECT cut[4]);   // new surfaces for those parts (the shape is kept)
+  void free_bitmaps();
+  bool rebuild_pending_ = false;          // the surfaces are bigger than the screens need: cut again when it settles
   double since_build_ = 1;
   int dpi_ = 96;
   void build_lut();
@@ -68,4 +78,5 @@ class Ambient {
   void place(HWND owner, bool show);
   void free_surfaces();
   void hide();
+  bool held_ = false;
 };

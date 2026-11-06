@@ -35,6 +35,7 @@ typedef struct mpv_event_client_message { int num_args; const char** args; } mpv
 typedef struct mpv_byte_array { void* data; size_t size; } mpv_byte_array;
 typedef struct mpv_event_command { mpv_node result; } mpv_event_command;
 typedef struct mpv_event_hook { const char* name; uint64_t id; } mpv_event_hook;
+typedef struct mpv_event_log_message { const char* prefix; const char* level; const char* text; int log_level; } mpv_event_log_message;
 typedef struct mpv_event_end_file { int reason; int error; int64_t playlist_entry_id; int64_t playlist_insert_id; int playlist_insert_num_entries; } mpv_event_end_file;
 enum { MPV_END_FILE_REASON_EOF = 0, MPV_END_FILE_REASON_STOP = 2, MPV_END_FILE_REASON_QUIT = 3, MPV_END_FILE_REASON_ERROR = 4, MPV_END_FILE_REASON_REDIRECT = 5 };
 }
@@ -63,6 +64,7 @@ struct MpvApi {
   int (*hook_continue)(mpv_handle*, uint64_t);
   const char* (*error_string)(int);
   int (*command_ret)(mpv_handle*, const char**, mpv_node*);  // optional (client API 1.103+)
+  int (*request_log_messages)(mpv_handle*, const char*);     // optional
 };
 
 class Mpv {
@@ -89,6 +91,7 @@ class Mpv {
   mpv_event* wait() { return api_.wait_event(h_, 0); }
   void hook_add(const char* name, uint64_t id) { api_.hook_add(h_, id, name, 0); }
   void hook_continue(uint64_t id) { api_.hook_continue(h_, id); }
+  void request_log(const char* level) { if (h_ && api_.request_log_messages) api_.request_log_messages(h_, level); }
   const MpvApi& api() const { return api_; }
   mpv_handle* handle() const { return h_; }
 

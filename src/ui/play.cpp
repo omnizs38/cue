@@ -20,6 +20,19 @@ constexpr int kRowH = 13;          // Omni row-sheet
 constexpr int kMargin = 14;        // art px from the window edge
 // The control bar's rhythm, centre to centre (art px): inside a group, and between groups.
 constexpr double kDockBeat = 22;
+// the list button's count: the number itself beside the icon, in the bar's type, a shade quieter
+// than the icon (like the speed's "1x"); "99+" past that
+std::string queue_badge_text(size_t n) { return n > 99 ? "99+" : std::to_string(n); }
+int queue_badge_w(const std::string& t) { return text_w(t, 1); }  // art px
+constexpr int kBadgeGap = 3;   // art px between the icon and its number
+constexpr int kCapTop = 2;     // art px: where the capitals start in a line of text
+constexpr double kCardListGap = 13;  // art px: the card's artist to its list's line
+// the film's mini player: two rows (the buttons, then the timeline) along its bottom edge
+constexpr int kMiniRowH = 40, kMiniSide = 10, kMiniFoot = 8;  // art px
+// Settings with its picture beside the rows (a short window): the picture's column, art px
+constexpr int kSettingsSide = 196;
+// music's bar along the window's foot (the timeline over the buttons), and the card's inset
+constexpr int kMusicDockH = 48, kCardInset = 4;  // art px
 // Up next in roomy windows (from this width, art px): this wide, kept this far below the top.
 constexpr int kQueueRoomyW = 760, kQueueRoomyPanelW = 320, kQueueTop = 34;
 const std::vector<int> kDockProfile = {3, 2, 1};
@@ -73,12 +86,28 @@ void draw_playpause(Canvas& c, int x, int y, double s, double t, Rgb col, double
 }  // namespace
 
 // ── layout ──────────────────────────────────────────────────────────
+// Settings' layouts, tried in this order until one fits: the picture on top, then beside the rows
+// (all of Settings still, the sizes in place), and only then the rows closing up (the interface
+// one row deeper, then the groups closer), on top or beside; the settings alone last
+static const int kSettingsStages[9][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0, 2}, {1, 2}, {2, 0}, {2, 1}, {2, 2}};
+void PlayView::settings_stage(int stage) {
+  settings_stage_ = std::clamp(stage, 0, 8);
+  const int where = kSettingsStages[settings_stage_][0], close = kSettingsStages[settings_stage_][1];
+  settings_compact_ = where > 0;
+  settings_side_ = where == 1;
+  settings_fold_ = close >= 1;
+  settings_tight_ = close >= 2;
+}
+void PlayView::settings_restart() { settings_stage(in.settings_examples ? 0 : 6); }  // (6: no picture, as they are)
+
 void PlayView::resize(int w, int h, double s) {
   bool first = w_ == 0;
   if (first) { style_mix_ = in.controls_free ? 1 : 0; style_motion_.snap(style_mix_); }
   int ow = w_, oh = h_;
+  const double old_s = s_;
   double ox = px_.x, oy = py_.x;
   style_y_ = -1;cc_drag_=false;
+  panel_fit_ = 0;  // (decided again for the new size)
   w_ = w; h_ = h; s_ = std::max(1.0, s);
   in.w = w; in.h = h; in.s = s_;
   layout_dock();
@@ -95,132 +124,484 @@ void PlayView::resize(int w, int h, double s) {
   } else if (first || !dragging_dock_) { px_.snap(x); py_.snap(y); }
   if (first || w != ow || h != oh) glide_ = false;
   dock_dirty_ = panel_dirty_ = true;
+  if (panel_ == Panel::More && more_collapsed_ && (w != ow || h != oh || s_ != old_s)) { more_collapsed_ = false; build_rows(); }  // a taller window (or a smaller interface) may hold it all again
+  if (panel_ == Panel::Settings && (w != ow || h != oh || s_ != old_s)) {
+    settings_restart();  // decided afresh for the new size (or the new interface size)
+    build_rows();
+  }
+  // the interface's page of Settings (Settings folded it there, short of room): a size picked in
+  // it (or a window grown) can leave room for all of Settings again, which then comes back with
+  // the size in place; still short, the page stays
+  if (panel_ == Panel::Interface && !first && (w != ow || h != oh || s_ != old_s)) {
+    const int btn = panel_btn_;
+    const bool kb = pfocus_ >= 0;
+    panel_ = Panel::Settings;
+    settings_restart();
+    build_rows();
+    layout_rows();
+    if (settings_fold_) panel_ = Panel::Interface;  // (still folded: the same page)
+    else {
+      // all of Settings again, the pointer or the keyboard on the size
+      panel_btn_ = btn;
+      phover_ = -1; ppart_ = -1;
+      pfocus_ = -1;
+      if (kb) for (int i = 0; i < (int)rows_.size(); ++i) if (rows_[i].id == R_UISCALE) pfocus_ = i;
+    }
+    build_rows();
+  }
   if (panel_ != Panel::None) layout_rows();
 }
 
 void PlayView::layout_dock() {
-  int W = w_ / s_;
-  // narrow windows (portrait video): same dock, recomposed. Core stays -15 / play / +15
-  // Up next has a permanent slot beside repeat: both say what happens when this file ends.
-  // the narrowest full bar: its groups plus one beat per extra button (audio; previous/next)
-  // music trades the 15-second steps for the previous and next track, and has no subtitles
-  // button unless the song brings lyrics
+  const int W = w_ / s_, H = h_ / s_;
   const bool music = in.audio_only, cc = !music || !in.subs.empty();
-  const int min_dw = 350 + (in.audios.size() > 1 ? 22 : 0) + (in.queue_active && !music ? 22 : 0) - (cc ? 0 : 22) - (music ? 22 : 0);
-  compact_ = W < 2 * kMargin + min_dw;
-  // grows with the window (a longer timeline is easier to aim on big screens), within reason
-  double DW = std::min(std::clamp((int)std::lround(W * 0.44), 290, 360), std::max(196, W - 2 * kMargin));
-  if (compact_) DW = std::min(std::max(196, W - 2 * kMargin), kCompactDockW);  // centred, never edge to edge
-  if(!compact_)DW=std::max(DW,(double)min_dw);
-  if(!compact_)DW=std::min(DW,(double)(W-2*kMargin));
-  // music has fewer buttons: its bar is only as wide as they need. The width eases between music
-  // and film when one follows the other, never narrower than the buttons on it
-  if (!compact_ && music_w_ > 0) {
-    const double tight = 350 + (in.audios.size() > 1 ? 22 : 0) - (in.subs.empty() ? 22 : 0) - 22 + 16;
-    DW = std::max((double)min_dw, lerp(DW, std::min(DW, tight), music_w_));
-  }
-  if (!compact_) {
-    int free_width = std::min(W - 2 * kMargin, std::clamp((int)(W * 0.85), (int)DW, 800));
-    DW = lerp(DW, free_width, style_mix_);
-  }
-  layout_free_ = in.controls_free;
-  // with a queue, previous and next files sit either side of play (dimmed when there is none)
-  layout_queue_=in.queue_active;layout_next_=in.queue_active||music;layout_ends_=(in.has_prev?1:0)|(in.has_next?2:0);
-  layout_music_=music;layout_cc_=cc;
-  dw_ = (int)std::lround(DW * s_);
-  dh_ = (compact_ ? 62 : kDockH) * s_;
-  hots_.clear();
-  auto add = [&](int id, double x, double y, double ww, double hh) { hots_.push_back({id, {x * s_, y * s_, ww * s_, hh * s_}}); };
-  const int y1 = 13;
-  const int audio_y = y1 - 8;
-  const int volume_w = 49;
-  double cx = DW / 2;
-  int playback_y = compact_ ? 26 : y1 - 8;
-  add(B_VOL, 6, audio_y, 17, 16);
-  add(B_VOLBAR, 25, audio_y, volume_w, 16);  // longer volume track, with space for speed and More
-  // playback speed lives in the toolbar itself: one click, the choices open right above it
-  const int sw = text_w("1.75\xc3\x97", 1) + 8;
-  if (compact_) add(B_SPEED, DW - 22 - sw, audio_y, sw, 16);
-  // Three zones on one rhythm, measured centre to centre: how it sounds (volume, speed) on the
-  // left, playback centred on the bar, and one even row of secondary buttons on the right
-  // (up next, repeat, subtitles, audio, full screen, more). Fewer gaps of different sizes read
-  // as calm; the zones themselves are told apart by the open space between them.
+  const bool audio_btn = in.audios.size() > 1;
   const int slot = 17;
   const double beat = kDockBeat;
-  int controls_y = compact_ ? 26 : y1 - 8;
-  double left_end = 25 + volume_w;
-  double x = DW;  // left edge of the leftmost right-side slot
-  if (!compact_) {
-    double c = DW - 5 - slot / 2.0;  // the centre of More, 5 px from the edge
-    auto put = [&](int id, int y) { add(id, c - slot / 2.0, y, slot, 16); x = c - slot / 2.0; };
-    put(B_MORE, audio_y); c -= beat;
-    put(B_FS, controls_y); c -= beat;
-    if (in.audios.size() > 1) { put(B_AUDIO, controls_y); c -= beat; }
-    if (cc) { put(B_CC, controls_y); c -= beat; }
-    put(B_LOOP, controls_y); c -= beat;
-    put(B_QUEUE, controls_y);
-    // speed is "how it plays", like volume: it sits right after the volume, its slot hugging
-    // the words ("1×", "1.25×") so it never floats
-    int ssw = text_w(speed_plain(in.speed), 1) + 4 + 8;
-    add(B_SPEED, left_end + 7, y1 - 8, ssw, 16);
-    left_end += 7 + ssw;
-  } else {
-    // narrow: two rows. Top: volume, speed, more. Bottom: subtitles (audio, up next) on the
-    // left, playback in the middle, repeat and full screen on the right.
-    add(B_MORE, DW - 5 - slot, audio_y, slot, 16);
-    add(B_FS, DW - 24, controls_y, slot, 16);
-    int lx = 5;
-    if (cc) { add(B_CC, lx, controls_y, slot, 16); lx += 18; }
-    if (in.audios.size() > 1) { add(B_AUDIO, lx, controls_y, slot, 16); lx += 18; }
-    add(B_LOOP, DW - 44, controls_y, slot, 16);
-    add(B_QUEUE, lx, controls_y, slot, 16);
+  layout_free_ = in.controls_free;
+  layout_queue_=in.queue_active;layout_next_=in.queue_active||music;layout_ends_=(in.has_prev?1:0)|(in.has_next?2:0);
+  layout_music_=music;layout_cc_=cc;
+  // the bar keeps 14 px of air from the window's sides; a narrow window (a vertical video) gives
+  // some of it back, down to 4, before anything else has to go
+  int avail = std::max(0, W - 2 * kMargin);
+  const int ssw = text_w(speed_plain(in.speed), 1) + 4 + 8;  // the speed slot hugs its words
+  // The bar folds by priority until it fits. Play stays on the bar's centre, so each side must
+  // fit its own half: the left side (how it sounds) first shortens the volume line, hands
+  // speed to "...", then folds the volume into its icon; the right side hands over repeat, up
+  // next, audio and subtitles, in that order. A side folds only as far as it has to. When
+  // even that is not enough with a playlist, the 15-second steps go (previous/next stay); and
+  // when nothing fits, the bar becomes the mini player. Every key keeps working throughout.
+  struct Fold { int vol_w; bool speed, loop, queue, audio, cc, steps, mini, shuffle; };
+  struct Left { int vol_w; bool speed; };
+  const Left lefts[] = {{49, true}, {30, true}, {30, false}, {0, false}};
+  // right side: how many of loop, queue, audio, subtitles remain (dropped in that order)
+  std::vector<int> right_ids;  // the optional right buttons, in the order they leave
+  // (the mini player's button, films and music alike: one click away; it is the first to step
+  // into "..." when room runs out. A film keeps it in the picture's menu too)
+  const bool mini_btn = !in.mini_player && !in.fullscreen;
+  if (mini_btn) right_ids.push_back(B_MINI);
+  // (music: shuffle beside repeat; it steps into "..." right after the mini player's button)
+  const bool shuffle_btn = music;
+  if (shuffle_btn) right_ids.push_back(B_SHUFFLE);
+  right_ids.push_back(B_LOOP); right_ids.push_back(B_QUEUE);
+  if (audio_btn) right_ids.push_back(B_AUDIO);
+  if (cc) right_ids.push_back(B_CC);
+  const int n_left = 4, n_right = (int)right_ids.size() + 1;
+  // music's list button carries how many songs the list holds: its slot grows by the tag
+  const bool badge = music && !mini_ && in.queue_active && in.queue.size() > 1;
+  const double badge_w = badge ? kBadgeGap + queue_badge_w(queue_badge_text(in.queue.size())) : 0.0;
+  layout_badge_ = badge ? (int)queue_badge_text(in.queue.size()).size() : 0;
+  auto left_w = [&](int i) { const Left& l = lefts[i]; return 23.0 + (l.vol_w > 0 ? 2 + l.vol_w : 0) + (l.speed ? 7 + ssw : 0); };
+  const int queue_at = (mini_btn ? 1 : 0) + (shuffle_btn ? 1 : 0) + 1;
+  auto right_w = [&](int j) { int n = 2 + (int)right_ids.size() - j; return 5.0 + slot + (n - 1) * beat + (j <= queue_at ? badge_w : 0); };  // j buttons gone (the list's tag goes with the list)
+  const bool can_drop_steps = !music && layout_next_;
+  auto reach_of = [&](bool steps) { return (!music && layout_next_ && steps ? 2 * beat : beat) + 8; };
+  auto need = [&](int i, int j, bool steps) { return 2 * std::max(left_w(i), right_w(j)) + 2 * (reach_of(steps) + 8); };
+  const double need_full = need(0, 0, true);
+  const double need_least = need(n_left - 1, n_right - 1, !can_drop_steps);
+  if (avail < need_least) avail = std::max(avail, std::min((int)std::ceil(need_least), W - 8));
+  // the bar's own width, as before: grows with the window within reason, a touch tighter for
+  // music, wide in the free style, never past the window's margins
+  // (the room a fold needs to come back is part of the bar's own width: a window that can hold
+  // the whole bar always gives it enough to unfold again)
+  constexpr int kHyst = 10;  // art px
+  double DW = std::clamp((int)std::lround(W * 0.44), 290, 360);
+  DW = std::max(DW, need_full + kHyst);
+  if (music_w_ > 0) {
+    const double tight = need_full + 16;
+    DW = std::max(need_full + kHyst, lerp(DW, std::min(DW, tight), music_w_));
   }
-  // playback, symmetric around play on one beat: -15 · play · +15, or with a queue
-  // previous · -15 · play · +15 · next (the fine steps beside play, the file steps outside).
-  // Play sits on the bar's centre whenever the zones allow it.
-  const double reach = (layout_next_ && !music ? 2 * beat : beat) + 8;
-  if (!compact_ && (cx + reach + 8 > x || cx - reach - 8 < left_end)) cx = std::max((left_end + x) / 2, left_end + 8 + reach);
-  const double step = compact_ ? 17 : beat;
-  const int ends = layout_next_ ? 2 : 1;
-  if (music) {  // previous track · play · next track
-    add(B_PREV, cx - step - 8, playback_y, 16, 16);
-    add(B_PLAY, cx - 8, playback_y, 17, 16);
-    add(B_NEXT, cx + step - 8, playback_y, 16, 16);
-  } else {
-    if (layout_next_) add(B_PREV, cx - step * ends - 8, playback_y, 16, 16);
-    add(B_REW, cx - step - 8, playback_y, 16, 16);
-    add(B_PLAY, cx - 8, playback_y, 17, 16);
-    add(B_FWD, cx + step - 8, playback_y, 16, 16);
-    if (layout_next_) add(B_NEXT, cx + step * ends - 8, playback_y, 16, 16);
+  {
+    int free_width = std::clamp((int)(W * 0.85), (int)DW, 800);
+    DW = lerp(DW, free_width, style_mix_);
   }
-  // timeline row
-  bool hours = in.dur >= 3600;
-  layout_hours_ = hours;
-  layout_audio_count_ = in.audios.size();
-  int tw = text_w(hours ? "-0:00:00" : "-00:00", 1);
-  int timeline_y = compact_ ? 51 : 28;
-  double tx0 = 8 + tw + 7, tx1 = DW - 8 - tw - 7;
-  tl_ = {tx0 * s_, timeline_y * s_, (tx1 - tx0) * s_, s_};
-  add(B_TIMELINE, tx0 - 3, timeline_y - 7, tx1 - tx0 + 6, 14);
-  add(B_TIME, 4, timeline_y - 7, tw + 8, 14);
-  add(B_TIME, DW - tw - 12, timeline_y - 7, tw + 8, 14);
+  // music in a roomy window (and the strip), without the bar's background: the bar along the
+  // window's foot, nearly edge to edge, the timeline over the buttons. With its background it is
+  // the film's bar (a compact panel, centred low), a long dark band read as heavy under a cover
+  // (switching the background in Settings: one bar becomes the other halfway through its fade)
+  const bool music_full = music && in.cover_scene && style_mix_ >= 0.5 && !(in.mini_player && !in.fullscreen) && !music_frame_stacked(view().frame);
+  if (music_full) {
+    const double mx = std::max<double>(kMargin, W * 0.05);
+    DW = std::max(need_full + kHyst, std::min(W - 2 * mx, 1500.0));
+  }
+  DW = std::min(DW, (double)avail);
+  // mini player: the window cannot hold even the folded bar (or is too short for it); leaving
+  // it asks for a little room to spare, so a window at the edge does not flicker between them
+  music_compact_ = false;
+  const int short_h = kDockH + 2 * kMargin + 30;
+  bool mini = DW < need_least || H < short_h;
+  if (mini_ && !mini && (DW < need_least + kHyst || H < short_h + kHyst)) mini = true;
+  if (in.mini_player && !in.fullscreen) mini = true;  // asked for: the window is the mini player
+  mini_ = mini;
+  // music framed close (the cover alone, or with its words under it), and the mini player of a
+  // song: one composition, the cover, its words, then the bar right under them (not pinned to
+  // the window's floor), the timeline above previous · play · next
+  // a song's mini player is a card: the cover on the left, its words and the bar beside it
+  // (not tied to the cover's picture being up: a song change takes it down for a moment, and the
+  // card must not fall back to the full composition and its spectrum meanwhile)
+  card_ = music && in.mini_player && !in.fullscreen;
+  stack_ = !card_ && music && in.cover_scene && music_frame_stacked(view().frame) && !mini_;
+  music_full_ = music_full && !mini_;
+  layout_frame_ = (int)view().frame;
+  layout_scene_ = in.cover_scene;
+  // the film's mini player: two rows along the bottom edge, the buttons over the timeline
+  const bool mini_row = mini_ && !stack_ && !card_;
+  mini_row_ = mini_row;
+  dh_ = (mini_row ? kMiniRowH : music_full_ ? kMusicDockH : kDockH) * s_;
+  compact_ = !mini_ && DW < need_full;
+  Fold F{0, false, false, false, false, false, false, false, false};
+  if (!mini_ || stack_ || card_) {
+    // each side: the least folded level that fits its half; unfolding needs room to spare
+    auto pick = [&](int count, int prev, auto width, double half) {
+      int i = count - 1;
+      for (int k = 0; k < count; ++k) if (width(k) <= half) { i = k; break; }
+      if (i < prev) {
+        int roomy = count - 1;
+        for (int k = 0; k < count; ++k) if (width(k) + kHyst / 2.0 <= half) { roomy = k; break; }
+        i = std::min(prev, std::max(i, roomy));
+      }
+      return i;
+    };
+    bool steps = !(can_drop_steps && fold_steps_);
+    if (can_drop_steps) {
+      // the steps come back only when both sides fit with them, with room to spare
+      double half_with = (DW - 2 * (reach_of(true) + 8)) / 2;
+      bool fits_with = left_w(n_left - 1) <= half_with - (fold_steps_ ? kHyst / 2.0 : 0) && right_w(n_right - 1) <= half_with - (fold_steps_ ? kHyst / 2.0 : 0);
+      steps = fits_with;
+    }
+    fold_steps_ = can_drop_steps && !steps;
+    const double half = (DW - 2 * (reach_of(steps) + 8)) / 2;
+    fold_left_ = pick(n_left, fold_left_, left_w, half);
+    fold_right_ = pick(n_right, fold_right_, right_w, half);
+    // the steps are worth more than anything the sides hold: they leave last, and the room they
+    // free never brings back something of lower priority
+    if (fold_steps_) { fold_left_ = n_left - 1; fold_right_ = n_right - 1; }
+    // music in a reduced window (the cover framed alone or with its words under it): the bar is
+    // only what a song needs at a glance, previous, play, next and the timeline, with the volume
+    // as its icon; the rest is in "..." (full screen too: a double click still does it)
+    music_compact_ = stack_ || card_;
+    if (music_compact_) { fold_left_ = n_left - 1; fold_right_ = n_right - 1; }
+    const Left& L = lefts[fold_left_];
+    F.vol_w = L.vol_w; F.speed = L.speed; F.steps = steps;
+    auto kept = [&](int id) {
+      for (size_t k = 0; k < right_ids.size(); ++k) if (right_ids[k] == id) return (int)k >= fold_right_;
+      return false;
+    };
+    F.loop = kept(B_LOOP); F.queue = kept(B_QUEUE); F.audio = audio_btn && kept(B_AUDIO); F.cc = cc && kept(B_CC); F.mini = mini_btn && kept(B_MINI); F.shuffle = shuffle_btn && kept(B_SHUFFLE);
+  }
+  dock_step_ = mini_row ? 99 : fold_left_ + fold_right_ + (fold_steps_ ? 1 : 0);
+  if (music_compact_) DW = std::min(DW, std::max(need(n_left - 1, n_right - 1, true) + 40, 196.0));  // compact: just the controls' width
+  if (card_) {
+    // The card, in art px: the cover a square low on the left (three quarters of the height, the
+    // same air under it and beside it), and beside it one centred column: the title, the artist
+    // and the album's list at the top; the playback in the middle, the timeline with the time
+    // under it, the volume and "..." at its foot, level with the cover's bottom edge.
+    // (the cover starts under the window's top strip, where the back arrow and the window's
+    // buttons are, never against them)
+    const double pad = std::max(10.0, H * 0.075), top = kStrip + 4;
+    const double side = std::max(40.0, std::min({H * 0.75, H - pad - top, W * 0.40}));
+    const double cy = H - pad - side;
+    const double gap = std::max(16.0, side * 0.15), right = std::max(pad, side * 0.15);
+    const double bx = pad + side + gap, bw = std::max(100.0, W - bx - right);
+    card_cover_ = {(int)std::lround(pad * s_), (int)std::lround(cy * s_), (int)std::lround(side * s_), (int)std::lround(side * s_)};
+    card_col_ = {(int)std::lround(bx * s_), (int)std::lround(cy * s_), (int)std::lround(bw * s_), (int)std::lround(side * s_)};
+    // two groups, on the cover's own edges: the words from its top, the controls down to its
+    // foot (the volume and "..." level with its bottom edge, the timeline and the playback above
+    // them on one even step)
+    const double step = std::clamp(side * 0.17, 22.0, 34.0);
+    const double yb = cy + side - 5;
+    const double yl = yb - step, yt = yl - step;
+    card_dock_x_ = bx - kCardInset; card_dock_y_ = yt - 10;
+    // the album's list open: it takes the column down to the timeline, which comes up to the
+    // foot's row, and the playback steps into that row, between the volume and "..."
+    const bool list = panel_ == Panel::Queue;
+    const double ll = list ? yb - 18 : yl;
+    card_rows_[0] = 10 + ((list ? yb : yt) - yt); card_rows_[1] = 10 + (ll - yt); card_rows_[2] = 10 + (yb - yt);
+    card_list_bottom_ = (int)std::lround((ll - 10) * s_);
+    dh_ = (int)std::lround((yb - yt + 15) * s_);  // (to the cover's foot)
+    // the words: from the cover's top edge, as far as the playback leaves them
+    card_words_y_ = (int)std::lround((cy - 1) * s_);
+    card_words_h_ = (int)std::lround(std::max(20.0, yt - 18 - (cy - 1)) * s_);
+    DW = bw + 2 * kCardInset;
+  } else { card_cover_ = card_col_ = {}; }
+  if (mini_row) DW = std::max(120, W - 2 * kMiniSide);  // edge to edge, a little in from the window's sides
+  dw_ = (int)std::lround(DW * s_);
+  vol_folded_ = mini_ || F.vol_w == 0;  // the mini player's volume is its icon too
+  // what lives in "..." now (only buttons that exist for this file)
+  overflow_ = 0;
+  auto ovf = [&](int id, bool exists, bool shown) { if (exists && !shown) overflow_ |= 1u << id; };
+  ovf(B_SPEED, true, F.speed); ovf(B_LOOP, true, F.loop); ovf(B_QUEUE, true, F.queue);
+  ovf(B_AUDIO, audio_btn, F.audio); ovf(B_CC, cc, F.cc); ovf(B_MINI, mini_btn, F.mini); ovf(B_SHUFFLE, shuffle_btn, F.shuffle);
+  if (mini_ || music_compact_) { ovf(B_FS, true, false); }
+
+  hots_.clear();
+  std::array<bool, B_COUNT> seen{};
+  // anchors: 0 the left edge, 1 the centre, 2 the right edge (offsets in art px from it)
+  auto add = [&](int id, int anchor, double rel, double y, double ww, double hh, bool hit = true) {
+    double base = anchor == 0 ? 0 : anchor == 1 ? DW / 2 : DW;
+    if (hit) hots_.push_back({id, {(base + rel) * s_, y * s_, ww * s_, hh * s_}});
+    Slot& sl = slots_[id];
+    seen[id] = true;
+    const bool fresh = !sl.shown || !slots_ready_ || sl.anchor != anchor;
+    sl.anchor = anchor; sl.y = y; sl.h = hh; sl.shown = true;
+    sl.rel.target = rel; sl.wid.target = ww; sl.ys.target = y;
+    if (fresh && sl.vis.v <= 0) { sl.rel.snap(rel); sl.wid.snap(ww); sl.ys.snap(y); }
+    if (!slots_ready_) { sl.rel.snap(rel); sl.wid.snap(ww); sl.ys.snap(y); sl.vis.v = 1; }
+    sl.vis.target = 1;
+  };
+  const int y1 = 13, row_y = stack_ || card_ ? 20 : y1 - 8;  // stacked and the card: the timeline first, the buttons under it
+  if (mini_row) {
+    // the buttons: the volume on the left, the playback in the middle, "..." on the right; under
+    // them the timeline, the time on each side of it (back to full size: the arrow at the top-left)
+    const double by = 3;
+    add(B_VOL, 0, 10, by, 17, 16);
+    add(B_MORE, 2, -10 - slot, by, slot, 16);
+    if (layout_next_ && DW >= 4 * beat + 80) {
+      add(B_PREV, 1, -2 * beat - 8, by, 16, 16);
+      add(B_NEXT, 1, 2 * beat - 8, by, 16, 16);
+    }
+    add(B_REW, 1, -beat - 8, by, 16, 16);
+    add(B_PLAY, 1, -8, by, 17, 16);
+    add(B_FWD, 1, beat - 8, by, 16, 16);
+    const bool hours = in.dur >= 3600;
+    const int tw = text_w(hours ? "-0:00:00" : "-00:00", 1);
+    const int ty = kMiniRowH - 9;  // the timeline's line
+    double tx0 = 8, tx1 = DW - 8;
+    mini_times_ = tx1 - tx0 - 2 * (tw + 9) >= 60;
+    if (mini_times_) { mini_t0_ = 8; mini_t1_ = DW - 8 - tw; tx0 += tw + 9; tx1 -= tw + 9; }
+    tl_ = {(int)std::lround(tx0 * s_), ty * s_, (int)std::lround((tx1 - tx0) * s_), s_};
+    add(B_TIMELINE, 0, tx0 - 3, ty - 7, tx1 - tx0 + 6, 14);
+    if (mini_times_) add(B_TIME, 0, 4, ty - 7, tw + 8, 14);
+    dur_shown_ = false;
+    layout_hours_ = hours;
+    layout_audio_count_ = in.audios.size();
+  } else if (card_) {
+    // the card's column (see above): the playback, a little wider apart, the play button larger
+    const double I = kCardInset, b = 30;
+    const double r0 = card_rows_[0], r1 = card_rows_[1], r2 = card_rows_[2];  // the rows' middles
+    add(B_PREV, 1, -b - 8, r0 - 8, 16, 16);
+    add(B_PLAY, 1, -11, r0 - 10, 22, 20);
+    add(B_NEXT, 1, b - 8, r0 - 8, 16, 16);
+    // the timeline, the time where it ends (a click on it shows what is left)
+    const bool hours = in.dur >= 3600;
+    layout_hours_ = hours;
+    layout_audio_count_ = in.audios.size();
+    const int tw = text_w(hours ? "-0:00:00" : "-00:00", 1);
+    const double tx0 = I, tx1 = DW - I - tw - 10;
+    tl_ = {(int)std::lround(tx0 * s_), (int)std::lround(r1 * s_), (int)std::lround((tx1 - tx0) * s_), s_};
+    add(B_TIMELINE, 0, tx0 - 3, r1 - 7, tx1 - tx0 + 6, 14);
+    add(B_TIME, 0, DW - I - tw - 4, r1 - 7, tw + 8, 14);
+    card_time_x_ = DW - I;  // (its right end: the time ends where the column ends)
+    dur_shown_ = false;
+    // the volume's icon starts where the timeline starts; "..." ends where the time ends
+    const BitmapDef* vb = bmp("sound-on");
+    const BitmapDef* mb = bmp("more");
+    const double vw = vb ? vb->w : 9, mw = mb ? mb->w : 9;
+    add(B_VOL, 0, I - (17 - vw) / 2, r2 - 8, 17, 16);
+    add(B_MORE, 2, -I - (slot + mw) / 2, r2 - 8, slot, 16);
+  } else if (music_full_) {
+    // music's bar along the window's foot: the timeline across it, the time at each end; under
+    // it the sound on the left (volume, speed), the playback in the middle, the rest on the right
+    const double ty = 9, ry = 30, rb = 25;
+    bool hours = in.dur >= 3600;
+    layout_hours_ = hours;
+    layout_audio_count_ = in.audios.size();
+    int tw = text_w(hours ? "-0:00:00" : "-00:00", 1);
+    dur_shown_ = true;
+    const double tx0 = 8 + tw + 14, tx1 = DW - 8 - tw - 14;
+    tl_ = {(int)std::lround(tx0 * s_), (int)std::lround(ty * s_), (int)std::lround((tx1 - tx0) * s_), s_};
+    add(B_TIMELINE, 0, tx0 - 3, ty - 7, tx1 - tx0 + 6, 14);
+    add(B_TIME, 0, 4, ty - 7, tw + 8, 14);
+    hots_.push_back({B_TIME, {(int)std::lround((DW - tw - 12) * s_), (int)std::lround((ty - 7) * s_), (int)std::lround((tw + 8) * s_), 14 * (int)s_}});
+    add(B_VOL, 0, 5, ry, 17, 16);
+    double left_end = 22;
+    if (F.vol_w > 0) { const double vw = std::min(F.vol_w, 30); add(B_VOLBAR, 0, 24, ry, vw, 16); left_end = 24 + vw; }
+    if (F.speed) add(B_SPEED, 0, left_end + 10, ry, ssw, 16);
+    double c = -5 - slot / 2.0;
+    auto put = [&](int id) {
+      const double ww = slot + (id == B_QUEUE ? badge_w : 0);
+      add(id, 2, c + slot / 2.0 - ww, ry, ww, 16); c -= rb;
+    };
+    put(B_MORE); put(B_FS);
+    if (F.mini) put(B_MINI);
+    if (F.audio) put(B_AUDIO);
+    if (F.cc) put(B_CC);
+    if (F.loop) put(B_LOOP);
+    if (F.shuffle) put(B_SHUFFLE);
+    if (F.queue) put(B_QUEUE);
+    const double b = 36;
+    add(B_PREV, 1, -b - 8, ry, 16, 16);
+    add(B_PLAY, 1, -11, ry - 2, 22, 20);
+    add(B_NEXT, 1, b - 8, ry, 16, 16);
+  } else {
+    add(B_VOL, 0, 6, row_y, 17, 16);
+    double left_end = 23;
+    if (F.vol_w > 0) { add(B_VOLBAR, 0, 25, row_y, F.vol_w, 16); left_end = 25 + F.vol_w; }
+    if (F.speed) { add(B_SPEED, 0, left_end + 7, row_y, ssw, 16); left_end += 7 + ssw; }
+    // the right row, from "..." inwards, on one beat
+    double c = -5 - slot / 2.0;
+    auto put = [&](int id) {
+      const double ww = slot + (id == B_QUEUE ? badge_w : 0);
+      add(id, 2, c + slot / 2.0 - ww, row_y, ww, 16); c -= beat + (id == B_QUEUE ? badge_w : 0);
+    };
+    put(B_MORE); if (!music_compact_) put(B_FS);
+    if (F.mini) put(B_MINI);
+    if (F.audio) put(B_AUDIO);
+    if (F.cc) put(B_CC);
+    if (F.loop) put(B_LOOP);
+    if (F.shuffle) put(B_SHUFFLE);
+    if (F.queue) put(B_QUEUE);
+    // playback on the centre: previous · -15 · play · +15 · next (music: previous · play · next)
+    if (music || (layout_next_ && !F.steps)) {
+      add(B_PREV, 1, -beat - 8, row_y, 16, 16);
+      add(B_PLAY, 1, -8, row_y, 17, 16);
+      add(B_NEXT, 1, beat - 8, row_y, 16, 16);
+    } else {
+      const int ends = layout_next_ ? 2 : 1;
+      if (layout_next_) add(B_PREV, 1, -beat * ends - 8, row_y, 16, 16);
+      add(B_REW, 1, -beat - 8, row_y, 16, 16);
+      add(B_PLAY, 1, -8, row_y, 17, 16);
+      add(B_FWD, 1, beat - 8, row_y, 16, 16);
+      if (layout_next_) add(B_NEXT, 1, beat * ends - 8, row_y, 16, 16);
+    }
+    // timeline row; a short bar drops the duration and gives its room to the timeline
+    bool hours = in.dur >= 3600;
+    layout_hours_ = hours;
+    layout_audio_count_ = in.audios.size();
+    int tw = text_w(hours ? "-0:00:00" : "-00:00", 1);
+    const int timeline_y = stack_ || card_ ? 11 : 28;
+    double room = DW - 2 * (8 + tw + 7);
+    bool dur = room >= (dur_shown_ ? 80 : 80 + kHyst);
+    dur_shown_ = dur;
+    double tx0 = 8 + tw + 7, tx1 = dur ? DW - 8 - tw - 7 : DW - 8;
+    tl_ = {(int)std::lround(tx0 * s_), timeline_y * s_, (int)std::lround((tx1 - tx0) * s_), s_};
+    add(B_TIMELINE, 0, tx0 - 3, timeline_y - 7, tx1 - tx0 + 6, 14);
+    add(B_TIME, 0, 4, timeline_y - 7, tw + 8, 14);
+    if (dur) hots_.push_back({B_TIME, {(int)std::lround((DW - tw - 12) * s_), (timeline_y - 7) * s_, (tw + 8) * s_, 14 * s_}});
+  }
+  // what left the bar fades where it was (its slot keeps its last place while it goes)
+  for (int id = 0; id < B_COUNT; ++id)
+    if (!seen[id] && slots_[id].shown) { slots_[id].shown = false; slots_[id].vis.target = 0; if (!slots_ready_) slots_[id].vis.v = 0; }
+  slots_ready_ = true;
+  // nobody sees the bar: the next time it shows, everything is already in place
+  if (vis_.v <= 0)
+    for (auto& sl : slots_) { sl.rel.snap(sl.rel.target); sl.wid.snap(sl.wid.target); sl.ys.snap(sl.ys.target); sl.vis.v = sl.vis.target; }
+  // a menu whose button just left the bar re-anchors on "...", where the button went
+  if (panel_btn_ >= 0 && panel_btn_ < B_COUNT && panel_btn_ != B_NONE && !in_bar(panel_btn_) && panel_ != Panel::None) panel_btn_ = B_MORE;
+  if (focus_ != B_NONE && focus_ < B_COUNT && !in_bar(focus_)) focus_ = B_NONE;
+  if (hover_ != B_NONE && hover_ < B_COUNT && !in_bar(hover_)) hover_ = B_NONE;
+  if (vol_drag_ && !in_bar(B_VOLBAR)) vol_drag_ = false;
+  if (panel_ == Panel::Volume && !vol_folded_) close_panel();  // the line is back on the bar
+}
+
+// Where a button is drawn this frame: its anchor on the bar's current width plus its gliding
+// offset. Hit-testing never uses this (it uses the target places in hots_).
+Rect PlayView::slot_rect(int id) const {
+  if (id < 0 || id >= B_COUNT) return {};
+  const Slot& sl = slots_[id];
+  if (sl.vis.v <= 0 && !sl.shown) return {};
+  const double DW = dw_ / (double)s_;
+  double base = sl.anchor == 0 ? 0 : sl.anchor == 1 ? DW / 2 : DW;
+  return {(int)std::lround((base + sl.rel.x) * s_), (int)std::lround(sl.ys.x * s_), (int)std::lround(sl.wid.x * s_), (int)std::lround(sl.h * s_)};
+}
+
+double PlayView::slot_alpha(int id) const {
+  if (id < 0 || id >= B_COUNT) return 0;
+  return ease_out(std::clamp(slots_[id].vis.v, 0.0, 1.0));
+}
+
+bool PlayView::step_slots(double dt) {
+  bool moving = false;
+  for (auto& sl : slots_) {
+    bool m = sl.rel.step(dt) | sl.wid.step(dt) | sl.ys.step(dt) | sl.vis.step(dt);
+    moving |= m;
+  }
+  return moving;
 }
 
 void PlayView::anchor_pos(DockAnchor a, double& x, double& y) const {
   double m = kMargin * s_;
+  const double side = std::min(m, std::max(0.0, (w_ - dw_) / 2.0));  // a narrow window's bar keeps what side room there is
   switch (a) {
     case DockAnchor::TopCenter: x = (w_ - dw_) / 2.0; y = m; break;
-    case DockAnchor::BottomLeft: x = m; y = h_ - dh_ - std::max(m, h_ * 0.12); break;
-    case DockAnchor::BottomRight: x = w_ - dw_ - m; y = h_ - dh_ - std::max(m, h_ * 0.12); break;
+    case DockAnchor::BottomLeft: x = side; y = h_ - dh_ - std::max(m, h_ * 0.12); break;
+    case DockAnchor::BottomRight: x = w_ - dw_ - side; y = h_ - dh_ - std::max(m, h_ * 0.12); break;
     default: x = (w_ - dw_) / 2.0; y = h_ - dh_ - std::max(m, h_ * 0.12); break;
   }
 }
 
+// The stacked composition (music framed close): the bar right under the cover's words (or under
+// the cover, when there are none), centred on the cover, kept inside the window.
+double PlayView::stack_words_h() const {
+  if (!view().words_under()) return 0;
+  if (music_base_.h > 0) return music_base_.h;
+  const bool list = in.queue_active && in.queue.size() > 1;
+  return (list ? 80 : 54) * s_;  // before the words are first drawn: two-size title, artist, the list's line
+}
+double PlayView::music_stack_below() const {
+  const double words = stack_words_h();
+  return (words > 0 ? 14 * s_ + words + 18 * s_ : 20 * s_) + (stack_ ? dh_ : kDockH * s_) + 10 * s_;
+}
+double PlayView::music_stack_above() const { return kStrip * s_; }
+// Centre: the air between the cover and its words, and how much the words take under the cover
+double PlayView::centre_words_gap() const { return std::max(14 * s_, h_ * 0.05); }
+double PlayView::music_centre_below() const {
+  const double words = music_base_.h > 0 ? music_base_.h : 58 * s_;  // before they are first drawn: the title at twice the type, the artist
+  return centre_words_gap() + words;
+}
+// Centre with the album's list open beside the cover (the right half), when the half holds it
+bool PlayView::music_list_beside() const {
+  // (the frame the app chose, also before its first framing is made: a song picked in the open
+  // list is framed for the list beside it from its first picture)
+  return !card_ && panel_ == Panel::Queue && music_list_ok() && in.music_view.frame == MusicFrame::Centre && !list_over();
+}
+void PlayView::stack_place(double& x, double& y) const {
+  Rect cr = cover_screen_rect();
+  if (cr.w <= 0) { anchor_pos(DockAnchor::BottomCenter, x, y); return; }
+  const double words = stack_words_h();
+  x = cr.cx() - dw_ / 2.0;
+  y = cr.b() + (words > 0 ? 14 * s_ + words + 18 * s_ : 20 * s_);
+  const double m = 4 * s_;
+  x = std::clamp(x, m, std::max(m, w_ - dw_ - m));
+  y = std::clamp(y, m, std::max(m, h_ - dh_ - m));
+}
+
+// music's bar along the window's foot (or its top, if it was put there), centred
+void PlayView::music_full_place(double& x, double& y) const {
+  x = (w_ - dw_) / 2.0;
+  const double m = std::max(kMargin * s_, h_ * 0.075);
+  y = place.anchor == DockAnchor::TopCenter ? std::max(kMargin * s_, (double)chrome_room()) : h_ - dh_ - m;
+}
+
+// how far the bar can move sideways from the centre in this window
+double PlayView::side_room() const { return std::max(0.0, (w_ - dw_) / 2.0 - kMargin * s_); }
+
 void PlayView::place_target(double& x, double& y) const {
+  if (card_) {  // the card's controls: in the column beside the cover (see layout_dock)
+    x = std::round(card_dock_x_ * s_);
+    y = std::round(card_dock_y_ * s_);
+    return;
+  }
+  if (list_header_ && !card_) {
+    // between the bar's own place and the one under the list, as the list opens or closes
+    double bx, by;
+    if (stack_) stack_place(bx, by);
+    else if (music_full_) music_full_place(bx, by);
+    else anchor_pos(place.anchor == DockAnchor::Free ? DockAnchor::BottomCenter : place.anchor, bx, by);
+    const double k = list_mix();
+    x = std::round(lerp(bx, (w_ - dw_) / 2.0, k));
+    y = std::round(lerp(by, list_lay_.bar_y, k));
+    return;
+  }
+  if (stack_) { stack_place(x, y); x = std::round(x); y = std::round(y); return; }
+  if (music_full_) { music_full_place(x, y); x = std::round(x); y = std::round(y); return; }
+  // the mini player's bar lies along the bottom edge, whatever place the full bar was given
+  if (mini_) { x = std::round((w_ - dw_) / 2.0); y = std::round(h_ - dh_ - kMiniFoot * s_); return; }
   if (place.anchor != DockAnchor::Free) { anchor_pos(place.anchor, x, y); }
   else {
     double m = kMargin * s_;
-    x = m + place.fx * std::max(0.0, w_ - dw_ - 2 * m);
+    const double mx = std::min(m, std::max(0.0, (w_ - dw_) / 2.0));  // a narrow window: what side room there is
+    x = mx + place.fx * std::max(0.0, w_ - dw_ - 2 * mx);
     y = m + place.fy * std::max(0.0, h_ - dh_ - 2 * m);
   }
   x = std::round(x);
@@ -256,6 +637,12 @@ double PlayView::time_at(int x) const {
 
 // ── render: dock ────────────────────────────────────────────────────
 void PlayView::render_dock() {
+  // the card (a song's mini player) has no bar of its own: its controls sit on the card, drawn
+  // like the bar without background (white, with their soft shadow over the light)
+  struct Hold { double& r; double v; ~Hold() { r = v; } } hold{style_mix_, style_mix_};
+  // (the film's mini player too: small, over the picture, its buttons are always free of a bar;
+  // the person's choice comes back with the full player)
+  if (card_ || mini_row_) style_mix_ = 1;
   Palette p = P();
   const double ink_white = style_mix_;
   p.dim = mix(p.dim, {255,255,255}, ink_white);
@@ -267,21 +654,20 @@ void PlayView::render_dock() {
   // the film tints the whole toolbar a little: its glass, its edge, what is active
   double ak = std::clamp(in.accent_k, 0.0, 1.0) * (1 - ink_white);
   double s = s_;
-  const double secondary = compact_ ? lerp(.8, 1., style_mix_) : 1.;
+  const double secondary = 1.;
   // every button fades its hover in and out (Omni: 110 ms ease-out), nothing snaps
   auto hv = [&](int id) {
     double h = ease_out(hov_[id]);
     if ((id == B_CC || id == B_AUDIO || id == B_MORE) && panel_btn_ == id) h = 1.0;
     return h;
   };
-  auto rect_of = [&](int id) {
-    for (auto& hb : hots_) if (hb.id == id) return hb.r;
-    return Rect{};
-  };
+  // where each button is drawn this frame (it glides and fades when the bar re-folds)
+  auto rect_of = [&](int id) { return slot_rect(id); };
+  auto al = [&](int id) { return slot_alpha(id); };
   auto bg = [&](int id, double h) {
     if (h <= 0 || style_mix_ >= 1) return;
     Rect r = rect_of(id).inset(s);
-    c.cornered(r, s, mix(p.hover, in.accent, 0.22 * std::clamp(in.accent_k, 0.0, 1.0)), h * (1-style_mix_));
+    c.cornered(r, s, mix(p.hover, in.accent, 0.22 * std::clamp(in.accent_k, 0.0, 1.0)), h * (1-style_mix_) * al(id));
   };
   // magnetic hover: the glyph leans a pixel or two toward the cursor; the hitbox never moves
   auto lean = [&](int id, int& x, int& y) {
@@ -292,7 +678,7 @@ void PlayView::render_dock() {
     const BitmapDef* b = bmp(name);
     if (!b) return;
     Rect r = rect_of(id);
-    if (r.w == 0) return;
+    if (r.w == 0 || al(id) <= 0) return;
     double h = hv(id);
     bg(id, h);
     double cell = std::string_view(name).starts_with("cue:") ? s / 2 : s;
@@ -300,7 +686,7 @@ void PlayView::render_dock() {
     lean(id, x, y);
     // hovered glyphs warm toward the film's colour, at rest they stay neutral
     Rgb hot = mix(p.fg, in.accent, 0.35 * ak);
-    c.bitmap(b, x, y, cell, mix(use_rest ? rest : p.dim, hot, h), 1.0);
+    c.bitmap(b, x, y, cell, mix(use_rest ? rest : p.dim, hot, h), al(id));
   };
   // the film's atmosphere, kept subtle: only what shows progress and activity takes it
   Rgb acc = mix(p.fg, in.accent, std::clamp(in.accent_k, 0.0, 1.0) * .85 * (1-style_mix_));
@@ -308,29 +694,45 @@ void PlayView::render_dock() {
 
   bool muted = in.muted || in.volume <= 0;
   icon(B_VOL, muted ? "sound-off" : "sound-on");
-  {
-    Rect r = rect_of(B_VOLBAR);
+  if (Rect r = rect_of(B_VOLBAR); r.w > 6 * s && al(B_VOLBAR) > 0) {
+    const double va = al(B_VOLBAR);
     int bx = r.x + 2 * s, bw = r.w - 4 * s, by = r.cy() / s * s - s;
-    c.fill(bx, by, bw, 2 * s, p.faint, lerp(1., .28, ink_white));
+    c.fill(bx, by, bw, 2 * s, p.faint, lerp(1., .28, ink_white) * va);
     double v = muted ? 0 : std::clamp(in.volume / kVolMax, 0.0, 1.0);
     int fw = (int)std::lround(bw * v / s) * s;
     int f100 = (int)std::lround(bw * 100 / kVolMax / s) * s;  // where the natural level ends
     double h = vol_drag_ ? 1.0 : std::max(hv(B_VOLBAR), hv(B_VOL));
     Rgb fillc = mix(mix(p.dim, acc, 0.5), acc, h);
-    c.fill(bx, by, std::min(fw, f100), 2 * s, fillc, 1.0);
+    c.fill(bx, by, std::min(fw, f100), 2 * s, fillc, va);
     // the booster stretch: past 100% the line turns warm, so you always see you are pushing it
     Rgb boost = mix(Rgb{255, 170, 90}, in.accent, 0.25 * std::clamp(in.accent_k, 0.0, 1.0));
-    if (fw > f100) c.fill(bx + f100, by, fw - f100, 2 * s, mix(mix(p.dim, boost, 0.6), boost, h), 1.0);
+    if (fw > f100) c.fill(bx + f100, by, fw - f100, 2 * s, mix(mix(p.dim, boost, 0.6), boost, h), va);
     // a small notch marks 100%, a point the handle sticks to
-    c.fill(bx + f100, by - s, s, s, fw > f100 ? boost : p.faint, (fw > f100 ? 0.9 : 0.6 + 0.4 * h));
+    c.fill(bx + f100, by - s, s, s, fw > f100 ? boost : p.faint, (fw > f100 ? 0.9 : 0.6 + 0.4 * h) * va);
     int handle_h = (7 + (int)std::lround(2 * h)) * s;
     c.fill(bx + fw - s, r.cy() - handle_h / 2, 2 * s, handle_h,
-           fw > f100 ? mix(acc_px, boost, 0.7) : mix(p.dim, acc_px, 0.65 + 0.35 * h));
+           fw > f100 ? mix(acc_px, boost, 0.7) : mix(p.dim, acc_px, 0.65 + 0.35 * h), va);
   }
   {
     // an active queue takes the film's colour, like subtitles that are on
     double k = queue_mark_.v > 0 ? ease_out(queue_mark_.v) : 0.0;
-    icon(B_QUEUE, "queue", mix(p.dim, acc, k), true);
+    Rect r = rect_of(B_QUEUE);
+    const BitmapDef* qb = bmp("queue");
+    if (layout_badge_ > 0 && qb && r.w > 0 && al(B_QUEUE) > 0) {
+      // music: the icon and how many songs the list holds, as one group in the middle of its slot
+      // (the number's capitals level with the icon, top to bottom)
+      const std::string num = queue_badge_text(in.queue.size());
+      const int gw = qb->w + kBadgeGap + queue_badge_w(num);
+      const double h = hv(B_QUEUE);
+      bg(B_QUEUE, h);
+      int x = (int)std::lround(r.x + (r.w - gw * s) / 2), y = (r.y + (r.h - qb->h * s) / 2) / s * s;
+      lean(B_QUEUE, x, y);
+      const Rgb ink = mix(mix(p.dim, acc, k), mix(p.fg, in.accent, 0.35 * ak), h);
+      c.bitmap(qb, x, y, s, ink, al(B_QUEUE));
+      // (whole pixels from the icon's own grid at half-step scales too)
+      const int tx = x + (int)std::lround((qb->w + kBadgeGap) * s);
+      text(c, num, tx, y - (int)std::lround(kCapTop * s), s, mix(ink, p.bg, 0.25), al(B_QUEUE));
+    } else icon(B_QUEUE, "queue", mix(p.dim, acc, k), true);
   }
   icon(B_REW, "rewind");
   icon(B_FWD, "forward");
@@ -340,8 +742,8 @@ void PlayView::render_dock() {
     const char* name = id == B_PREV ? "prev-file" : "next-file";
     if (live) { icon(id, name); continue; }
     Rect r = rect_of(id); const BitmapDef* b = bmp(name);
-    if (r.w == 0 || !b) continue;
-    c.bitmap(b, (int)((r.x + (r.w - b->w * s) / 2) / s) * s, (r.y + (r.h - b->h * s) / 2) / s * s, s, p.faint, 0.6);
+    if (r.w == 0 || !b || al(id) <= 0) continue;
+    c.bitmap(b, (int)((r.x + (r.w - b->w * s) / 2) / s) * s, (r.y + (r.h - b->h * s) / 2) / s * s, s, p.faint, 0.6 * al(id));
   }
   {
     // repeat: lit and underlined by a pixel while it is on; repeating just this one adds a
@@ -350,20 +752,31 @@ void PlayView::render_dock() {
     const bool on = in.loop || (in.loop_all && list);
     icon(B_LOOP, "loop", on ? acc : p.dim, true);
     Rect r = rect_of(B_LOOP);
-    if (on && r.w > 0) {
+    if (on && r.w > 0 && al(B_LOOP) > 0) {
       int dx = (int)((r.x + r.w / 2) / s) * s + (int)std::lround(magx_[B_LOOP].x);
       int dy = (int)((r.y + (r.h + 7 * s) / 2) / s) * s + 2 * s + (int)std::lround(magy_[B_LOOP].x);
-      c.fill(dx, dy, s, s, acc, 1.0);
+      c.fill(dx, dy, s, s, acc, al(B_LOOP));
       if (in.loop && list)
         if (const BitmapDef* one = bmp("loop-one"))
-          c.bitmap(one, dx + 5 * s, (int)((r.y + (r.h - 7 * s) / 2) / s) * s - 2 * s + (int)std::lround(magy_[B_LOOP].x), s, acc);
+          c.bitmap(one, dx + 5 * s, (int)((r.y + (r.h - 7 * s) / 2) / s) * s - 2 * s + (int)std::lround(magy_[B_LOOP].x), s, acc, al(B_LOOP));
+    }
+  }
+  {
+    // shuffle: lit and underlined by a pixel while it is on, like repeat
+    icon(B_SHUFFLE, "shuffle", in.shuffle ? acc : p.dim, true);
+    Rect r = rect_of(B_SHUFFLE);
+    if (in.shuffle && r.w > 0 && al(B_SHUFFLE) > 0) {
+      int dx = (int)((r.x + r.w / 2) / s) * s + (int)std::lround(magx_[B_SHUFFLE].x);
+      int dy = (int)((r.y + (r.h + 7 * s) / 2) / s) * s + 2 * s + (int)std::lround(magy_[B_SHUFFLE].x);
+      c.fill(dx, dy, s, s, acc, al(B_SHUFFLE));
     }
   }
   {
     Rect r = rect_of(B_PLAY);
     double h = hv(B_PLAY);
     bg(B_PLAY, h);
-    double play_cell = (1 + 0.25 * style_mix_) * s;
+    // (the card and music's bar along the foot: the play button is the largest of all)
+    double play_cell = (card_ || music_full_ ? 1.6 : 1 + 0.25 * style_mix_) * s;
     int x = (int)std::lround(r.x + (r.w - 7 * play_cell) / 2), y = (int)std::lround(r.y + (r.h - 7 * play_cell) / 2);
     lean(B_PLAY, x, y);
     draw_playpause(c, x, y, play_cell, morph_.x, mix(p.fg, p.pixel, h), 1.0);
@@ -373,6 +786,8 @@ void PlayView::render_dock() {
   
   if (in.audios.size() > 1) icon(B_AUDIO, "k-audio");
   icon(B_FS, in.fullscreen ? "fs-exit" : "fs-enter");
+  icon(B_MINI, "mini");
+  icon(B_EXPAND, "expand");  // the mini player: back to full size
   {
     Rect r = rect_of(B_MORE);
     double h = hv(B_MORE);
@@ -381,7 +796,7 @@ void PlayView::render_dock() {
     int dx = style_animating_ ? (int)std::lround(r.x + (r.w - dots->w * s) / 2) : (int)((r.x + (r.w - dots->w * s) / 2) / s) * s;
     int dy = (r.y + (r.h - dots->h * s) / 2) / s * s;
     lean(B_MORE, dx, dy);
-    c.bitmap(dots, dx, dy, s, mix(p.dim, p.fg, h), secondary);
+    c.bitmap(dots, dx, dy, s, mix(p.dim, p.fg, h), secondary * al(B_MORE));
   }
 
   // time · timeline · duration
@@ -390,11 +805,17 @@ void PlayView::render_dock() {
   std::string ts = remaining_ ? "-" + fmt_time(std::max(0.0, in.dur - t), hours) : fmt_time(t, hours), ds = fmt_time(in.dur, hours);
   shown_time_ = ts;
   int ty = tl_.y - 6 * s;
-  text(c, ts, 8 * s, ty, s, p.dim);
-  text(c, ds, dw_ - 8 * s - text_w(ds, s), ty, s, p.dim);
+  if (card_) text(c, ts, (int)std::lround(card_time_x_ * s) - text_w(ts, s), ty, s, p.dim);  // the card: the time where its timeline ends
+  else if (!mini_ || stack_) text(c, ts, 8 * s, ty, s, p.dim);
+  if ((!mini_ || stack_) && !card_ && dur_shown_) text(c, ds, dw_ - 8 * s - text_w(ds, s), ty, s, p.dim);
+  if (mini_ && !stack_ && !card_ && mini_times_) {  // the film's mini player: on each side of its timeline
+    const int my = tl_.y - 6 * s;
+    text(c, ts, (int)std::lround(mini_t0_ * s), my, s, p.dim);
+    text(c, ds, (int)std::lround(mini_t1_ * s), my, s, p.dim);
+  }
   {
     Rect sr = rect_of(B_SPEED);
-    if (sr.w > 0) {
+    if (sr.w > 0 && al(B_SPEED) > 0) {
       double h = hv(B_SPEED);
       bg(B_SPEED, h);
       bool other = std::fabs(in.speed - 1.0) > 0.01;  // not 1x: a touch brighter, so it is noticed
@@ -403,10 +824,9 @@ void PlayView::render_dock() {
       int nw = text_w(num, s);
       int lx = sr.x + (sr.w - nw - 4 * s) / 2 / s * s + (int)std::lround(magx_[B_SPEED].x);
       int ly = sr.y + (sr.h - 12 * s) / 2 / s * s;
-      if (compact_) lx = sr.r() - 3 * s - nw - 4 * s;
       Rgb col = mix(other ? acc : p.dim, acc, h);
-      text(c, num, lx, ly, s, col, secondary);
-      c.cells("#.#.#.#.#", 3, 3, lx + nw + s, ly + 4 * s, s, col, secondary);
+      text(c, num, lx, ly, s, col, secondary * al(B_SPEED));
+      c.cells("#.#.#.#.#", 3, 3, lx + nw + s, ly + 4 * s, s, col, secondary * al(B_SPEED));
     }
   }
   double f = in.dur > 0 ? clamp01(t / in.dur) : 0;
@@ -462,7 +882,7 @@ void PlayView::render_dock() {
 
 // ── panel ───────────────────────────────────────────────────────────
 bool PlayView::selectable(const Row& r) const {
-  return r.k != RK::Hint && r.k != RK::Separator && r.k != RK::Brand && r.k != RK::Credit && r.k != RK::Info && r.k != RK::Keys;
+  return r.k != RK::Hint && r.k != RK::Separator && r.k != RK::Brand && r.k != RK::Credit && r.k != RK::Info && r.k != RK::Keys && r.k != RK::Preview;
 }
 
 void PlayView::set_speed(double v) {
@@ -494,7 +914,7 @@ void PlayView::build_rows() {
         const auto& t=in.subs[i];
         Row* r = R(RK::Option, R_SUB_TRACK, std::move(labels[i]));
         r->track = t.id;
-        r->checked = in.sid == t.id;
+        r->checked = in.sub_selection.shown(in.sid) == t.id;
         r->enabled = on;
       }
     }
@@ -513,6 +933,32 @@ void PlayView::build_rows() {
       d->right = fmt_delay(in.sub_delay);
       d->icon = "clock";
     }
+  } else if (panel_ == Panel::SubMini) {
+    // The film's mini player: no long list over a small picture. On or off, which track (one
+    // at a time, by its arrows), how big; the style and the sync stay in the full player.
+    if (in.subs.empty()) {
+      R(RK::Hint, R_NONE, tr(str::cc_none));
+      R(RK::Action, R_ADD_SUB, tr(str::cc_load))->icon = "cue:open-file";
+    } else {
+      const bool on = in.sid != 0 && in.sub_visible;
+      R(RK::Toggle, R_SUB_TOGGLE, tr(str::cc_toggle))->checked = on;
+      auto labels = track_labels(in.subs);
+      Row* pick = R(RK::Picker, R_SUB_PICK);
+      size_t cur = 0;
+      const int64_t shown = in.sub_selection.shown(in.sid);
+      for (size_t i = 0; i < in.subs.size(); ++i) if (in.subs[i].id == shown) cur = i;
+      pick->label = labels[cur];
+      pick->track = in.subs[cur].id;
+      pick->enabled = on && in.subs.size() > 1;
+      pick->value = (double)in.subs.size();
+      R(RK::Hint, R_NONE, tr(str::cc_mini_size));
+      Row* sz = R(RK::Segmented, R_SUB_SIZE);
+      sz->segs = {tr(str::cc_size_normal), tr(str::cc_size_big), tr(str::cc_size_huge)};
+      sz->seg = std::clamp(in.mini_sub_size, 0, 2);
+      sz->enabled = on;
+      R(RK::Separator, R_NONE);
+      R(RK::Hint, R_NONE, tr(str::cc_mini_more));
+    }
   } else if (panel_ == Panel::Style) {
     R(RK::Header, R_BACK, tr(str::style_title));
     StyleCaps caps = style_caps(in.style, in.kind);
@@ -521,34 +967,39 @@ void PlayView::build_rows() {
       r->segs = {tr(str::style_original), tr(str::style_mine)};
       r->seg = in.style.ass_mode;
     }
+    // three groups: the typeface; its size and spacing; its ink and what is behind it. Every
+    // slider has a notch where Cue's own setting is (the handle sticks to it)
+    const SubStyle home;
     if (caps.font) {
       Row* r = R(RK::Fonts, R_FONTS);
       r->seg = in.style.font;
     }
+    if (caps.font && (caps.size || caps.opacity)) R(RK::Separator, R_NONE);
     if (caps.size) {
       Row* r = R(RK::Slider, R_SIZE, tr(str::style_size));
-      r->value = in.style.size; r->minv = 28; r->maxv = 72;
+      r->value = in.style.size; r->minv = 28; r->maxv = 72; r->mark = home.size;
       r->right = std::to_string(in.style.size);
     }
     if (caps.size) {
       // typography: space between lines, and between letters
       Row* g = R(RK::Slider, R_LINEGAP, tr(str::style_line_gap));
-      g->value = in.style.line_gap; g->minv = kLineGapMin; g->maxv = kLineGapMax;
+      g->value = in.style.line_gap; g->minv = kLineGapMin; g->maxv = kLineGapMax; g->mark = 0;
       g->right = in.style.line_gap > 0 ? "+" + std::to_string(in.style.line_gap) : std::to_string(in.style.line_gap);
       g = R(RK::Slider, R_TRACK, tr(str::style_kerning));
-      g->value = in.style.tracking; g->minv = -3; g->maxv = 10;
+      g->value = in.style.tracking; g->minv = -3; g->maxv = 10; g->mark = 0;
       g->right = in.style.tracking > 0 ? "+" + std::to_string(in.style.tracking) : std::to_string(in.style.tracking);
     }
+    if (caps.size && caps.opacity) R(RK::Separator, R_NONE);
     if (caps.opacity) {
       Row* r = R(RK::Slider, R_TEXT, tr(str::style_text));
-      r->value = in.style.text_op; r->minv = 10; r->maxv = 100;
+      r->value = in.style.text_op; r->minv = 10; r->maxv = 100; r->mark = home.text_op;
       r->right = std::to_string(in.style.text_op) + "%";
       r = R(RK::Slider, R_BG, tr(str::style_background));
-      r->value = in.style.bg_op; r->minv = 0; r->maxv = 100;
+      r->value = in.style.bg_op; r->minv = 0; r->maxv = 100; r->mark = home.bg_op;
       r->right = std::to_string(in.style.bg_op) + "%";
       // the outline lives on transparent backgrounds; with a box it has nothing to draw
       r = R(RK::Slider, R_OUTLINE, tr(str::style_outline));
-      r->value = in.style.outline; r->minv = 0; r->maxv = 6;
+      r->value = in.style.outline; r->minv = 0; r->maxv = 6; r->mark = home.outline;
       r->enabled = in.style.bg_op == 0;
       r->right = !r->enabled ? "-" : (in.style.outline == 0 ? std::string(tr(str::style_outline_none)) : std::to_string(in.style.outline));
     }
@@ -589,25 +1040,116 @@ void PlayView::build_rows() {
     Row* all = R(RK::Option, R_AUDIO_MIX_ALL, tr(str::audio_mix_all));
     all->checked = in.amix && in.amix_ids.size() == in.audios.size();
     all->icon = all->checked ? "box-on" : "box-off";
+  } else if (panel_ == Panel::Volume) {
+    // the volume folded into its icon: a click opens it here, right above the icon
+    // a column that grows upward from the icon: the level on top, the line under it
+    bool muted = in.muted || in.volume <= 0;
+    Row* v = R(RK::VSlider, R_VOLUME, tr(str::tip_volume));
+    v->value = (int)std::lround(muted ? 0 : in.volume); v->minv = 0; v->maxv = (int)kVolMax;
+    v->right = std::to_string((int)std::lround(muted ? 0 : in.volume)) + "%";
   } else if (panel_ == Panel::More) {
+    // what the bar handed over when it folded (or the mini player's whole bar): first, with
+    // its state, so nothing that left the bar is ever more than one click away
+    bool handed = false;
 
+    // the rest of the bar continues here as one row of its own icons, in the bar's order
+    tool_ids_.clear();
+    for (int id : {B_QUEUE, B_SHUFFLE, B_LOOP, B_CC, B_AUDIO, B_SPEED, B_MINI, B_FS})
+      // full screen: from the full player only; up next: not in a film's mini player (a quick look
+      // at the film, not a list to manage; a song's card has its list in itself)
+      if (overflowed(id) && !(id == B_FS && in.mini_player) && !(id == B_QUEUE && film_mini())) tool_ids_.push_back(id);
+    if (!tool_ids_.empty()) {
+      Row* t = R(RK::Tools, R_TOOLS);
+      for (int id : tool_ids_) {
+        const bool list = in.queue_active && in.queue.size() > 1;
+        t->segs.push_back(tr(id == B_QUEUE ? str::queue_title : id == B_LOOP ? (in.loop && list ? str::tip_loop_one : in.loop_all && list ? str::tip_loop_all : in.loop ? str::tip_loop_on : str::tip_loop)
+                             : id == B_CC ? str::tip_subtitles : id == B_AUDIO ? str::tip_audio : id == B_MINI ? str::more_mini_player : id == B_SHUFFLE ? (in.shuffle ? str::tip_shuffle_on : str::tip_shuffle) : id == B_FS ? (in.fullscreen ? str::tip_exit_fullscreen : str::tip_fullscreen) : str::speed_title));
+      }
+      handed = true;
+    }
+    if (handed) R(RK::Separator, R_NONE);
+    if (mini_) {
+      // the mini player's menu stays short: what a small picture needs; the rest of "..." is
+      // back as soon as the window is the full player again
+      // back to full size: the arrow in the window's corner, and here too, by name
+      R(RK::Action, R_MINI, tr(str::more_mini_exit))->icon = "expand";
+      R(RK::Action, R_CLOSE, tr(in.audio_only ? str::more_close_audio : str::more_close_video))->icon = "cue:close-video";
+      return;
+    }
+
+    // the file, then places to go; Settings last (everything Cue keeps between files, the light
+    // and about Cue included, each choice shown at work there)
     Row* open = R(RK::Action, R_OPEN, tr(str::more_open));
     open->right = in.open_shortcut; open->icon = "cue:open-file";
     R(RK::Action, R_CLOSE, tr(in.audio_only ? str::more_close_audio : str::more_close_video))->icon = "cue:close-video";
     R(RK::Separator, R_NONE);
-    if (!in.audio_only && in.ambient_available) {
+    if (in.update_ready && !in.update_label.empty()) R(RK::Action, R_UPDATE, in.update_label)->icon = "cue:open-file";
+    if (in.remote_available) R(RK::Submenu, R_REMOTE, tr(str::remote_title))->icon = "phone";
+    R(RK::Submenu, R_SETTINGS, tr(str::settings_title))->icon = "gear";
+  } else if (panel_ == Panel::Settings) {
+    // what is playing decides the first group: music's looks (the cover and its spectrum, colour,
+    // the tilt), or the film's smoothing; the light, the interface and the rest are for both
+    // its own small button: each setting shown at work (a picture and a line), or the settings
+    // alone (the default: a short menu)
+    R(RK::Header, R_BACK_MORE, tr(str::settings_title))->icon = "cue:info";
+    if (in.settings_examples && !settings_compact_) { R(RK::Preview, R_PREVIEW); R(RK::Separator, R_NONE); }
+    const bool music = in.audio_only;
+    if (music) {
+      Row* look = R(RK::Segmented, R_MUSIC_LOOK);
+      look->segs = {tr(str::music_cover), tr(str::music_spectrum), tr(str::music_still)};
+      look->seg_icons = {"look-both", "look-bars", "look-cover"};
+      look->icons_only = true;  // icons at the end; the row says which one is on (or pointed at)
+      look->seg = in.music_look;
+      look->enabled = in.cover_scene;
+      look->icon = "look-both";
+      Row* tone = R(RK::Segmented, R_MUSIC_COLOR);
+      tone->segs = {tr(str::music_color), tr(str::music_mono)};
+      tone->seg_icons = {"look-color", "look-mono"};
+      tone->icons_only = true;
+      tone->seg = in.music_mono ? 1 : 0;
+      tone->enabled = in.cover_scene && in.music_look != 2;  // the cover alone has no spectrum or light to colour
+      tone->icon = "look-color";
+      Row* tilt = R(RK::Toggle, R_COVER_TILT, tr(str::music_tilt));
+      tilt->checked = in.cover_tilt; tilt->icon = "look-cover";
+      tilt->enabled = in.cover_scene && in.music_look != 1;  // the spectrum alone has no cover to tilt
+      R(RK::Separator, R_NONE);
+    }
+    // (music: its room's light is part of the look, always on but for the cover alone: no switch)
+    if (in.ambient_available && !music) {
       Row* amb = R(RK::Toggle, R_AMBIENT, tr(str::more_ambient));
       amb->checked = in.ambient; amb->icon = "sun";
-      // its strength; always present so the panel never jumps, usable when the light is on
+      // its strength: always present so the panel never jumps, usable when the light is on
       Row* g = R(RK::Slider, R_AMBIENT_STR, tr(str::more_ambient_strength));
       g->value = std::lround(in.ambient_strength * 100);
       g->minv = 5; g->maxv = 100;
       g->right = std::to_string((int)std::lround(in.ambient_strength * 100)) + "%";
       g->enabled = in.ambient;
     }
-    // four groups: the file · the light · how Cue looks · places to go (every › together)
-    if (!in.audio_only && in.ambient_available) R(RK::Separator, R_NONE);
-    // each section name carries its icon, so every group starts on the icon column
+    if (!music) {
+      // kept for every film; it acts only where the film's rhythm and the screen's differ
+      Row* sm = R(RK::Toggle, R_SMOOTH, tr(str::more_smooth_motion));
+      sm->checked = in.smooth_motion; sm->icon = "smooth";
+    }
+    if (!music) R(RK::Separator, R_NONE);
+    if (settings_fold_) {
+      R(RK::Submenu, R_INTERFACE, tr(str::more_interface))->icon = "ui-size";
+    } else {
+      R(RK::Hint, R_NONE, tr(str::more_interface))->icon = "ui-size";
+      Row* u = R(RK::Segmented, R_UISCALE);
+      u->segs = {tr(str::size_small), tr(str::size_medium), tr(str::size_large), tr(str::size_larger)};
+      u->seg = ui_size_index(in.ui_scale);
+      R(RK::Hint, R_NONE, tr(str::more_controls_bg))->icon = "dock-bg";
+      Row* appearance = R(RK::Segmented, R_CONTROLS_FREE);
+      appearance->segs = {tr(str::more_with_bg), tr(str::more_without_bg)};
+      appearance->seg = in.controls_free ? 1 : 0;
+    }
+    R(RK::Separator, R_NONE);
+    Row* lang = R(RK::Submenu, R_LANGUAGE, tr(str::more_language));
+    lang->icon = "globe";
+    lang->right = i18n::native_name(in.language < 0 ? i18n::language() : (i18n::Lang)in.language);  // the one in use, in itself
+    R(RK::Submenu, R_ABOUT, tr(str::more_about))->icon = "cue:about-cue";
+  } else if (panel_ == Panel::Interface) {
+    R(RK::Header, R_BACK_SETTINGS, tr(str::more_interface));
     R(RK::Hint, R_NONE, tr(str::more_interface))->icon = "ui-size";
     Row* u = R(RK::Segmented, R_UISCALE);
     u->segs = {tr(str::size_small), tr(str::size_medium), tr(str::size_large), tr(str::size_larger)};
@@ -616,16 +1158,11 @@ void PlayView::build_rows() {
     Row* appearance = R(RK::Segmented, R_CONTROLS_FREE);
     appearance->segs = {tr(str::more_with_bg), tr(str::more_without_bg)};
     appearance->seg = in.controls_free ? 1 : 0;
-    R(RK::Separator, R_NONE);
-    if (in.update_ready && !in.update_label.empty()) R(RK::Action, R_UPDATE, in.update_label)->icon = "cue:open-file";
-    R(RK::Submenu, R_LANGUAGE, tr(str::more_language))->icon = "globe";
-    if (in.remote_available) R(RK::Submenu, R_REMOTE, tr(str::remote_title))->icon = "phone";
-    R(RK::Submenu, R_ABOUT, tr(str::more_about))->icon = "cue:about-cue";
   } else if (panel_ == Panel::Queue) {
     queue_view_.sync(in.queue,in.queue_revision);
   } else if (panel_ == Panel::Language) {
     // each language is written in itself, so a wrong pick is easy to undo
-    R(RK::Header, R_BACK_MORE, tr(str::language_title));
+    R(RK::Header, lang_from_settings_ ? R_BACK_SETTINGS : R_BACK_MORE, tr(str::language_title));
     Row* a = R(RK::Option, R_LANG_OPT, tr(str::language_auto));
     a->opt = -1;
     a->checked = in.language < 0;
@@ -635,7 +1172,7 @@ void PlayView::build_rows() {
       r->checked = in.language == i;
     }
   } else if (panel_ == Panel::About) {
-    R(RK::Header, R_BACK_MORE, tr(str::more_about));
+    R(RK::Header, R_BACK_SETTINGS, tr(str::more_about));  // (About lives in Settings)
     R(RK::Brand, R_NONE);
     R(RK::Credit, R_NONE);
     R(RK::Profile, R_LINKEDIN, "Gabriel Benzoni")->checked = true;  // the name itself: brighter
@@ -657,36 +1194,20 @@ void PlayView::build_rows() {
       if (std::fabs(in.speed - kSpeedChips[i]) < 0.01) ch->seg = i;
     }
   } else if (panel_ == Panel::Context) {
+    // three groups: the file (what it is, a still of it), where it goes next (up next, the mini
+    // player), and closing it last, apart. Music's looks live in Settings, with their pictures
     R(RK::Action, R_FILE_INFO, tr(str::ctx_file_info))->icon = "cue:info";
+    if (!in.audio_only) R(RK::Action, R_FRAME, tr(str::ctx_save_frame))->icon = "cue:save-frame";  // the picture only, never the subtitle or the UI
     R(RK::Separator, R_NONE);
-    if (in.audio_only && in.cover_scene) {
-      // music: the picture is a choice (a song without a cover wears Cue's tile), so it lives
-      // where the picture's menu is
-      Row* look = R(RK::Segmented, R_MUSIC_LOOK);
-      look->segs = {tr(str::music_cover), tr(str::music_spectrum), tr(str::music_still)};
-      look->seg_icons = {"look-both", "look-bars", "look-cover"};
-      look->icons_only = true;  // two icons at the end; the row says which one is on (or pointed at)
-      look->seg = in.music_look;
-      // and in colour (the default) or black and white: the spectrum and its light (the cover
-      // alone has neither, so it has no such row)
-      Row* tone = in.music_look == 2 ? nullptr : R(RK::Segmented, R_MUSIC_COLOR);
-      if (tone) {
-      tone->segs = {tr(str::music_color), tr(str::music_mono)};
-      tone->seg_icons = {"look-color", "look-mono"};
-      tone->icons_only = true;
-      tone->seg = in.music_mono ? 1 : 0;
-      }
-      // the cover leaning under the pointer: on by default, off for a cover that stays still
-      if (in.music_look != 1) R(RK::Toggle, R_COVER_TILT, tr(str::music_tilt))->checked = in.cover_tilt;
-      R(RK::Separator, R_NONE);
-    }
-    if (!in.audio_only) {
-      R(RK::Action, R_FRAME, tr(str::ctx_save_frame))->icon = "cue:save-frame";  // the picture only, never the subtitle or the UI
-      R(RK::Separator, R_NONE);
-    }
-    R(RK::Action, R_CLOSE, tr(in.audio_only ? str::more_close_audio : str::more_close_video))->icon = "cue:close-video";
-    R(RK::Separator, R_NONE);  // every entry stands on its own, like the ones above
     R(RK::Submenu,R_QUEUE,tr(str::queue_title))->icon="queue";
+    // the picture in a small window of its own, in a corner, above everything (like a browser's
+    // picture in picture): where the picture's own menu is
+    if (!in.fullscreen && !in.audio_only) {  // (music: a button on its bar)
+      Row* mp = R(RK::Action, R_MINI, tr(in.mini_player ? str::more_mini_exit : str::more_mini_player));
+      mp->icon = in.mini_player ? "expand" : "mini";
+    }
+    R(RK::Separator, R_NONE);
+    R(RK::Action, R_CLOSE, tr(in.audio_only ? str::more_close_audio : str::more_close_video))->icon = "cue:close-video";
   } else if (panel_ == Panel::Keys) {
     build_keys();
   } else if (panel_ == Panel::FileInfo) {
@@ -724,26 +1245,38 @@ int PlayView::slider_label_w() const {
 }
 
 void PlayView::layout_rows() {
-  double s = panel_ == Panel::Keys ? keys_s_ : panel_s();
+  double s = panel_ == Panel::Keys ? keys_s_ : panel_draw_s();
   if(panel_==Panel::Queue&&scene_list()) {
     // music: the list beside the cover, as tall as the room under the captions allows
-    Rect r=scene_list_rect();
+    Rect r=scene_list_rect();list_room_h_=r.h;
     s=scene_list_scale();
     queue_view_.set_bare(true);
+    queue_view_.set_compact(list_compact());  // (the card's one-line rows; a short window too)
     pw_=r.w;
-    ph_=std::max(1,std::min(r.h,(int)std::lround(QueueView::bare_height(in.queue.size(),12)*s)));
+    ph_=std::max(1,std::min(r.h,(int)std::lround(QueueView::bare_height(in.queue.size(),12,list_compact())*s)));
     queue_s_=s;
     queue_view_.layout(pw_,ph_,s);ph_=queue_view_.height();
     panel_dirty_=true;return;
   }
   if(panel_==Panel::Queue) {
     queue_view_.set_bare(false);
+    queue_view_.set_compact(false);
     // A popover that comes out of its button: in wide windows it keeps the interface scale and
     // grows to about ten rows; small windows compact it. Its place is decided in panel_rect.
     Rect dock=dock_rect();
     const double ps=panel_s();
     bool roomy=w_/ps>=kQueueRoomyW&&h_/ps>=300;
     s=roomy?ps:std::min({ps,w_/240.,h_/200.});
+    // clear of the bar with a few rows in view: in a small window at a large size its pixels step
+    // down (it opened over the bar there)
+    if(!roomy) {
+      const int top=in.fullscreen?0:chrome_room();
+      for(double sc=s;sc>1;sc-=0.5) {
+        const int room=std::max(dock.y-top,h_-dock.b())-(int)std::lround(20*sc);
+        if(168*sc<=room) break;
+        s=std::max(1.0,sc-0.5);
+      }
+    }
     pw_=std::min((int)std::lround((roomy?kQueueRoomyPanelW:360)*s),std::max(1,w_-(int)std::lround(16*s)));
     // a portrait window's bar is a column: the list is exactly as wide as the bar, edge to edge
     if(compact_&&dw_>0)pw_=std::min(dw_,std::max(1,w_-(int)std::lround(8*s)));
@@ -778,7 +1311,15 @@ void PlayView::layout_rows() {
   for (auto& r : rows_) {
     int need = 0;
     switch (r.k) {
-      case RK::Toggle: need = 8 + text_w(r.label, 1) + 14 + 13 + 6; break;
+      case RK::Toggle: need = (icon_grid() ? 23 : 8) + text_w(r.label, 1) + 14 + 13 + 6; break;  // an icon column moves the words in
+      case RK::Tools: {
+        int tw = 3;
+        for (int id : tool_ids_) tw += (id == B_SPEED ? text_w(speed_plain(in.speed), 1) + 12 : 17) + 3;
+        int cap = 0;
+        for (auto& sg : r.segs) cap = std::max(cap, text_w(sg, 1));
+        need = tw + 8 + cap + 8;
+        break;
+      }
       case RK::Option: case RK::Action: case RK::Submenu: case RK::Hint: case RK::Header:
         need = 26 + text_w(r.label, 1) + 10 + (r.right.empty() ? 0 : text_w(r.right, 1) + 10) + (r.k == RK::Submenu ? 12 : 0);
         break;
@@ -789,13 +1330,16 @@ void PlayView::layout_rows() {
       case RK::Slider: need = slider_label_w() + 78 + slider_value_w() + (icon_grid() ? 17 : 0); break;
       case RK::SpeedBar: need = 4 + 13 + 4 + 90 + 4 + 13 + 4; break;
       case RK::Chips: need = 4 + 6 * (text_w("1.25", 1) + 4) + 5 * 2 + 4; break;
+      case RK::Preview: need = 200; break;  // two small screens side by side, and their words
+      case RK::Picker: need = 4 + 17 + 6 + std::min(150, text_w(r.label, 1)) + 6 + 17 + 4; break;
       default: break;
     }
     W = std::max(W, need);
   }
   W = std::max(W, 112);
   if (panel_ == Panel::About) {
-    W = 168;
+    // (a page of Settings: as wide as Settings was, so the sheet stays one sheet)
+    W = std::max(168, settings_sheet_w_);  // (with its picture's column, when it had one beside)
     W=std::max(W,text_w("v" CUE_VERSION_SHORT " · "+std::string(CUE_OFFICIAL_BUILD?CUE_DISTRIBUTOR:tr(str::about_unofficial)),1)+12);
     W=std::max(W,text_w(tr(str::about_original),1)+12);
     if(CUE_OFFICIAL_BUILD)W=std::max(W,text_w(i18n::format(str::about_credit,{{"heart",""}}),1)+19);
@@ -807,22 +1351,47 @@ void PlayView::layout_rows() {
   }
   if (panel_ == Panel::FileInfo) W = std::max(150, std::min(264, (int)(w_ / s) - 16));
   if (panel_ == Panel::Keys) W = std::min(keys_cols_ * keys_col_w_ + (keys_cols_ - 1) * 10 + 4, std::max(120, (int)(w_ / s) - 8));
+  if (panel_ == Panel::Volume) W = text_w("125%", 1) + 10;  // a slim column over the icon
+  // never wider than the window itself (a very narrow window: the rows share what there is)
+  if (panel_ != Panel::More || more_collapsed_) W = std::min(W, std::max(80, (int)(w_ / s)));
+  // Settings in a window too short for its picture on top: the picture beside the rows, on the left
+  const int side = panel_ == Panel::Settings && settings_side_ ? kSettingsSide : 0;
+  if (panel_ == Panel::Settings) settings_w_ = W;
+  W += side;
+  if (panel_ == Panel::Settings) settings_sheet_w_ = W;
   pw_ = W * s;
   int air = 3;  // a section starts: a little air above its name
+  // the mini player's subtitles: two small groups (the track; its size) and a footnote, with
+  // even air between them (closed up only when the window cannot hold it)
+  int sub_air = panel_ == Panel::SubMini ? 4 : 0;
   auto row_h = [&](const Row& r, int breath) {
-    int rh = r.k == RK::Separator ? 5 : (r.k == RK::Fonts ? 20 : (r.k == RK::Links ? 15 : (r.k == RK::Slider ? 17 : kRowH)));
+    if (panel_ == Panel::SubMini) {
+      const bool after_rule = &r != rows_.data() && (&r - 1)->k == RK::Separator;
+      switch (r.k) {
+        case RK::Toggle: return kRowH + 2 + sub_air / 2;
+        case RK::Picker: case RK::Segmented: return 17;  // a 15 px control, a pixel of air each side
+        case RK::Separator: return 5 + sub_air;          // the hairline in the middle
+        case RK::Hint: return after_rule ? kRowH + 1 : 13 + sub_air;  // the footnote; a group's name, on its control
+        default: return kRowH + 2;
+      }
+    }
+    int rh = r.k == RK::Separator ? (panel_ == Panel::Settings && !settings_tight_ ? 8 : 5) : (r.k == RK::Fonts ? 20 : (r.k == RK::Links ? 15 : (r.k == RK::Slider ? 17 : kRowH)));
     rh += breath;
     // a section name sits right on its control (its text box ends 2 px above it); above it, air
     // after another control, none after a rule (the rule already opened the section)
-    if (r.k == RK::Hint && panel_ == Panel::More) rh = 14 + ((&r != rows_.data() && (&r - 1)->k == RK::Separator) ? 0 : (breath > 0 ? air : 0));
-    if (r.k == RK::Segmented && panel_ == Panel::More) rh += 4;  // air under the track, before a rule or the next name
-    if (r.k == RK::Segmented && panel_ == Panel::Context) rh = 19;  // icons and words, with room around them
+    const bool sections = panel_ == Panel::More || panel_ == Panel::Interface || panel_ == Panel::Settings;
+    if (r.k == RK::Hint && sections) rh = 14 + ((&r != rows_.data() && (&r - 1)->k == RK::Separator) ? 0 : (breath > 0 ? air : 0));
+    if (r.k == RK::Segmented && sections) rh += 4;  // air under the track, before a rule or the next name
+    if (r.k == RK::Preview) rh = 94;  // the picture (60) and two lines that say what it shows
+    if (r.k == RK::Segmented && (panel_ == Panel::Context || r.icons_only)) rh = 19;  // icons and words, with room around them
     if (r.k == RK::SpeedBar) rh = 17;
     if (r.k == RK::Chips) rh = 18;
     if (r.k == RK::Brand) rh = about_compact_ ? 38 : 46;
     if (r.k == RK::Credit) rh = about_compact_ ? 13 : 16;
     if (r.k == RK::Profile) rh = about_compact_ ? 14 : 20;
     if (r.k == RK::Contacts) rh = about_compact_ ? 30 : 36;
+    if (r.k == RK::Tools) rh = 17;
+    if (r.k == RK::VSlider) rh = 92;
     if (r.k == RK::Info) rh = 13;
     if (r.k == RK::CloseHeader) rh = 18;
     if (r.k == RK::Keys) rh = keys_compact_ ? (r.kh.section ? 13 : 11) : (r.kh.section ? 17 : 13);  // a group's name: air above it
@@ -830,7 +1399,9 @@ void PlayView::layout_rows() {
   };
   // menus breathe when the window has room (the same rhythm in ···, CC and audio), but only as
   // much as still lets the whole menu fit
-  int breath = (panel_ == Panel::More || panel_ == Panel::CC || panel_ == Panel::Audio || panel_ == Panel::AudioMix || panel_ == Panel::Language) && h_ / s_ >= 230 ? 5 : 0;
+  int breath = (panel_ == Panel::More || panel_ == Panel::Settings || panel_ == Panel::Context || panel_ == Panel::Style || panel_ == Panel::CC || panel_ == Panel::Audio || panel_ == Panel::AudioMix || panel_ == Panel::Language || panel_ == Panel::SubMini) && h_ / s_ >= 230 ? 5 : 0;
+  // the picture beside the rows: as tall as it is on top (under the header)
+  auto side_floor = [&] { return side > 0 ? 8 + kRowH + breath + 94 + 4 : 0; };
   auto fits = [&] {
     int total = 8, col[2] = {0, 0};
     for (auto& r : rows_) {
@@ -838,15 +1409,49 @@ void PlayView::layout_rows() {
       else total += row_h(r, breath);
     }
     total += std::max(col[0], col[1]);
+    total = std::max(total, side_floor());
     return total * s <= h_ - 12 * s;
   };
   while (breath > 0 && !fits()) --breath;
+  while (sub_air > 0 && !fits()) --sub_air;
   if (!fits()) air = 0;  // the smallest window at the largest size: the sections close up
+  auto fits_by_bar = [&] {  // "..." opens above (or below) the bar: it should fit that room, not only the window
+    if (vis_.target <= 0 && vis_.v <= 0) return fits();
+    int total = 8;
+    for (auto& r : rows_) total += row_h(r, breath);
+    total = std::max(total, side_floor());
+    Rect d{(int)std::lround(px_.x), (int)std::lround(py_.x), dw_, dh_};
+    const int top = in.fullscreen ? 0 : chrome_room();
+    const int room = std::max(d.y - top, h_ - d.b()) - (int)std::lround(8 * s);
+    return total * s <= room;
+  };
+  if (panel_ == Panel::Settings && settings_stage_ < 8 && (!fits() || !fits_by_bar())) {
+    // too short: with the examples on, the picture goes beside the rows where the window is wide
+    // enough, then the rows close up (the interface one row deeper, then the groups closer), the
+    // picture on top or beside (it is how a setting explains itself), and only then the settings
+    // alone, closing up the same way. All of Settings comes before a page for the interface: a
+    // size picked there left the person on that page
+    const int wide = (int)std::lround((settings_w_ + kSettingsSide) * s);
+    int next = settings_stage_ + 1;
+    while (next < 8 && kSettingsStages[next][0] == 1 && wide > w_ - (int)std::lround(16 * s)) ++next;  // (too narrow beside)
+    settings_stage(next);
+    build_rows();
+    layout_rows();
+    return;
+  }
+  if (panel_ == Panel::More && !more_collapsed_ && (!fits() || !fits_by_bar() || pw_ > w_ - (int)std::lround(4 * s))) {  // too tall or too wide: fold the interface section
+    more_collapsed_ = true;
+    build_rows();
+    layout_rows();
+    return;
+  }
   double y = 4 * s;
   double keys_top = -1, keys_y[2] = {0, 0};  // the shortcut sheet's two columns
   for (auto& r : rows_) {
     int rh = row_h(r, breath);
-    r.r = {2 * s, y, pw_ - 4 * s, rh * s};
+    // (Settings with its picture beside: every row but the header in the right-hand column)
+    const int sx = side > 0 && r.k != RK::Header ? (int)std::lround(side * s) : 0;
+    r.r = {2 * s + sx, y, pw_ - 4 * s - sx, rh * s};
     if (r.k == RK::Keys) {
       if (keys_top < 0) keys_top = keys_y[0] = keys_y[1] = y;
       const int cw = keys_cols_ == 2 ? (int)std::lround(keys_col_w_ * s) : pw_ - 4 * (int)s;
@@ -861,6 +1466,11 @@ void PlayView::layout_rows() {
       // the whole strip around the track is clickable, not only the handle
       int bx = x0 + (slider_label_w() + (icon_grid() ? 17 : 0)) * s, bw = (x1 - slider_value_w() * s) - bx;
       r.parts.push_back({bx - 6 * s, r.r.y, bw + 12 * s, r.r.h});
+    } else if (r.k == RK::Picker) {
+      // ‹ the track › : an arrow cell at each end, the name between them
+      // (in a quiet track, as wide as the size control under it: one column of controls)
+      r.parts.push_back({x0 + 4 * s, r.r.y + s, 17 * s, r.r.h - 2 * s});
+      r.parts.push_back({x1 - 21 * s, r.r.y + s, 17 * s, r.r.h - 2 * s});
     } else if (r.k == RK::Stepper) {
       int vw = text_w("+0.0s", s);
       int px = x1 - 4 * s - 9 * s;
@@ -888,7 +1498,7 @@ void PlayView::layout_rows() {
       for (int i = 0; i < n; ++i) {
         int cw = (text_w(r.segs[i], s) + room) / (int)s * (int)s;
         if (i == n - 1) cw = x1 - 4 * s - cx0;
-        r.parts.push_back({cx0, r.r.y + s, cw, r.r.h - (panel_ == Panel::More ? 6 : 2) * s});
+        r.parts.push_back({cx0, r.r.y + s, cw, r.r.h - (panel_ == Panel::More || panel_ == Panel::Settings ? 6 : 2) * s});
         cx0 += cw;
       }
     } else if (r.k == RK::SpeedBar) {
@@ -902,6 +1512,16 @@ void PlayView::layout_rows() {
       int cw = (r.r.w - 4 * s - (n - 1) * 2 * s) / n / s * s;
       int left = x0 + 2 * s + (r.r.w - 4 * s - (n * cw + (n - 1) * 2 * s)) / 2 / s * s;
       for (int i = 0; i < n; ++i) r.parts.push_back({left + i * (cw + 2 * s), r.r.y + 2 * s, cw, 14 * s});
+    } else if (r.k == RK::VSlider) {
+      r.parts.push_back({r.r.x, r.r.y + 14 * s, r.r.w, r.r.h - 16 * s});  // under the level, to the bottom
+    } else if (r.k == RK::Tools) {
+      // the bar's own buttons, on the bar's slot and a tighter beat, from the left
+      int tx = x0 + 3 * s;
+      for (int id : tool_ids_) {
+        int w = id == B_SPEED ? (text_w(speed_plain(in.speed), 1) + 4 + 8) * s : 17 * s;
+        r.parts.push_back({tx, r.r.y + s, w, 15 * s});
+        tx += w + 3 * s;
+      }
     } else if (r.k == RK::Contacts) {
       // three square targets, centred; the caption line under them names the one in use
       const int cw = 26 * s, gap = 10 * s, n = (int)r.segs.size();
@@ -917,7 +1537,8 @@ void PlayView::layout_rows() {
     }
     y += rh * s;
   }
-  ph_ = y + 4 * s;
+  ph_ = y + (panel_ == Panel::Settings && !settings_tight_ ? 5 : 4) * s;  // (Settings: a little air under its last group)
+  if (side > 0) ph_ = std::max(ph_, (int)std::lround(side_floor() * s));
   // (or one that cannot sit clear of the control bar, above or below it)
   const Rect dock_now = dock_rect();
   const int beside_dock = std::max(dock_now.y - 8 * (int)s_, h_ - dock_now.b() - 8 * (int)s_);
@@ -928,13 +1549,52 @@ void PlayView::layout_rows() {
     about_retry_ = false;
     return;
   }
+  // the last resort of a menu that still cannot sit whole in the window, clear of the window's
+  // buttons and of the control bar (a small window at the large sizes): its pixels a half step
+  // smaller, until it does (the subtitles' style used to reach under the window's buttons and
+  // over the bar at "grande" and "maior")
+  if (panel_fit_wanted() && s > 1 && (ph_ > panel_room_h() || pw_ > w_ - (int)std::lround(8 * s))) {
+    panel_fit_ = std::max(1.0, s - 0.5);
+    build_rows();
+    layout_rows();
+    return;
+  }
   panel_dirty_ = true;
+}
+
+// the menus that keep their own way of fitting: the lists (up next, the subtitle tracks scroll),
+// the shortcut sheet; the rest steps its scale down when nothing else made it fit
+bool PlayView::panel_fit_wanted() const {
+  return panel_ != Panel::None && panel_ != Panel::Queue && panel_ != Panel::Keys && panel_ != Panel::CC &&
+         !(panel_ == Panel::Settings && settings_stage_ < 8);
+}
+double PlayView::panel_draw_s() const { return panel_fit_ > 0 ? std::min(panel_s(), panel_fit_) : panel_s(); }
+// the room a menu has: the window under its buttons, and beside the bar (above or below it)
+int PlayView::panel_room_h() const {
+  const int top = in.fullscreen ? 0 : chrome_room();
+  const Rect d = dock_rect();
+  const int gap = (int)std::lround(8 * s_);
+  int room = h_ - top - gap;
+  // (the mini player's menus may reach over its few floating controls, never over its window's
+  // buttons: a little window's menu stays the bar's own size)
+  if (!mini_ && d.h > 0 && (vis_.target > 0 || vis_.v > 0)) room = std::max(d.y - top, h_ - d.b()) - gap;
+  return std::max(1, room);
 }
 
 Rect PlayView::panel_rect() const {
   Rect d{(int)std::lround(px_.x), (int)std::lround(py_.x), dw_, dh_};
-  if(panel_==Panel::Queue&&scene_list()) {Rect r=scene_list_rect();return {r.x,r.y,pw_,ph_};}
-  if (panel_ == Panel::About || panel_ == Panel::Keys) {
+  if(panel_==Panel::Queue&&scene_list()) {
+    Rect r=scene_list_rect();
+    // (its top glides with its height: a list that grows or shrinks, or is cleared, stays centred
+    // on the cover and its words all the way, instead of jumping there)
+    // (beside the centred cover it is centred on the cover and its words: its middle glides; beside
+    // the words of the split composition it hangs from its top)
+    if (!list_top_on_) return {r.x,r.y,pw_,ph_};
+    return {r.x,(int)std::lround(list_mid_ ? list_top_.x-ph_/2.0 : list_top_.x),pw_,ph_};
+  }
+  // About is a page of Settings: it opens where Settings was, over the "..." that opened it (the
+  // shortcut sheet, larger, stays centred)
+  if (panel_ == Panel::Keys || (panel_ == Panel::About && panel_btn_ == B_NONE)) {
     // centred, unless that would cover the bar: then it rises to sit above (or below) it
     int y = (h_ - ph_) / 2, gap = (int)(8 * s_);
     if (y + ph_ > d.y - gap && y < d.b() + gap) {
@@ -962,14 +1622,24 @@ Rect PlayView::panel_rect() const {
       return (w > 0 && h > 0) ? (long)w * h : 0L;
     };
     Rect sub = sub_rect().grow(4 * s_);
+    // its band: under the window's buttons (and the back arrow, on the left), clear of the bar
+    // (it reached under them, and over the bar's volume, at the large sizes)
+    const int gap = (int)std::lround(4 * s_);
+    int lo = in.fullscreen ? m : std::max(m, chrome_room()), hi = h_ - ph_ - m;
+    if (d.h > 0 && d.cy() > h_ / 2) hi = std::min(hi, d.y - gap - ph_);
+    else if (d.h > 0) lo = std::max(lo, d.b() + gap);
+    if (hi < lo) { lo = std::clamp(lo, 0, std::max(0, h_ - ph_)); hi = std::max(lo, std::max(0, h_ - ph_)); }
+    const Rect chrome_r = in.fullscreen ? Rect{} : chrome_rect().grow(2 * s_), back_r = in.fullscreen ? Rect{} : back_rect().grow(2 * s_);
     int xs[2] = {std::max(0, w_ - pw_ - m), m};  // right side first, then left
-    double ys[6] = {(h_ - ph_) / 2 - 10 * s_, (double)m, sub.b() + 2 * s_, sub.y - ph_ - 2 * s_, d.y - ph_ - 4 * s_, d.b() + 4 * s_};
+    double ys[6] = {(lo + hi) / 2.0, (double)lo, sub.b() + 2 * s_, sub.y - ph_ - 2 * s_, (double)hi, d.b() + 4 * s_};
     long best_cost = -1;
-    Rect best{xs[0], 0, pw_, ph_};
+    Rect best{xs[0], lo, pw_, ph_};
     for (int xi : xs)
-      for (int yi : ys) {
-        Rect r{xi / s_ * s_, std::clamp(yi, 0, std::max(0, h_ - ph_)) / s_ * s_, pw_, ph_};
-        long cost = area(r, sub) * 4 + area(r, d) * 2;  // hiding the subtitle is worst
+      for (double yv : ys) {
+        const int yi = std::clamp((int)std::lround(yv), lo, hi);
+        Rect r{(int)(std::floor(xi / s_) * s_), (int)(std::ceil(yi / s_) * s_), pw_, ph_};
+        if (r.y > hi && hi >= lo) r.y = hi;
+        long cost = area(r, sub) * 4 + area(r, d) * 3 + (area(r, chrome_r) + area(r, back_r)) * 3;  // hiding the subtitle is worst
         if (best_cost < 0 || cost < best_cost) { best_cost = cost; best = r; }
         if (cost == 0) goto done;
       }
@@ -982,6 +1652,12 @@ Rect PlayView::panel_rect() const {
     int x = std::clamp(ctx_x_, 0, std::max(0, w_ - pw_)) / s_ * s_;
     int y = ctx_y_ + ph_ > h_ ? ctx_y_ - ph_ : ctx_y_;
     y = std::clamp(y, 0, std::max(0, h_ - ph_)) / s_ * s_;
+    // (opened by the top edge: under the window's buttons and the back arrow, when it fits there)
+    if (!in.fullscreen && y < chrome_room() && h_ - ph_ >= chrome_room()) {
+      const Rect r{x, y, pw_, ph_}, c = chrome_rect().grow(2 * s_), b = back_rect().grow(2 * s_);
+      auto hit = [&](const Rect& q) { return q.w > 0 && r.x < q.r() && q.x < r.r() && r.y < q.b() && q.y < r.b(); };
+      if (hit(c) || hit(b)) y = std::max({chrome_room(), c.b(), b.b()});
+    }
     return {x, y, pw_, ph_};
   }
   if (panel_ == Panel::None) return closing_rect_;
@@ -1029,12 +1705,20 @@ Rect PlayView::chrome_rect() const { WindowChrome c = chrome; c.s = s_; return c
 void PlayView::render_panel() {
   if(panel_==Panel::Queue) {queue_view_.draw(panel_base_,in.paused);panel_dirty_=false;++panel_gen_;return;}
   const Palette& p = P();
-  double s = panel_==Panel::CC?cc_scale_:panel_==Panel::Keys?keys_s_:panel_s();
+  double s = panel_==Panel::CC?cc_scale_:panel_==Panel::Keys?keys_s_:panel_draw_s();
   Canvas& c = panel_base_;
   c.resize(pw_, ph_);
   draw_panel(c, 0, 0, pw_ / s, ph_ / s, s, kPanelProfile, p.bg, kPanelFill, p.edge, 0.95);
   int act_row = kb_ ? pfocus_ : phover_;
   const int text_col = icon_grid() ? 23 : 6;  // with any icon, every label starts on the same column
+  if (panel_ == Panel::Settings && settings_side_ && !rows_.empty()) {
+    // the picture beside the rows: under the header, on the left, a hairline between them
+    const int top = rows_[0].r.b() + (int)s;
+    // (whole pixels at a half-step scale: the column ends where the rows' column begins)
+    const int col = (int)std::lround(kSettingsSide * s);
+    render_preview(c, {(int)std::lround(2 * s), top, col - (int)std::lround(6 * s), ph_ - top - (int)std::lround(5 * s)}, s, true);
+    c.fill(col + (int)std::lround(s), top + (int)std::lround(4 * s), std::max(1, (int)s), ph_ - top - (int)std::lround(10 * s), p.edge);
+  }
   for (int i = 0; i < (int)rows_.size(); ++i) {
     Row& r = rows_[i];
     if(panel_==Panel::CC&&r.id==R_SUB_TRACK)continue;
@@ -1112,6 +1796,55 @@ void PlayView::render_panel() {
         }
         break;
       }
+      case RK::VSlider: {
+        // the level, then a line growing upward: natural up to the notch at 100%, warm past it
+        const Rect& tr_ = r.parts.empty() ? r.r : r.parts[0];
+        const std::string& label = r.right;
+        text(c, label, r.r.x + (r.r.w - text_w(label, s)) / 2, r.r.y + 2 * s, s, mix(p.dim, p.fg, slider_row_ == i ? 1.0 : ha));
+        int lx = (r.r.x + r.r.w / 2) / s * s - s, top = tr_.y + 4 * s, bot = tr_.b() - 4 * s, len = bot - top;
+        c.fill(lx, top, 2 * s, len, p.faint);
+        double f = clamp01((r.value - r.minv) / (double)std::max(1.0, r.maxv - r.minv));
+        int fh = (int)std::lround(len * f / s) * s, f100 = (int)std::lround(len * 100 / kVolMax / s) * s;
+        Rgb acc = mix(p.fg, in.accent, std::clamp(in.accent_k, 0.0, 1.0) * 0.85);
+        Rgb boost = mix(Rgb{255, 170, 90}, in.accent, 0.25 * std::clamp(in.accent_k, 0.0, 1.0));
+        c.fill(lx, bot - std::min(fh, f100), 2 * s, std::min(fh, f100), acc);
+        if (fh > f100) c.fill(lx, bot - fh, 2 * s, fh - f100, boost);
+        c.fill(lx + 2 * s, bot - f100, s, s, fh > f100 ? boost : p.faint, fh > f100 ? 0.9 : 0.7);  // 100%: the notch
+        double hh = slider_row_ == i ? 1.0 : ha;
+        int handle_w = (7 + (int)std::lround(2 * hh)) * s;
+        c.fill(lx + s - handle_w / 2, bot - fh - s, handle_w, 2 * s, fh > f100 ? mix(acc, boost, 0.7) : mix(p.dim, p.pixel, 0.65 + 0.35 * hh));
+        break;
+      }
+      case RK::Tools: {
+        // the bar's buttons, drawn as on the bar (lit when on); the one pointed at names itself
+        int active = kb_ && pfocus_ == i ? contact_k_ : (hot ? ppart_ : -1);
+        Rgb on = mix(p.fg, in.accent, std::clamp(in.accent_k, 0.0, 1.0) * 0.85);
+        for (int k = 0; k < (int)r.parts.size() && k < (int)tool_ids_.size(); ++k) {
+          const Rect& cell = r.parts[k];
+          const int id = tool_ids_[k];
+          double h = k == active ? std::max(ha, kb_ ? 1.0 : 0.0) : 0.0;
+          if (h > 0) c.cornered(cell, s, p.hover, h);
+          const bool list = in.queue_active && in.queue.size() > 1;
+          const bool lit = (id == B_CC && in.sid != 0 && in.sub_visible) || (id == B_LOOP && (in.loop || (in.loop_all && list))) ||
+                           (id == B_QUEUE && !in.queue.empty()) || (id == B_SPEED && std::fabs(in.speed - 1.0) > 0.01);
+          Rgb ink = mix(lit ? on : p.dim, p.pixel, h);
+          if (id == B_SPEED) {
+            std::string num = speed_plain(in.speed);
+            int nw = text_w(num, s);
+            int lx = cell.x + (cell.w - nw - 4 * s) / 2 / s * s, ly = cell.y + (cell.h - 12 * s) / 2 / s * s;
+            text(c, num, lx, ly, s, ink);
+            c.cells("#.#.#.#.#", 3, 3, lx + nw + s, ly + 4 * s, s, ink);
+          } else {
+            const char* name = id == B_QUEUE ? "queue" : id == B_LOOP ? "loop" : id == B_CC ? "cc" : id == B_MINI ? "mini" : id == B_SHUFFLE ? "shuffle" : id == B_FS ? (in.fullscreen ? "fs-exit" : "fs-enter") : "k-audio";
+            if (const BitmapDef* b = bmp(name)) c.bitmap(b, cell.x + (cell.w - b->w * s) / 2 / s * s, cell.y + (cell.h - b->h * s) / 2 / s * s, s, ink);
+          }
+        }
+        if (active >= 0 && active < (int)r.segs.size()) {
+          const std::string& label = r.segs[active];
+          text(c, label, r.r.r() - 6 * s - text_w(label, s), ty, s, p.dim, kb_ ? 1.0 : ha);
+        }
+        break;
+      }
       case RK::Contacts: {
         // pixel icons: the "in" badge, code, an envelope. The one in use lifts a pixel and the
         // envelope opens; the caption underneath reads "contact" at rest and names the one in use.
@@ -1144,15 +1877,23 @@ void PlayView::render_panel() {
         break;
       }
       case RK::Separator:
-        c.fill(r.r.x + 4 * s, r.r.y + 2 * s, r.r.w - 8 * s, s, p.edge);
+        // (Settings: the same hairline, in the middle of the wider space between its groups)
+        c.fill(r.r.x + 4 * s, r.r.y + (r.r.h / s - 1) / 2 * s, r.r.w - 8 * s, s, p.edge);
+        break;
+      case RK::Preview:
+        render_preview(c, r.r, s);
         break;
       case RK::Hint:
-        if (panel_ == Panel::More) {
+        if (panel_ == Panel::More || panel_ == Panel::Settings || (panel_ == Panel::SubMini && !(i > 0 && rows_[i - 1].k == RK::Separator))) {
           // a section name: its icon and its words like any entry's, just not clickable
           int hy = r.r.b() - 14 * s;
           if (r.icon) action_icon(c, r.icon, {r.r.x + 3 * s, hy, 12 * s, 12 * s}, s, p.dim);
           text(c, r.label, r.r.x + text_col * s, hy + s, s, p.dim);
-        } else text(c, r.label, r.r.x + text_col * s, ty, s, mix(p.faint, p.dim, 0.55));
+        } else {
+          // (the mini player's footnote: its lowercase sits in the middle between the rule and the edge)
+          const int fy = panel_ == Panel::SubMini ? r.r.y : ty;
+          text(c, r.label, r.r.x + text_col * s, fy, s, mix(p.faint, p.dim, 0.55));
+        }
         if (!r.right.empty()) text(c, r.right, r.r.r() - 6 * s - text_w(r.right, s), ty, s, p.fg);
         break;
       case RK::Header: {
@@ -1160,7 +1901,15 @@ void PlayView::render_panel() {
         if (ha > 0 && !on_btn) c.cornered(r.r, s, p.hover, ha);
         action_icon(c, "cue:return", {r.r.x + 3 * s, r.r.y, 12 * s, r.r.h}, s, mix(p.dim, p.fg, on_btn ? 0 : ha));
         text(c, r.label, r.r.x + 23 * s, ty, s, p.fg);
-        if (r.icon && !r.parts.empty()) {
+        if (r.icon && !r.parts.empty() && std::string_view(r.icon) == "cue:info") {
+          // Settings: the examples on or off; lit and underlined by a pixel while they show
+          const Rect& b = r.parts[0];
+          if (on_btn) c.cornered(b, s, p.hover);
+          const bool on = in.settings_examples;
+          const Rgb ink = on || on_btn ? p.fg : p.dim;
+          action_icon(c, r.icon, {b.x + (b.w - 12 * (int)s) / 2, b.y + (b.h - 12 * (int)s) / 2, 12 * (int)s, 12 * (int)s}, s, ink);
+          if (on) c.fill(b.cx() - (int)s, b.b() - 2 * (int)s, 2 * (int)s, (int)s, ink);
+        } else if (r.icon && !r.parts.empty()) {
           const Rect& b = r.parts[0];
           if (on_btn && r.enabled) c.cornered(b, s, p.hover);
           bool undo = std::string_view(r.icon) == "reset-undo";
@@ -1171,9 +1920,10 @@ void PlayView::render_panel() {
         break;
       }
       case RK::Toggle: {
+        if (!r.enabled) ha = 0;
         if (ha > 0) c.cornered(r.r, s, p.hover, ha);
-        double k = std::clamp(sw_.x, -0.15, 1.15);   // overshoots a hair, like a real switch
-        double kc = clamp01(k);
+        double k = std::clamp(tsw_[std::clamp((int)r.id, 0, (int)tsw_.size() - 1)].x, -0.15, 1.15);   // overshoots a hair, like a real switch
+        double kc = r.enabled ? clamp01(k) : 0.0;
         if (r.icon) action_icon(c, r.icon, {r.r.x + 3 * s, r.r.y, 12 * s, r.r.h}, s, mix(mix(p.dim, p.fg, kc), p.fg, ha));
         text(c, r.label, r.r.x + text_col * s, ty, s, mix(mix(p.dim, p.fg, kc), p.fg, ha));
         int sx = r.r.r() - 5 * s - 13 * s, sy = (r.r.y + (r.r.h - 7 * s) / 2) / s * s;
@@ -1183,6 +1933,27 @@ void PlayView::render_panel() {
         if (kc < 1) c.cornered(trk.grow(-s), s, mix(p.bg, on, kc), 1.0);  // off: an outlined track
         int kx = sx + (int)std::lround((1 + 7 * k) * s);
         c.fill(kx, sy + s, 4 * s, 5 * s, mix(mix(p.dim, p.fg, ha), p.bg, kc));
+        break;
+      }
+      case RK::Picker: {
+        const bool live = r.enabled;
+        if (r.parts.size() == 2) c.cornered({r.parts[0].x, r.parts[0].y, r.parts[1].r() - r.parts[0].x, r.parts[0].h}, s, p.hover, 0.4);
+        for (int k = 0; k < 2 && k < (int)r.parts.size(); ++k) {
+          const bool ph = hot && live && ppart_ == k;
+          if (ph) c.cornered(r.parts[k], s, p.hover);
+          const BitmapDef* b = bmp("chev-right5");
+          if (!b) break;
+          // (the same distance from each end of the track: one margin, mirrored)
+          const int bw = (int)std::lround(b->w * s), m = (int)std::lround((r.parts[0].w - bw) / 2.0);
+          c.bitmap(b, k == 0 ? r.parts[0].x + m : r.parts[1].r() - m - bw, r.r.y + (r.r.h - 5 * s) / 2 / s * s, s,
+                          !live ? p.faint : ph ? p.fg : p.dim, 1.0, k == 0);
+        }
+        if (r.parts.size() == 2) {
+          const int room = r.parts[1].x - r.parts[0].r() - 8 * s;
+          const std::string name = fit_end(r.label, room, s);
+          const int tw = text_w(name, s);
+          text(c, name, r.parts[0].r() + (r.parts[1].x - r.parts[0].r() - tw) / 2, ty, s, in.sid != 0 && in.sub_visible ? p.fg : p.faint);
+        }
         break;
       }
       case RK::Option: case RK::Action: case RK::Submenu: {
@@ -1222,6 +1993,10 @@ void PlayView::render_panel() {
         int fw = (int)std::lround(bw * f / s) * s;
         bool live = (hot || slider_row_ == i) && r.enabled;
         c.fill(bx, by, bw, 2 * s, r.enabled ? p.faint : p.edge);  // track, 2 px of art
+        if (r.mark > -1e8 && r.maxv > r.minv && r.enabled) {  // the usual value: a notch under the track
+          const int mx = bx + (int)std::lround(bw * clamp01((r.mark - r.minv) / (r.maxv - r.minv)) / s) * (int)s;
+          c.fill(mx, by + 3 * s, s, s, mix(p.faint, p.dim, 0.6));
+        }
         if (r.enabled) {
           c.fill(bx, by, fw, 2 * s, live ? mix(p.fg, in.accent, std::clamp(in.accent_k, 0.0, 1.0) * 0.85) : p.dim);
           int hw = 3, hh = live ? 11 : 9;                          // handle, 3 × 9 (11 while active)
@@ -1232,6 +2007,8 @@ void PlayView::render_panel() {
         break;
       }
       case RK::Fonts: {
+        // one control like the menus' other choices: a quiet track holds the three, the chosen one lit
+        if (r.parts.size() == 3) c.cornered({r.parts[0].x, r.parts[0].y, r.parts[2].r() - r.parts[0].x, r.parts[0].h}, s, p.hover, 0.4);
         for (int k = 0; k < 3; ++k) {
           const Rect& cell = r.parts[k];
           bool sel = r.seg == k, ph = hot && ppart_ == k;
@@ -1251,23 +2028,25 @@ void PlayView::render_panel() {
       }
       case RK::Segmented: {
         // one control, not loose words: a quiet track holds the cells, the chosen one is lit
+        const Rgb lit = p.hover;
         if (!r.parts.empty()) c.cornered({r.parts.front().x, r.parts.front().y, r.parts.back().r() - r.parts.front().x, r.parts.front().h}, s, p.hover, 0.4);
         if (r.icons_only) {
           // the words name the choice that is on, or the one under the pointer before it is taken
-          int k = hot && ppart_ >= 0 && ppart_ < (int)r.segs.size() ? ppart_ : r.seg;
-          if (k >= 0 && k < (int)r.segs.size()) text(c, r.segs[k], r.r.x + 23 * s, ty, s, k == r.seg ? p.fg : p.dim);
+          int k = hot && r.enabled && ppart_ >= 0 && ppart_ < (int)r.segs.size() ? ppart_ : r.seg;
+          if (r.icon) action_icon(c, r.icon, {r.r.x + 3 * s, r.r.y, 12 * s, r.r.h}, s, !r.enabled ? p.faint : p.dim);
+          if (k >= 0 && k < (int)r.segs.size()) text(c, r.segs[k], r.r.x + 23 * s, ty, s, !r.enabled ? p.faint : k == r.seg ? p.fg : p.dim);
           for (int i = 0; i < (int)r.segs.size() && i < (int)r.parts.size(); ++i) {
             const Rect& cell = r.parts[i];
-            bool sel = r.seg == i, ph = hot && ppart_ == i;
-            if (sel) c.cornered(cell, s, p.hover);
-            if (i < (int)r.seg_icons.size() && r.seg_icons[i]) action_icon(c, r.seg_icons[i], cell, s, sel || ph ? p.fg : p.dim);
+            bool sel = r.seg == i, ph = hot && r.enabled && ppart_ == i;
+            if (sel && r.enabled) c.cornered(cell, s, lit);
+            if (i < (int)r.seg_icons.size() && r.seg_icons[i]) action_icon(c, r.seg_icons[i], cell, s, !r.enabled ? p.faint : sel || ph ? p.fg : p.dim);
           }
           break;
         }
         for (int k = 0; k < (int)r.segs.size(); ++k) {
           const Rect& cell = r.parts[k];
           bool sel = r.seg == k, ph = hot && ppart_ == k;
-          if (sel) c.cornered(cell, s, p.hover);
+          if (sel) c.cornered(cell, s, lit);
           int tw = text_w(r.segs[k], s);
           Rgb ink = sel || ph ? p.fg : p.dim;
           int ty2 = cell.y + (cell.h - 12 * s) / 2 + s;
@@ -1337,20 +2116,339 @@ void PlayView::render_panel() {
   ++panel_gen_;
 }
 
+// ── Settings: each choice shown at work ─────────────────────────────
+// The setting under the pointer (or the keyboard) picks the picture; it stays on the last one
+// pointed at, so moving down to a switch never blanks it. A segment under the pointer (a size, a
+// style) is shown before it is taken.
+void PlayView::settings_demo_track(double now) {
+  if (panel_ != Panel::Settings) return;
+  int row = kb_ ? pfocus_ : phover_;
+  int demo = demo_, seg = -1;
+  if (row >= 0 && row < (int)rows_.size()) {
+    // a section's name stands for the control under it
+    int id = rows_[row].id;
+    if (rows_[row].k == RK::Hint && row + 1 < (int)rows_.size()) id = rows_[row + 1].id;
+    switch (id) {
+      case R_AMBIENT: case R_AMBIENT_STR: demo = D_AMBIENT; break;
+      case R_SMOOTH: demo = D_SMOOTH; break;
+      case R_UISCALE: case R_INTERFACE: demo = D_SIZE; if (rows_[row].id == R_UISCALE && !kb_) seg = ppart_; break;
+      case R_MUSIC_LOOK: demo = D_LOOK; if (!kb_) seg = ppart_; break;
+      case R_MUSIC_COLOR: demo = D_COLOR; if (!kb_) seg = ppart_; break;
+      case R_COVER_TILT: demo = D_TILT; break;
+      case R_ABOUT: demo = D_ABOUT; break;
+      case R_CONTROLS_FREE: demo = D_BG; if (rows_[row].id == R_CONTROLS_FREE && !kb_) seg = ppart_; break;
+      case R_LANGUAGE: demo = D_LANGUAGE; break;
+      default: break;
+    }
+  }
+  if (demo != demo_) { demo_ = demo; demo_t0_ = now; panel_dirty_ = true; }
+  if (seg != demo_seg_) { demo_seg_ = seg; panel_dirty_ = true; }
+  // the moving pictures (smoothing; any picture fading in) are drawn again 30 times a second
+  const bool moving = demo_ == D_SMOOTH || demo_ == D_TILT || demo_ == D_LOOK || now - demo_t0_ < 0.2;
+  if (moving && in.settings_examples && (!settings_compact_ || settings_side_)) {
+    int frame = (int)std::floor(now * 30);
+    if (frame != demo_frame_) { demo_frame_ = frame; panel_dirty_ = true; }
+  }
+}
+
+namespace {
+// a small picture in Cue's pixels: a night sky over a hill, a warm moon (art px on the grid)
+void demo_picture(Canvas& c, const Rect& r, double s, double a = 1.0) {
+  const Rgb sky0{24, 36, 70}, sky1{58, 70, 112}, hill{20, 30, 26}, moon{236, 186, 112};
+  const int rows = std::max(1, (int)std::lround(r.h / s));
+  for (int i = 0; i < rows; ++i) {
+    const int y = r.y + (int)std::lround(i * s), y1 = r.y + (int)std::lround((i + 1) * s);
+    c.fill(r.x, y, r.w, std::min(y1, r.b()) - y, mix(sky0, sky1, i / (double)rows), a);
+  }
+  // the hill: steps rising to the right
+  const int cols = std::max(1, (int)std::lround(r.w / s));
+  for (int i = 0; i < cols; ++i) {
+    const int top = (int)std::lround(rows * (0.78 - 0.22 * std::sin(i / (double)cols * 2.4)));
+    const int x = r.x + (int)std::lround(i * s), x1 = r.x + (int)std::lround((i + 1) * s);
+    c.fill(x, r.y + (int)std::lround(top * s), std::min(x1, r.r()) - x, r.b() - (r.y + (int)std::lround(top * s)), hill, a);
+  }
+  c.fill(r.x + (int)std::lround(cols * 0.68) * s, r.y + (int)std::lround(rows * 0.2) * s, 3 * s, 3 * s, moon, a);
+}
+// the ambient light: rings of the picture's colours round a screen, fainter outward (cool above,
+// warm below), `reach` art px at most
+void demo_glow(Canvas& c, const Rect& r, double s, double reach, double a) {
+  if (reach <= 0 || a <= 0) return;
+  const Rgb cool{86, 112, 200}, warm{214, 150, 92};
+  const int n = (int)std::ceil(reach);
+  for (int i = n; i >= 1; --i) {
+    const double k = 1 - (i - 0.5) / (reach + 0.5);
+    if (k <= 0) continue;
+    const double al = a * 0.85 * k * k;
+    const int d = (int)std::lround(i * s);
+    const Rect g{r.x - d, r.y - d, r.w + 2 * d, r.h + 2 * d};
+    const int half = (int)std::lround(s);
+    // one ring: its top half cool, its bottom half warm
+    c.fill(g.x, g.y, g.w, half, cool, al);
+    c.fill(g.x, g.b() - half, g.w, half, warm, al);
+    c.fill(g.x, g.y + half, half, g.h / 2 - half, cool, al);
+    c.fill(g.r() - half, g.y + half, half, g.h / 2 - half, cool, al);
+    c.fill(g.x, g.y + g.h / 2, half, g.h - g.h / 2 - half, warm, al);
+    c.fill(g.r() - half, g.y + g.h / 2, half, g.h - g.h / 2 - half, warm, al);
+  }
+}
+// a control bar in miniature: its sheet (or none) and a row of dots for buttons, a line for time
+void demo_bar(Canvas& c, int cx, int bottom, double s, double k, bool sheet, double a) {
+  const Palette& p = P();
+  const int w = (int)std::lround(54 * k), h = std::max(6, (int)std::lround(11 * k));
+  const Rect b{cx - (int)std::lround(w * s / 2), bottom - (int)std::lround(h * s), (int)std::lround(w * s), (int)std::lround(h * s)};
+  if (sheet) c.cornered(b, (int)s, p.sheet, 0.92 * a);
+  const int u = std::max(1, (int)std::lround(k)) * (int)s;  // a button's dot
+  const int y = b.y + (int)std::lround(b.h * 0.35) - u / 2;
+  for (int i = -2; i <= 2; ++i) c.fill(b.cx() + (int)std::lround(i * 7 * k * s) - u / 2, y, u, u, i == 0 ? p.pixel : p.dim, a);
+  c.fill(b.x + 3 * (int)s, b.y + (int)std::lround(b.h * 0.72), b.w - 6 * (int)s, std::max(1, (int)s / 2 * 2 / 2), p.faint, a);
+  c.fill(b.x + 3 * (int)s, b.y + (int)std::lround(b.h * 0.72), (b.w - 6 * (int)s) * 2 / 5, std::max(1, (int)s / 2 * 2 / 2), p.fg, a);
+}
+// grey where a picture has colour (premultiplied BGRA: the channels are scaled alike)
+void demo_grey(Canvas& c, const Rect& r, double k) {
+  if (k <= 0) return;
+  const int x0 = std::max(0, r.x), y0 = std::max(0, r.y), x1 = std::min(c.w, r.r()), y1 = std::min(c.h, r.b());
+  for (int y = y0; y < y1; ++y)
+    for (int x = x0; x < x1; ++x) {
+      uint32_t& v = c.px[(size_t)y * c.w + x];
+      const double R = (v >> 16) & 255, G = (v >> 8) & 255, B = v & 255, l = 0.2126 * R + 0.7152 * G + 0.0722 * B;
+      auto m = [&](double ch) { return (uint32_t)std::lround(ch + (l - ch) * k); };
+      v = (v & 0xFF000000u) | (m(R) << 16) | (m(G) << 8) | m(B);
+    }
+}
+// music in miniature: the room's light, the cover (the little night picture) and the spectrum
+// as the look has it (0 cover and wings, 1 the equalizer alone, 2 the cover alone); `turn`: the
+// cover leaning about its upright axis (-1..1)
+void demo_music(Canvas& c, const Rect& scr, double s, int look, double now, double turn, double a) {
+  const Palette& p = P();
+  const int u = (int)s;
+  c.fill(scr, Rgb{8, 8, 10}, a);
+  const int side = (scr.h - 6 * u) / u * u;
+  const Rect cov{scr.cx() - side / 2, scr.y + 3 * u, side, side};
+  // the light round the cover, in its colours
+  for (int i = 6; i >= 1; --i) {
+    const int d = i * 2 * u;
+    // (wide and low: within the screen, so the frame never cuts it)
+    c.cornered({cov.x - d, cov.y - d / 4, cov.w + 2 * d, cov.h + d / 2}, u, i % 2 ? Rgb{60, 66, 112} : Rgb{120, 86, 52}, a * 0.07 * (7 - i));
+  }
+  auto wings = [&](int x0, int dir) {  // dots, the bass by the cover, the highs reaching out
+    for (int col = 0; col < 5; ++col) {
+      const double lvl = 0.35 + 0.65 * std::fabs(std::sin(now * (3.1 + col * 0.7) + col));
+      // (as tall as the cover at most, as the player's own: they used to cross the frame)
+      const int rows = std::max(1, (int)std::lround((side / u / 4) * lvl * (1.0 - col * 0.14)));
+      for (int r = -rows; r <= rows; ++r)
+        c.fill(x0 + dir * col * 2 * u, cov.cy() + r * 2 * u, u, u, p.dim, a);
+    }
+  };
+  if (look == 1) {  // the equalizer alone, where the cover would be
+    for (int col = -5; col <= 5; ++col) {
+      const double lvl = 0.25 + 0.75 * std::fabs(std::sin(now * 2.7 + col * 0.9));
+      const int rows = std::max(1, (int)std::lround(side / u / 2 * lvl * (1 - std::abs(col) * 0.07)));
+      for (int r = 0; r < rows; ++r) c.fill(cov.cx() + col * 2 * u, cov.b() - (r + 1) * 2 * u, u, u, p.fg, a * 0.85);
+    }
+    return;
+  }
+  if (look == 0) { wings(cov.x - 3 * u, -1); wings(cov.r() + 2 * u, 1); }
+  // the cover, turned: narrower, its near edge taller than its far one
+  const double t = std::clamp(turn, -1.0, 1.0) * 0.5;
+  const int cw = std::max(2 * u, (int)std::lround(side * std::cos(t) / u) * u);
+  Canvas art;
+  art.resize(side, side);
+  demo_picture(art, {0, 0, side, side}, s);
+  const int x0 = cov.cx() - cw / 2;
+  for (int i = 0; i < cw; i += u) {
+    const double f = (i + u * 0.5) / cw - 0.5;              // -0.5 .. 0.5 across
+    const int h = (int)std::lround(side * (1 + 0.22 * std::sin(t) * f * 2) / u) * u;
+    const int sx = std::clamp((int)std::lround((f + 0.5) * side / u) * u, 0, side - u);
+    for (int y = 0; y < h; y += u) {
+      const int sy = std::clamp((int)std::lround((double)y / h * side / u) * u, 0, side - u);
+      const uint32_t v = art.px[(size_t)sy * side + sx];
+      c.fill(x0 + i, cov.cy() - h / 2 + y, u, u, Rgb{(uint8_t)((v >> 16) & 255), (uint8_t)((v >> 8) & 255), (uint8_t)(v & 255)}, a);
+    }
+  }
+}
+}  // namespace
+
+void PlayView::render_preview(Canvas& c, const Rect& box, double s, bool tall) {
+  const Palette& p = P();
+  const double now = last_now_;
+  // (the interface's own rounding of its pixels: the picture's room grows with the scale itself,
+  // so at 2.5x, 3.5x or 4.5x the art no longer fills its strip to the edge and loses its foot)
+  auto px = [&](int n) { return (int)std::lround(n * s); };
+  const double in_k = reduce_motion() ? 1.0 : ease_out(clamp01((now - demo_t0_) / 0.18));  // a new picture fades in
+  // what it does, in a few lines under the picture (worked out first: beside the rows the picture
+  // takes all the height the words leave it)
+  const int room = box.w - px(12);
+  str::Id say = str::settings_ambient_desc;
+  switch (demo_) {
+    case D_AMBIENT: say = phover_ >= 0 && phover_ < (int)rows_.size() && rows_[phover_].id == R_AMBIENT_STR ? str::settings_strength_desc : str::settings_ambient_desc; break;
+    case D_SMOOTH: say = str::settings_smooth_desc; break;
+    case D_SIZE: say = str::settings_size_desc; break;
+    case D_BG: say = str::settings_controls_bg_desc; break;
+    case D_LOOK: say = str::settings_look_desc; break;
+    case D_COLOR: say = str::settings_color_desc; break;
+    case D_TILT: say = str::settings_tilt_desc; break;
+    case D_ABOUT: say = str::settings_about_desc; break;
+    case D_LANGUAGE: say = str::settings_language_desc; break;
+  }
+  const size_t max_lines = tall ? 4 : 2;
+  std::vector<std::string> lines = wrap_lines(tr(say), room, s);
+  if (lines.size() > max_lines) { lines.resize(max_lines); lines.back() = fit_end(lines.back() + " ...", room, s); }
+  const int words_h = px((int)lines.size() * 12 + 6);
+  // on top: a strip 60 px of art tall; beside the rows: the whole column above the words
+  const Rect stage{box.x + px(4), box.y + px(2), box.w - px(8), tall ? std::max(px(60), box.h - px(4) - words_h) : px(60)};
+  c.cornered(stage, px(1), p.edge, 1.0);
+  c.cornered(stage.inset(px(1)), px(1), p.screen, 1.0);
+  const Rgb acc = mix(p.fg, in.accent, std::clamp(in.accent_k, 0.0, 1.0) * 0.85);
+  // the pictures' own pixel: the interface's beside the rows when there is room, a size or more up
+  auto unit = [&](double w_art, double h_art, double room_w, double room_h) {
+    if (!tall) return s;
+    const double z = std::floor(std::min(room_w / (w_art * s), room_h / (h_art * s)) * 4) / 4;
+    return s * std::clamp(z, 1.0, 4.0);
+  };
+  // two screens: how it looks off, and on; the one in use is lit and named brighter (side by side
+  // on top, one over the other beside the rows)
+  auto pair = [&](str::Id left, str::Id right, int on, auto&& draw) {
+    const int cellw = tall ? stage.w : stage.w / 2, cellh = tall ? stage.h / 2 : stage.h;
+    // (beside the rows: room around each screen for its light, which reaches 12 of its pixels)
+    const double u = unit(44 + 16, 25 + 10, cellw - 4 * s, cellh - 20 * s);
+    const int sw = (int)std::lround(44 * u), sh = (int)std::lround(25 * u);
+    const int under = tall ? (int)std::lround(std::max(9 * s, 9 * u)) : px(9);  // the screen to its name
+    for (int k = 0; k < 2; ++k) {
+      const int cx = tall ? stage.cx() : stage.x + cellw * k + cellw / 2;
+      const int top = tall ? stage.y + cellh * k + (cellh - sh - under - px(14)) / 2 : stage.y + px(11);
+      const Rect scr{cx - sw / 2, top, sw, sh};
+      draw(k, scr, (k == on ? 1.0 : 0.55) * in_k, u);
+      const std::string label = tr(k == 0 ? left : right);
+      const int tw = text_w(label, s);
+      text(c, label, cx - tw / 2, scr.b() + under, s, k == on ? p.fg : p.dim, in_k);
+      if (k == on) c.fill(cx - tw / 2, scr.b() + under + px(12), tw, px(1), acc, 0.8 * in_k);
+    }
+  };
+  // one screen, centred
+  auto single = [&](double w_art, double h_art, double& u) {
+    u = unit(w_art, h_art, stage.w - 16 * s, stage.h - 16 * s);
+    const int sw = (int)std::lround(w_art * u), sh = (int)std::lround(h_art * u);
+    return Rect{stage.cx() - sw / 2, tall ? stage.cy() - sh / 2 : stage.y + px(6), sw, sh};
+  };
+  switch (demo_) {
+    case D_AMBIENT: {
+      const double reach = 4 + 8 * std::sqrt(std::clamp(in.ambient_strength, 0.05, 1.0));
+      const double lit = clamp01(tsw_[R_AMBIENT].x);
+      pair(str::settings_off, str::settings_on, in.ambient ? 1 : 0, [&](int k, const Rect& scr, double a, double u) {
+        if (k == 1) demo_glow(c, scr, u, reach, a * (0.35 + 0.65 * lit));
+        demo_picture(c, scr, u, a);
+      });
+      break;
+    }
+    case D_SMOOTH: {
+      // a pan: a lamp post crossing the picture. Off, the film's own steps (it jumps); on, it
+      // glides, a faint trail behind it
+      pair(str::settings_off, str::settings_on, in.smooth_motion ? 1 : 0, [&](int k, const Rect& scr, double a, double u) {
+        demo_picture(c, scr, u, a);
+        const double period = 2.6, ph = std::fmod(now, period) / period;
+        const double travel = scr.w - 6 * u;
+        const int U = std::max(1, (int)std::lround(u));
+        auto post = [&](double f, double al) {
+          const int x = scr.x + (int)std::lround((u + travel * f) / u) * U;
+          c.fill(x, scr.y + 5 * U, 2 * U, scr.h - 5 * U, P().fg, al);
+          c.fill(x - U, scr.y + 4 * U, 4 * U, 2 * U, Rgb{236, 186, 112}, al);
+        };
+        if (k == 0) post(std::floor(ph * 9) / 9, a);  // a few big steps: the judder
+        else { post(std::max(0.0, ph - 0.03), 0.18 * a); post(std::max(0.0, ph - 0.015), 0.35 * a); post(ph, a); }
+      });
+      break;
+    }
+    case D_SIZE: {
+      // one screen, its bar at the size pointed at (or the one in use)
+      static const double kk[kUiSizes] = {0.62, 0.8, 1.0, 1.2};
+      const int seg = demo_seg_ >= 0 && demo_seg_ < kUiSizes ? demo_seg_ : ui_size_index(in.ui_scale);
+      double u = s;
+      const Rect scr = single(92, 48, u);
+      demo_picture(c, scr, u, in_k);
+      demo_bar(c, scr.cx(), scr.b() - (int)std::lround(4 * u), u, kk[seg], !in.controls_free, in_k);
+      break;
+    }
+    case D_BG: {
+      const int on = demo_seg_ == 0 || demo_seg_ == 1 ? demo_seg_ : (in.controls_free ? 1 : 0);
+      pair(str::more_with_bg, str::more_without_bg, on, [&](int k, const Rect& scr, double a, double u) {
+        demo_picture(c, scr, u, a);
+        demo_bar(c, scr.cx(), scr.b() - (int)std::lround(2 * u), u, 0.95, k == 0, a);
+      });
+      break;
+    }
+    case D_LOOK: {
+      // the look pointed at (before it is taken), or the one in use
+      const int look = demo_seg_ >= 0 && demo_seg_ < 3 ? demo_seg_ : std::clamp(in.music_look, 0, 2);
+      double u = s;
+      const Rect scr = single(100, 48, u);
+      demo_music(c, scr, u, look, now, 0, in_k);
+      demo_grey(c, scr, in.music_mono && look != 2 ? 1.0 : 0.0);
+      break;
+    }
+    case D_COLOR: {
+      const int on = demo_seg_ == 0 || demo_seg_ == 1 ? demo_seg_ : (in.music_mono ? 1 : 0);
+      pair(str::music_color, str::music_mono, on, [&](int k, const Rect& scr, double a, double u) {
+        demo_music(c, scr, u, 0, now, 0, a);
+        demo_grey(c, scr, k == 1 ? 1.0 : 0.0);
+      });
+      break;
+    }
+    case D_TILT: {
+      pair(str::settings_off, str::settings_on, in.cover_tilt ? 1 : 0, [&](int k, const Rect& scr, double a, double u) {
+        demo_music(c, scr, u, 2, now, k == 1 ? std::sin(now * 2.1) : 0.0, a);
+      });
+      break;
+    }
+    case D_ABOUT: {
+      const int y0 = tall ? stage.cy() - px(22) : stage.y + px(14);
+      text(c, "Cue", stage.cx() - text_w("Cue", 2 * s) / 2, y0, 2 * s, p.fg, in_k);
+      const std::string v = "v" CUE_VERSION_SHORT;
+      text(c, v, stage.cx() - text_w(v, s) / 2, y0 + px(26), s, p.dim, in_k);
+      break;
+    }
+    case D_LANGUAGE: {
+      // the language in use, written in itself, under the globe
+      const std::string name = i18n::native_name(in.language < 0 ? i18n::language() : (i18n::Lang)in.language);
+      const int y0 = tall ? stage.cy() - px(22) : stage.y + px(10);
+      action_icon(c, "globe", {stage.cx() - px(9), y0, px(18), px(18)}, 2 * s, p.dim, in_k);
+      const int tw = text_w(name, s);
+      text(c, name, stage.cx() - tw / 2, y0 + px(26), s, p.fg, in_k);
+      break;
+    }
+  }
+  for (size_t i = 0; i < lines.size(); ++i)
+    text(c, lines[i], stage.x + px(2), stage.b() + px(4 + 12 * (int)i), s, mix(p.dim, p.fg, 0.25), in_k);
+}
+
 void PlayView::open_panel(Panel pn, int btn, double now) {
   bool was = panel_ != Panel::None;
   if(panel_==Panel::Queue&&pn!=Panel::Queue)queue_view_.closed();
   cc_drag_=false;
   if(pn==Panel::CC&&panel_!=Panel::CC)cc_scroll_.snap(0);
   style_y_ = -1;  // re-place the style editor each time it opens
+  // a button that lives in "..." right now: its menu opens over "..." (where the button went)
+  if (btn > B_NONE && btn < B_COUNT && btn != B_TIMELINE && btn != B_DOCKBG && !in_bar(btn) && in_bar(B_MORE)) btn = B_MORE;
+  if (pn == Panel::More) more_collapsed_ = false;  // decided afresh by the menu's own layout
+  // the film's mini player: its own few rows for subtitles, never the full list
+  if (pn == Panel::CC && film_mini()) pn = Panel::SubMini;  // (the mini player, not any small window)
+  if (pn == Panel::Queue && film_mini()) return;              // (no up next in a film's mini player)
+  if (pn == Panel::Settings && panel_ != Panel::Settings) {
+    settings_restart(); demo_seg_ = -1; demo_frame_ = -1; demo_t0_ = now;
+    demo_ = in.audio_only ? D_LOOK : D_AMBIENT;  // the first row's picture
+  }
+  lang_from_settings_ = false;  // (set again by the caller when the language list comes from Settings)
+  if (pn != panel_) panel_fit_ = 0;  // (a menu's own size first; layout_rows steps it down if it must)
   panel_ = pn;
   panel_btn_ = btn;
   contact_k_ = 0;
   phover_ = -1; ppart_ = -1; slider_row_ = -1;
   build_rows();
   layout_rows();
+  if (card_) layout_dock();  // (the card's controls make room for its list, or take it back)
   if(pn==Panel::Queue) {queue_view_.opened();ph_=queue_view_.height();}
   sw_.snap(switch_on() ? 1 : 0);
+  for (auto& r : rows_)
+    if (r.k == RK::Toggle && r.id < (int)tsw_.size()) { tsw_[r.id] = Spring::rd(0.3, 0.66, 0.01); tsw_[r.id].snap(r.checked ? 1 : 0); }
   pfocus_ = -1;
   if (kb_) for (int i = 0; i < (int)rows_.size(); ++i) if (selectable(rows_[i])) { pfocus_ = i; break; }
   if(pn==Panel::CC) {
@@ -1369,10 +2467,12 @@ void PlayView::close_panel() {
   if (panel_ == Panel::None) return;
   if(panel_==Panel::Queue)queue_view_.closed();
   cc_drag_=false;cc_scroll_.snap(cc_scroll_.x);
+  const bool list = panel_ == Panel::Queue;
   panel_ = Panel::None;
   panel_btn_ = B_NONE;
   pvis_.target = 0;
   slider_row_ = -1;
+  if (card_ && list) layout_dock();
   sub_hover_ = false;
   dock_dirty_ = true;
 }
@@ -1441,6 +2541,21 @@ void PlayView::style_changed(bool live) {
 void PlayView::slider_set(int row, int x, bool live) {
   Row& r = rows_[row];
   Rect pr = panel_rect();
+  if (r.k == RK::VSlider && !r.parts.empty()) {
+    // up is louder: the column's own track, from its bottom
+    Rect t = r.parts[0];
+    int top = pr.y + t.y + 4 * s_, bot = pr.y + t.b() - 4 * s_;
+    double v = std::round((1.0 - clamp01((my_ - top) / (double)std::max(1, bot - top))) * kVolMax);
+    if (std::fabs(v - 100) <= 3) v = 100;  // the natural level is easy to land back on
+    (void)x;
+    act(PA::Volume, v);
+    in.volume = v;
+    if (in.muted && v > 0) { act(PA::ToggleMute); in.muted = false; }
+    r.value = (int)v; r.right = std::to_string((int)v) + "%";
+    dock_dirty_ = panel_dirty_ = true;
+    (void)live;
+    return;
+  }
   if (r.id == R_SPEED_BAR) {
     Rect bar = r.parts[1];
     int bx = pr.x + bar.x + 4 * s_, bw = bar.w - 8 * s_;
@@ -1453,6 +2568,19 @@ void PlayView::slider_set(int row, int x, bool live) {
   int bx = pr.x + bar.x + 6 * s_, bw = bar.w - 12 * s_;
   double f = clamp01((x - bx) / (double)std::max(1, bw));
   double v = r.minv + f * (r.maxv - r.minv);
+  if (r.id == R_VOLUME) {
+    v = std::round(v);
+    if (std::fabs(v - 100) <= 3) v = 100;  // the natural level is easy to land back on
+    act(PA::Volume, v);
+    in.volume = v;
+    if (in.muted && v > 0) { act(PA::ToggleMute); in.muted = false; }
+    build_rows();
+    layout_rows();
+    dock_dirty_ = true;
+    return;
+  }
+  // the notch holds the handle within a few px of art of it: the usual value is easy to land back on
+  if (r.mark > -1e8 && r.maxv > r.minv && std::fabs(v - r.mark) / (r.maxv - r.minv) * (bw / s_) < 3.0) v = r.mark;
   if (r.id == R_SIZE) in.style.size = (int)std::lround(v / 2) * 2;
   if (r.id == R_TEXT) in.style.text_op = (int)std::lround(v / 5) * 5;
   if (r.id == R_BG) in.style.bg_op = (int)std::lround(v / 5) * 5;
@@ -1472,7 +2600,26 @@ void PlayView::slider_set(int row, int x, bool live) {
 void PlayView::panel_adjust(int row, int dir, double now) {
   (void)now;
   Row& r = rows_[row];
+  if (!r.enabled && (r.k == RK::Toggle || r.k == RK::Segmented)) return;
   switch (r.id) {
+    case R_SUB_PICK: {  // the next track (or the one before), round the list
+      const int n = (int)in.subs.size();
+      if (n < 2) break;
+      int cur = 0;
+      const int64_t shown = in.sub_selection.shown(in.sid);
+      for (int i = 0; i < n; ++i) if (in.subs[i].id == shown) cur = i;
+      const int to = ((cur + dir) % n + n) % n;
+      act(PA::SelectSub, 0, in.subs[to].id);
+      // Its name shows at once; an old observer event cannot undo the last click.
+      in.sub_selection.preview(in.subs[to].id);
+      build_rows(); layout_rows(); panel_dirty_ = true;
+      break;
+    }
+    case R_SUB_SIZE: {
+      const int to = std::clamp(in.mini_sub_size + dir, 0, 2);
+      if (to != in.mini_sub_size) { in.mini_sub_size = to; act(PA::MiniSubSize, to); build_rows(); layout_rows(); }
+      break;
+    }
     case R_SIZE: in.style.size = std::clamp(in.style.size + 2 * dir, 28, 72); style_changed(false); break;
     case R_TEXT: in.style.text_op = std::clamp(in.style.text_op + 5 * dir, 10, 100); style_changed(false); break;
     case R_BG: in.style.bg_op = std::clamp(in.style.bg_op + 5 * dir, 0, 100); style_changed(false); break;
@@ -1482,9 +2629,18 @@ void PlayView::panel_adjust(int row, int dir, double now) {
     case R_FONTS: in.style.font = (in.style.font + dir + 3) % 3; style_changed(false); break;
     case R_ASS: in.style.ass_mode = dir > 0 ? 1 : 0; style_changed(false); break;
     case R_DELAY: act(PA::SubDelay, 0.1 * dir); break;
-    case R_SUB_TOGGLE: if ((dir > 0) != r.checked) { act(PA::SubVisible, dir > 0 ? 1 : 0); sw_.target = dir > 0 ? 1 : 0; } break;
-    case R_AMBIENT: if ((dir > 0) != r.checked) { act(PA::Ambient, dir > 0 ? 1 : 0); sw_.target = dir > 0 ? 1 : 0; } break;
-    case R_COVER_TILT: if ((dir > 0) != r.checked) { act(PA::CoverTilt, dir > 0 ? 1 : 0); in.cover_tilt = dir > 0; sw_.target = dir > 0 ? 1 : 0; } break;
+    case R_SUB_TOGGLE: if ((dir > 0) != r.checked) { act(PA::SubVisible, dir > 0 ? 1 : 0); sw_.target = dir > 0 ? 1 : 0; tsw_[R_SUB_TOGGLE].target = sw_.target; } break;
+    case R_AMBIENT: if ((dir > 0) != r.checked) { act(PA::Ambient, dir > 0 ? 1 : 0); sw_.target = dir > 0 ? 1 : 0; tsw_[R_AMBIENT].target = sw_.target; } break;
+    case R_COVER_TILT: if ((dir > 0) != r.checked) { act(PA::CoverTilt, dir > 0 ? 1 : 0); in.cover_tilt = dir > 0; sw_.target = dir > 0 ? 1 : 0; tsw_[R_COVER_TILT].target = sw_.target; } break;
+    case R_MUTE: if ((dir > 0) != r.checked) { act(PA::ToggleMute); tsw_[R_MUTE].target = dir > 0 ? 1 : 0; } break;
+    case R_SMOOTH: if ((dir > 0) != r.checked) { act(PA::SmoothMotion, dir > 0 ? 1 : 0); in.smooth_motion = dir > 0; tsw_[R_SMOOTH].target = dir > 0 ? 1 : 0; } break;
+    case R_OVF_LOOP: toggle_loop(now); break;
+    case R_VOLUME: {
+      double v = std::clamp((in.muted ? 0.0 : in.volume) + 5 * dir, 0.0, kVolMax);
+      act(PA::Volume, v); in.volume = v; if (in.muted && v > 0) { act(PA::ToggleMute); in.muted = false; }
+      build_rows(); layout_rows(); dock_dirty_ = true;
+      break;
+    }
     case R_CONTROLS_FREE: act(PA::ControlsFree, dir > 0 ? 1 : 0); break;
     case R_UISCALE: act(PA::UiScale, next_ui_size(in.ui_scale, dir)); break;
     case R_MUSIC_LOOK: if (int v = std::clamp(in.music_look + (dir > 0 ? 1 : -1), 0, 2); v != in.music_look) act(PA::MusicLook, v); break;
@@ -1514,12 +2670,39 @@ void PlayView::panel_adjust(int row, int dir, double now) {
   }
 }
 
+// "..."'s row of the bar's buttons: each does what it does on the bar; its menus open over "..."
+void PlayView::tool_click(int part, double now) {
+  if (part < 0 || part >= (int)tool_ids_.size()) return;
+  switch (tool_ids_[part]) {
+    case B_QUEUE: activity(now); open_panel(Panel::Queue, panel_btn_, now); break;
+    case B_LOOP: toggle_loop(now); build_rows(); layout_rows(); break;
+    case B_CC: open_panel(Panel::CC, panel_btn_, now); break;
+    case B_AUDIO: open_panel(Panel::Audio, panel_btn_, now); break;
+    case B_SPEED: open_panel(Panel::Speed, panel_btn_, now); break;
+    case B_FS: close_panel(); act(PA::Fullscreen); break;
+    case B_MINI: close_panel(); act(PA::MiniPlayer, 1); break;
+    case B_SHUFFLE: in.shuffle = !in.shuffle; act(PA::Shuffle, in.shuffle ? 1 : 0); build_rows(); layout_rows(); break;
+    default: break;
+  }
+}
+
 void PlayView::panel_click(int row, int part, int x, double now) {
   if (row < 0 || row >= (int)rows_.size()) return;
   Row& r = rows_[row];
+  if (!r.enabled && (r.k == RK::Toggle || r.k == RK::Segmented)) return;  // (shown, dimmed: not for this look)
   switch (r.id) {
-    case R_SUB_TOGGLE: act(PA::SubVisible, r.checked ? 0 : 1); sw_.target = r.checked ? 0 : 1; break;
-    case R_SUB_TRACK: act(PA::SelectSub, 0, r.track); break;  // picking a track also turns it on
+    case R_SUB_TOGGLE: act(PA::SubVisible, r.checked ? 0 : 1); sw_.target = r.checked ? 0 : 1; tsw_[R_SUB_TOGGLE].target = sw_.target; break;
+    case R_SUB_TRACK: {
+      const int64_t id = r.track;
+      act(PA::SelectSub, 0, id);  // picking a track also turns it on
+      in.sub_selection.preview(id);
+      build_rows(); layout_rows(); panel_dirty_ = true;
+      break;
+    }
+    case R_SUB_PICK: if (r.enabled) panel_adjust(row, part == 0 ? -1 : 1, now); break;
+    case R_SUB_SIZE:
+      if (r.enabled && part >= 0 && part < 3 && part != in.mini_sub_size) { in.mini_sub_size = part; act(PA::MiniSubSize, part); build_rows(); layout_rows(); }
+      break;
     case R_ADD_SUB: act(PA::AddSubFile); close_panel(); break;
     case R_STYLE: open_panel(Panel::Style, panel_btn_, now); break;
     case R_BACK:
@@ -1569,10 +2752,21 @@ void PlayView::panel_click(int row, int part, int x, double now) {
       break;
     }
     case R_SPEED: open_panel(Panel::Speed, panel_btn_, now); break;
-    case R_BACK_MORE: open_panel(Panel::More, panel_btn_, now); break;
+    case R_BACK_MORE:
+      if (panel_ == Panel::Settings && part == 0 && !r.parts.empty()) {  // the header's own button: the examples
+        in.settings_examples = !in.settings_examples;
+        act(PA::SettingsExamples, in.settings_examples ? 1 : 0);
+        settings_restart();
+        demo_t0_ = now; demo_frame_ = -1;
+        build_rows(); layout_rows(); panel_dirty_ = true;
+        break;
+      }
+      open_panel(Panel::More, panel_btn_, now); break;
     case R_ABOUT: open_panel(Panel::About, panel_btn_, now); break;
     case R_REMOTE: close_panel(); act(PA::Remote); break;
-    case R_LANGUAGE: open_panel(Panel::Language, panel_btn_, now); break;
+    case R_LANGUAGE: { const bool from = panel_ == Panel::Settings; open_panel(Panel::Language, panel_btn_, now); lang_from_settings_ = from; build_rows(); layout_rows(); break; }
+    case R_SETTINGS: open_panel(Panel::Settings, panel_btn_, now); break;
+    case R_BACK_SETTINGS: open_panel(Panel::Settings, panel_btn_, now); break;
     case R_LANG_OPT:
       if ((int)r.opt != in.language) { in.language = (int)r.opt; act(PA::Language, r.opt); }
       break;
@@ -1594,14 +2788,24 @@ void PlayView::panel_click(int row, int part, int x, double now) {
       else if (part == 1) { slider_row_ = row; slider_set(row, x, true); }
       break;
     case R_SPEED_CHIPS: if (part >= 0 && part < 6) set_speed(kSpeedChips[part]); break;
-    case R_AMBIENT: act(PA::Ambient, r.checked ? 0 : 1); sw_.target = r.checked ? 0 : 1; break;
-    case R_COVER_TILT: act(PA::CoverTilt, r.checked ? 0 : 1); in.cover_tilt = !r.checked; sw_.target = r.checked ? 0 : 1; break;
+    case R_AMBIENT: act(PA::Ambient, r.checked ? 0 : 1); sw_.target = r.checked ? 0 : 1; tsw_[R_AMBIENT].target = sw_.target; break;
+    case R_COVER_TILT: act(PA::CoverTilt, r.checked ? 0 : 1); in.cover_tilt = !r.checked; sw_.target = r.checked ? 0 : 1; tsw_[R_COVER_TILT].target = sw_.target; break;
     case R_CONTROLS_FREE: if (part >= 0) act(PA::ControlsFree, part == 1 ? 1 : 0); break;
     case R_UISCALE: if (part >= 0) act(PA::UiScale, ui_size_choice(part)); break;
     case R_MUSIC_LOOK: if (part >= 0 && part != in.music_look) act(PA::MusicLook, part); break;
     case R_MUSIC_COLOR: if (part >= 0 && (part == 1) != in.music_mono) { act(PA::MusicMono, part); in.music_mono = part == 1; } break;
     case R_FRAME: act(PA::SaveFrame, 0); close_panel(); break;
-    case R_QUEUE: activity(now); open_panel(Panel::Queue,B_QUEUE,now); break;
+    case R_QUEUE: activity(now); open_panel(Panel::Queue,in_bar(B_QUEUE)?B_QUEUE:panel_btn_,now); break;
+    case R_VOLUME: if (part == 0) { slider_row_ = row; slider_set(row, x, true); } break;
+    case R_MUTE: act(PA::ToggleMute); tsw_[R_MUTE].target = r.checked ? 0 : 1; break;
+    case R_OVF_CC: open_panel(Panel::CC, panel_btn_, now); break;
+    case R_TOOLS: tool_click(part, now); break;
+    case R_INTERFACE: open_panel(Panel::Interface, panel_btn_, now); break;
+    case R_OVF_AUDIO: open_panel(Panel::Audio, panel_btn_, now); break;
+    case R_OVF_LOOP: toggle_loop(now); break;
+    case R_FS_ROW: act(PA::Fullscreen); close_panel(); break;
+    case R_MINI: close_panel(); act(PA::MiniPlayer, in.mini_player ? 0 : 1); break;  // an action: the menu goes, the window changes
+    case R_SMOOTH: act(PA::SmoothMotion, r.checked ? 0 : 1); in.smooth_motion = !r.checked; tsw_[R_SMOOTH].target = r.checked ? 0 : 1; break;
     case R_OPEN: act(PA::OpenFile); close_panel(); break;
     case R_CLOSE: close_on_release_ = true; close_panel(); break;  // fires on release, never with a button held
     default: break;
@@ -1776,6 +2980,13 @@ void PlayView::start_iris(double now) {
   iris_frame_ = -1;
 }
 
+double PlayView::iris_open(double now) const {
+  if (iris_ == 0) return -1;
+  if (iris_ == 1) return 0;
+  double t = reduce_motion() ? 1.0 : std::clamp((now - iris_t0_) / kIrisDur, 0.0, 1.0);
+  return 1 - std::pow(1 - t, 3);  // quick to open, soft landing (as the bitmap below)
+}
+
 // The picture opens through a pixel-art ellipse with the window's proportions.
 // Chunky cells (3 px of art), black outside; ends a little past the corners.
 void PlayView::render_iris(double k) {
@@ -1814,7 +3025,9 @@ void PlayView::compose(double now) {
   double s = s_;
   {
     Layer& IL = layers[L_IRIS];
-    if (iris_ == 1) { if (iris_drawn_ != 0 || IL.c.w != w_ || IL.c.h != h_ || !IL.visible) { render_iris(0); iris_drawn_ = 0; } }
+    if (in.iris_engine && iris_ != 0) {
+      if (IL.visible) { IL.visible = false; IL.dirty = true; IL.c = Canvas{}; }
+    } else if (iris_ == 1) { if (iris_drawn_ != 0 || IL.c.w != w_ || IL.c.h != h_ || !IL.visible) { render_iris(0); iris_drawn_ = 0; } }
     else if (iris_ == 2) {
       double t = reduce_motion() ? 1.0 : std::clamp((now - iris_t0_) / kIrisDur, 0.0, 1.0);
       double k = 1 - std::pow(1 - t, 3);  // quick to open, soft landing
@@ -1828,12 +3041,33 @@ void PlayView::compose(double now) {
       }
     } else if (IL.visible) { IL.visible = false; IL.dirty = true; IL.c = Canvas{}; }
   }
+  // the card's cover, drawn by Cue where the engine shows a spectrum (the spectrum-alone look): the
+  // same square, flat, with its soft shadow; drawn again only for a new cover or a new place
+  {
+    Layer& AL = layers[L_ART];
+    const bool want = card_ && in.card_art_show && in.card_art && in.card_art->ok() && card_cover_.w > 8;
+    if (!want) {
+      if (AL.visible) { AL.visible = false; AL.dirty = true; AL.c = Canvas{}; art_drawn_ = nullptr; }
+    } else if (art_drawn_ != in.card_art.get() || art_rect_.x != card_cover_.x || art_rect_.y != card_cover_.y || art_rect_.w != card_cover_.w) {
+      const double half = card_cover_.w / 2.0;
+      const int reach = (int)std::ceil(half * 1.25) + 2;  // (the shadow's spread round the square)
+      const double cx = card_cover_.x + half, cy = card_cover_.y + half;
+      int x0 = std::max(0, (int)std::floor(cx) - reach), y0 = std::max(0, (int)std::floor(cy) - reach);
+      int x1 = std::min(w_, (int)std::ceil(cx) + reach), y1 = std::min(h_, (int)std::ceil(cy) + reach);
+      if (x1 - x0 > 8 && y1 - y0 > 8) {
+        AL.c.resize(x1 - x0, y1 - y0);
+        cover_turn_draw(*in.card_art, AL.c.px.data(), AL.c.w, AL.c.h, cx - x0, cy - y0, half, 0, 0, 0, 1.0);
+        AL.x = x0; AL.y = y0; AL.visible = true; AL.dirty = true;
+        art_drawn_ = in.card_art.get(); art_rect_ = card_cover_;
+      }
+    }
+  }
   // music: the title and artist, beside the cover (wide) or under it (tall)
   Layer& ML = layers[L_MUSIC];
   Rect cr = cover_screen_rect();
   if (music_vis_.v > 0 && cr.w > 0) {
     std::string key = in.music_title + "\n" + in.music_artist + "\n" + std::to_string(w_) + "x" + std::to_string(h_) + "@" +
-                      std::to_string(s_) + (view().words_beside() ? "b" : "u") + std::to_string((int)std::lround(view().f * 1000)) + std::to_string(in.queue_active ? in.queue.size() : 0) +
+                      std::to_string(s_) + (card_ ? "c" : (list_header_ && list_mix() >= 0.5) ? "H" : view().words_beside() ? "b" : "u") + std::to_string((int)std::lround(view().f * 1000)) + std::to_string(in.queue_active ? in.queue.size() : 0) +
                       (link_hot_ ? "h" : "") + (panel_ == Panel::Queue ? "o" : "");
     if (key != music_key_) {
       std::string song = in.music_title + "\n" + in.music_artist;
@@ -1846,14 +3080,35 @@ void PlayView::compose(double now) {
     const MusicView V = view();
     // a new song's words come in from the side as they fade in (and leave the same way)
     int slide = (int)std::lround((1 - ease_out(music_vis_.v)) * 10 * s);
-    if (V.words_beside()) {
-      mx = (int)std::lround(V.ox + S.text_x * V.f) + slide;
-      my = (int)std::lround(lerp(cr.cy() - music_base_.h / 2.0, (double)cr.y, std::clamp(list_k_.x, 0.0, 1.0)));
-    } else { mx = (w_ - music_base_.w) / 2; my = cr.b() + (int)std::lround(14 * s) + slide; }
+    const bool header = !card_ && list_header_;
+    if (header && list_mix() >= 0.5) {
+      // the list's header: beside the thumbnail, level with it
+      mx = list_lay_.words.x + slide;
+      my = list_lay_.thumb.cy() - music_base_.h / 2;
+    } else if (card_) {
+      // the card: centred in the column beside the cover, at its top
+      mx = card_col_.x + (card_col_.w - music_base_.w) / 2 + slide;
+      my = card_words_y_;
+    } else if (V.words_beside()) {
+      mx = (int)std::lround(scene_words_x(S, V)) + slide;
+      my = (int)std::lround(lerp(cr.cy() - music_base_.h / 2.0, (double)cr.y, list_over() ? 0.0 : std::clamp(list_k_.x, 0.0, 1.0)));
+    } else {
+      // under the cover, centred on it (the cover leaves the middle when the list opens beside it)
+      const int m = (int)std::lround(kMargin * s);
+      mx = std::clamp(cr.cx() - music_base_.w / 2, m, std::max(m, w_ - m - music_base_.w));
+      my = cr.b() + (int)std::lround(V.frame == MusicFrame::Centre ? centre_words_gap() : 14 * s) + slide;
+    }
     // the bar has the floor while it is up: the words step back where it would cover them
     Rect d = dock_rect();
     bool under = vis_.v > 0 && my + music_base_.h > d.y && my < d.b() && mx < d.r() && mx + music_base_.w > d.x;
     double a = ease_out(music_vis_.v) * ease_out(viewport_vis_.v) * (1 - (under ? ease_out(vis_.v) : 0.0));
+    if (card_ || (list_over() && !header)) a *= 1 - list_mix();  // the list takes their place (the card)
+    // the card's "..." over its words: they step back (only their top showed above the menu)
+    if (card_ && panel_ != Panel::Queue && pvis_.v > 0) {
+      const Rect pr = panel_rect(), wr{mx, my, music_base_.w, music_base_.h};
+      if (pr.x < wr.r() && wr.x < pr.r() && pr.y < wr.b() && wr.y < pr.b()) a *= 1 - ease_out(pvis_.v);
+    }
+    else if (header) a *= std::fabs(2 * list_mix() - 1);           // they fade out where they were and in at the header
     if (music_base_.w > 0 && my >= 0 && my + music_base_.h <= h_ && a > 0.001) {
       restage(ML, music_base_, music_gen_, a, std::max(0, mx), my);
       music_link_ = music_link_local_.w > 0 && a > 0.5 ? Rect{std::max(0, mx) + music_link_local_.x, my + music_link_local_.y, music_link_local_.w, music_link_local_.h} : Rect{};
@@ -1892,7 +3147,13 @@ void PlayView::compose(double now) {
     double enter = ease_out((now - content_t0_) / tok::enter);
     restage(PL, panel_base_, panel_gen_, ease_out(pvis_.v) * std::max(0.0, vis_.v) * (0.35 + 0.65 * enter) * (1 - ease_out(edit_.x)), pr.x,
             pr.y + (int)std::lround(prise_.x * s) * (above ? 1 : -1));
-  } else if (PL.visible) { PL.visible = false; PL.dirty = true; PL.lgen = 0; }
+  } else if (PL.visible) {
+    PL.visible = false; PL.dirty = true; PL.lgen = 0;
+    // the menu gone: its pixels too (a menu at 4K holds about 10 MB in two copies; it is drawn
+    // again when it opens)
+    PL.c = Canvas{};
+    if (panel_ == Panel::None) { panel_base_ = Canvas{}; cc_list_ = Canvas{}; panel_dirty_ = true; }
+  }
 
   // toast
   Layer& T = layers[L_TOAST];
@@ -2052,13 +3313,14 @@ void PlayView::compose(double now) {
     Layer& BL = layers[L_BACK];
     if (back_vis_.v > 0) {
       double a = ease_out(back_vis_.v), h = ease_out(back_hov_);
-      std::string sig = std::to_string((int)(a * 255)) + "|" + std::to_string((int)(h * 50)) + "|" + std::to_string(s);
+      std::string sig = std::to_string((int)(a * 255)) + "|" + std::to_string((int)(h * 50)) + "|" + std::to_string(s) + (in.mini_player ? "m" : "");
       if (sig != back_sig_ || !BL.visible) {
         back_sig_ = sig;
         Rect br = back_rect();
         BL.c.resize(br.w, br.h);
         if (h > 0) BL.c.cornered({0, 0, br.w, br.h}, s, p.hover, a * h);
-        action_icon(BL.c, "cue:return", {0, 0, br.w, br.h}, s, mix(p.dim, p.fg, h), a);
+        // the mini player's corner: back to full size (home is a step further, from the full player)
+        action_icon(BL.c, in.mini_player ? "expand" : "cue:return", {0, 0, br.w, br.h}, s, mix(p.dim, p.fg, h), a);
         BL.x = br.x; BL.y = br.y;
         BL.visible = true;
         BL.dirty = true;
@@ -2072,24 +3334,28 @@ void PlayView::compose(double now) {
     static const str::Id names[] = {str::kCount, str::tip_volume, str::kCount, str::tip_rewind, str::kCount,
                                     str::tip_forward, str::tip_subtitles, str::tip_audio, str::kCount, str::tip_more};
     bool volbar = vol_drag_ || (hover_ == B_VOLBAR);
-    bool btn = (((hover_ > B_NONE && hover_ <= B_MORE) || (hover_ == B_LOOP || hover_ == B_QUEUE || hover_ == B_NEXT || hover_ == B_PREV)) && panel_btn_ != hover_ && !kb_) || volbar;
+    bool btn = (((hover_ > B_NONE && hover_ <= B_MORE) || (hover_ == B_LOOP || hover_ == B_QUEUE || hover_ == B_NEXT || hover_ == B_PREV || hover_ == B_EXPAND || hover_ == B_MINI || hover_ == B_SHUFFLE)) && panel_btn_ != hover_ && !kb_) || volbar;
     double still = vol_drag_ ? 1e9 : now - hover_since_;
     if (btn && still > tok::tip_delay && vis_.v > 0.9) {
       std::string label = volbar ? std::to_string((int)std::lround(in.muted ? 0 : in.volume)) + "%"
                         : tr(hover_ == B_PLAY ? (in.paused ? str::tip_play : str::tip_pause)
                            : hover_ == B_NEXT ? str::queue_next
                            : hover_ == B_PREV ? str::queue_previous
+                           : hover_ == B_EXPAND ? str::more_mini_exit
+                           : hover_ == B_MINI ? str::more_mini_player
+                           : hover_ == B_SHUFFLE ? (in.shuffle ? str::tip_shuffle_on : str::tip_shuffle)
                            : hover_ == B_QUEUE ? str::queue_title
                            : hover_ == B_LOOP ? (in.loop_all && in.queue_active && in.queue.size() > 1 ? str::tip_loop_all
                                                  : in.loop ? (in.queue_active && in.queue.size() > 1 ? str::tip_loop_one : str::tip_loop_on)
                                                  : str::tip_loop)
                            : hover_ == B_FS ? (in.fullscreen ? str::tip_exit_fullscreen : str::tip_fullscreen)
-                           : hover_ == B_VOL ? (in.muted ? str::tip_unmute : str::tip_mute)
+                           : hover_ == B_VOL ? (vol_folded_ ? str::tip_volume : in.muted ? str::tip_unmute : str::tip_mute)
                            : names[hover_]);
       // its key, a shade dimmer after the name (no box: a hint, not another control)
       std::string hint = volbar ? "" : hover_ == B_PLAY ? tr(str::keys_space) : hover_ == B_VOL ? "m" : hover_ == B_CC ? "c"
-                       : hover_ == B_QUEUE ? "q" : hover_ == B_LOOP ? "l" : hover_ == B_FS ? "f"
+                       : hover_ == B_QUEUE ? "q" : hover_ == B_LOOP ? "l" : hover_ == B_FS ? "f" : hover_ == B_EXPAND ? "esc"
                        : hover_ == B_NEXT ? "n" : hover_ == B_PREV ? "p" : "";
+      if (hover_ == B_MINI) hint = std::string(tr(str::keys_ctrl)) + "+m";
       double k = ease_out((still - tok::tip_delay) / tok::tip_in);
       Rect d = dock_rect(), br;
       for (auto& hb : hots_) if (hb.id == (volbar ? B_VOLBAR : hover_)) br = hb.r;
@@ -2208,7 +3474,7 @@ void PlayView::reset(double now) {
   ghost_ = -1;
   update_ghost();
   press_ = pending_click_ = P_NONE;
-  win_drag_ = close_on_release_ = swallow_up_ = second_click_ = false;
+  win_drag_ = close_on_release_ = expand_on_release_ = swallow_up_ = second_click_ = false;
   last_click_t_ = -10;
   morph_.snap(in.paused ? 0 : 1);
   edit_.snap(0);
@@ -2227,80 +3493,301 @@ void PlayView::render_music() {
   double s = s_;
   const MusicScene& S = in.music_scene;
   const MusicView V = view();
-  bool beside = V.words_beside();
-  int room = std::max((int)(60 * s), beside ? std::min(w_ - (int)(2 * kMargin * s), (int)std::lround(S.text_w * V.f))
-                                            : w_ - (int)(2 * kMargin * s));
+  const bool header = !card_ && list_header_ && list_mix() >= 0.5;
+  // music in a roomy window: the cover in the middle, its words under it (a headline there: the
+  // title at twice the type, the artist a size up), the list's count on the bar instead
+  const bool centre = !card_ && !header && V.frame == MusicFrame::Centre;
+  bool beside = !card_ && (V.words_beside() || header);
+  int room = std::max((int)(60 * s), header ? list_lay_.words.w : card_ ? card_col_.w
+                                     : beside ? std::min(w_ - (int)(2 * kMargin * s), (int)std::lround(scene_words_w(S, V)))
+                                              : w_ - (int)(2 * kMargin * s));
   // a picture grown to fill the window may push the words' column past its edge: they end there
-  if (beside) room = std::max((int)(60 * s), std::min(room, w_ - (int)(kMargin * s) - (int)std::lround(V.ox + S.text_x * V.f)));
+  if (beside && !card_ && !header) room = std::max((int)(60 * s), std::min(room, w_ - (int)(kMargin * s) - (int)std::lround(scene_words_x(S, V))));
+  // under the cover the words keep to the cover's width (a little past it), so a big window does
+  // not get a title wider than the picture it names
+  if (!beside && !card_) {
+    const Rect cv = cover_screen_rect();
+    if (cv.w > 0) room = std::max((int)(60 * s), std::min(room, (int)std::lround(centre ? std::max(cv.w * 1.7, 320.0 * s) : cv.w * 1.2)));
+  }
   // the title as large as the column allows: twice the type, one and a half, or the type itself
+  // (under the cover in a close composition and in the list's header, one and a half at most:
+  // the words are a caption there, not a headline)
   double ts = s;
-  for (double f : {2.0, 1.5}) if (text_w(in.music_title, std::round(s * f * 2) / 2) <= room) { ts = std::round(s * f * 2) / 2; break; }
-  std::string title = fit_end(in.music_title, room, ts), artist = fit_end(in.music_artist, room, s);
+  // (the card too: its column is narrow, a title at twice the type stood far from its artist)
+  const bool caption = header || card_ || (!beside && !centre);
+  for (double f : {2.0, 1.5}) if (!(caption && f > 1.5) && text_w(in.music_title, std::round(s * f * 2) / 2) <= room) { ts = std::round(s * f * 2) / 2; break; }
+  // the artist a size up in the card and under the centred cover, when it fits
+  double as = s;
+  if (centre && text_w(in.music_artist, std::round(s * 2.5) / 2) <= room) as = std::round(s * 2.5) / 2;
+  // the card: the words keep to the room above the playback (a small card: a size down, then
+  // the artist at the type's size, then the title too)
+  bool card_link = true;
+  double list_gap = kCardListGap;
+  // (a title larger than the artist sits over its descenders' room; at the same size they keep it)
+  auto card_gap = [&](double t) { return t > s ? -(int)std::lround(s) : 0; };
+  if (card_) {
+    auto height = [&](double t, double a, bool l) {
+      const int g = card_gap(t);
+      int hh = (int)std::lround(12 * t) + (in.music_artist.empty() ? 0 : g + (int)std::lround(12 * a));
+      if (l && in.queue_active && in.queue.size() > 1) hh += (int)std::lround(list_gap * s) + 15 * (int)s;
+      return hh;
+    };
+    while (height(ts, as, card_link) > card_words_h_) {
+      if (as > s) as = s;
+      else if (ts > s) ts = std::max(s, std::round((ts - s / 2) * 2) / 2);
+      else if (list_gap > 8) list_gap = 8;  // (a small card: the list's line comes closer before it goes)
+      else if (card_link) card_link = false;
+      else break;
+    }
+  }
+  std::string title = fit_end(in.music_title, room, ts), artist = fit_end(in.music_artist, room, as);
   // the album's list, one quiet line under the artist: its icon and how many songs it holds
   // (tall compositions open it as the usual popover: there is no column beside the cover)
-  const bool has_list = in.audio_only && in.cover_scene && in.queue_active && in.queue.size() > 1;
+  const bool has_list = in.audio_only && in.cover_scene && in.queue_active && in.queue.size() > 1 && !centre && card_link;
   std::string link = has_list ? i18n::plural(str::music_tracks, (long long)in.queue.size()) : "";
-  int tw = text_w(title, ts), aw = artist.empty() ? 0 : text_w(artist, s);
-  int lw = link.empty() ? 0 : 15 * (int)s + text_w(link, s);
+  int tw = text_w(title, ts), aw = artist.empty() ? 0 : text_w(artist, as);
+  // (the list's icon, then a word's space: whole pixels at half-step scales too)
+  const int link_ic = (int)std::lround(9 * s), link_tx = (int)std::lround(14 * s);
+  int lw = link.empty() ? 0 : link_tx + text_w(link, s);
   int wmax = std::max({tw, aw, lw, 1});
-  int gap = (int)std::lround((ts > s ? 6 : 3) * s);
-  int h = (int)std::lround(12 * ts) + (artist.empty() ? 0 : gap + 12 * (int)s);
-  int ly = h + 11 * (int)s;
+  // (the card: the artist close under its title, over the title's descenders' room, and the
+  // list's line well apart: two groups, the song and its album)
+  int gap = card_ ? card_gap(ts) : (int)std::lround((ts > s ? 6 : 3) * s);
+  int h = (int)std::lround(12 * ts) + (artist.empty() ? 0 : gap + (int)std::lround(12 * as));
+  int ly = h + (card_ ? (int)std::lround(list_gap * s) : 11 * (int)s);
   if (!link.empty()) h = ly + 12 * (int)s + 3 * (int)s;
   music_base_.resize(wmax, h);
   music_base_.clear_transparent();
   text(music_base_, title, beside ? 0 : (wmax - tw) / 2, 0, ts, p.fg);
-  if (!artist.empty()) text(music_base_, artist, beside ? 0 : (wmax - aw) / 2, (int)std::lround(12 * ts) + gap, s, p.dim);
+  if (!artist.empty()) text(music_base_, artist, beside ? 0 : (wmax - aw) / 2, (int)std::lround(12 * ts) + gap, as, p.dim);
   music_link_local_ = {};
   if (!link.empty()) {
     const bool open = panel_ == Panel::Queue;
     int lx = beside ? 0 : (wmax - lw) / 2;
     Rgb ink = open ? p.fg : link_hot_ ? mix(p.dim, p.fg, .75) : mix(p.faint, p.dim, .7);
-    action_icon(music_base_, "queue", {lx, ly, 12 * (int)s, 12 * (int)s}, s, ink);
-    text(music_base_, link, lx + 15 * (int)s, ly + (int)s, s, ink);
+    action_icon(music_base_, "queue", {lx, ly, link_ic, (int)std::lround(12 * s)}, s, ink);
+    text(music_base_, link, lx + link_tx, ly + (int)s, s, ink);
     // a pixel under the words while the list is open, like the bar's lit buttons
-    if (open) music_base_.fill(lx + 15 * (int)s, ly + 13 * (int)s, text_w(link, s), (int)s, ink, .5);
+    if (open) music_base_.fill(lx + link_tx, ly + 13 * (int)s, text_w(link, s), (int)s, ink, .5);
     music_link_local_ = {lx - 4 * (int)s, ly - 4 * (int)s, lw + 8 * (int)s, 20 * (int)s};
   }
 }
 
 // The album's list can open beside the cover (the words' column) when the composition is wide
 // and there is a list: a list of songs belongs with the songs, not over the control bar.
+// Music's list never pops up: beside the cover when the words are there, in the card's column,
+// and in the close compositions (the cover alone, or the words under it) over the cover, which
+// steps back into the dark while it is open (veil)
+// music's list is always music's (beside the cover, the card's): empty too, where it ends on its
+// line that adds songs ("add tracks, or drop them here"); never the films' popover over a cover
 bool PlayView::music_list_ok() const {
-  return in.audio_only && in.cover_scene && view().words_beside() && in.queue_active && in.queue.size() > 1;
+  return in.audio_only && in.cover_scene;
+}
+// one line per song (the card's rows) where the two-line rows and the footer do not fit: the card,
+// a strip, a small window
+bool PlayView::list_compact() const {
+  if (card_) return true;
+  if (view().frame == MusicFrame::Centre && !list_over()) return centre_list_area().h < (120 + QueueView::kFooter) * scene_list_scale();
+  // two lines a song and the footer wherever they fit (the same list everywhere); one line a song
+  // where they do not (a strip, a small window)
+  return scene_list_rect().h < (120 + QueueView::kFooter) * scene_list_scale();
+}
+double PlayView::list_veil() const {
+  // (the cover steps aside into the list's header now, nothing is left under the list to dim; a
+  // list over the cover without a header, too short a window, still dims it)
+  if (!list_over() || list_layout().on) return 0;
+  return ease_out(std::clamp(list_k_.x, 0.0, 1.0));
+}
+// The words' width as the wide composition centres them: with the list open beside them, the
+// list's column (the composition glides to make room for it instead of the list popping over)
+double PlayView::music_words_w() const {
+  if (music_base_.w <= 0 || !view().words_beside()) return -1;
+  // (the list beside them: it starts 20 px before the words, for its grips, and is 340 px wide, so
+  // it ends 320 px after their line; the group is centred with the list's real end)
+  if (panel_ == Panel::Queue && music_list_ok() && !card_) return std::max<double>(music_base_.w, std::lround(320 * s_));
+  return music_base_.w;
 }
 MusicView PlayView::view() const {
   if (in.music_view.f > 0) return in.music_view;
   return music_view(in.music_scene, MusicFrame::Scene, w_, h_, h_);
 }
-double PlayView::scene_list_scale() const {
+double PlayView::beside_scale() const { return beside_scale_for(view()); }
+double PlayView::beside_scale_for(const MusicView& V) const {
   const MusicScene& S = in.music_scene;
-  double col = S.text_w * view().f;
+  // the card's list is the same list, smaller: in the words' column, a size or two down
+  // (the card's list has its own one-line rows, made for its column: they keep the card's type
+  // size, the size of the artist under the title, as long as about 120 px of art fit beside it)
+  if (card_) return std::max(1.0, std::min(s_, std::floor(card_col_.w / 120.0 * 2) / 2));
+  double col = V.frame == MusicFrame::Centre ? w_ / 2.0 - 2 * kMargin * s_ : scene_words_w(S, V);
   // the interface's own scale when the column has room for it, else a half step smaller
   return std::min(s_, std::floor(col / 236.0 * 2) / 2);
 }
-Rect PlayView::scene_list_rect() const {
-  Rect cr = cover_screen_rect();
-  if (cr.w <= 0) return {};
+double PlayView::over_scale() const {
+  return std::max(1.0, std::min(s_, std::floor((w_ - 2 * kMargin * s_) / 236.0 * 2) / 2));
+}
+double PlayView::scene_list_scale() const { return !card_ && list_over() ? over_scale() : beside_scale(); }
+// the list beside the cover: the card's column, or the words' column of the wide composition
+Rect PlayView::beside_list_rect() const { return beside_list_rect_for(view()); }
+Rect PlayView::beside_list_rect_for(const MusicView& V) const {
   const MusicScene& S = in.music_scene;
-  const MusicView V = view();
-  double qs = scene_list_scale();
+  if (!in.cover_scene || w_ <= 0 || h_ <= 0) return {};
+  const Rect cr{V.ox + S.x * V.f, V.oy + S.y * V.f, S.side * V.f, S.side * V.f};
+  if (cr.w <= 0) return {};
+  if (card_) {
+    // the card: the list takes the words' column, from its top to just above the bar (the words
+    // step aside while it is open), its grips in the gap beside the cover
+    const double qs = beside_scale();
+    const int x = card_col_.x - (int)std::lround(9 * qs), top = card_col_.y;
+    const int bottom = card_list_bottom_;
+    return {x, top, card_col_.r() - x - (int)std::lround(6 * s_), std::max(0, bottom - top)};
+  }
+  if (V.frame == MusicFrame::Centre) return centre_list_rect();
+  if (!V.words_beside()) return {};
+  const double qs = beside_scale_for(V);
   // the rows' covers start on the words' line (a row's cover sits 20 px in, after its grip)
-  int x = (int)std::lround(V.ox + S.text_x * V.f) - (int)std::lround(20 * qs);
-  int w = std::min((int)std::lround(S.text_w * V.f + 20 * qs), (int)std::lround(340 * qs));
+  int x = (int)std::lround(scene_words_x(S, V)) - (int)std::lround(20 * qs);
+  int w = std::min((int)std::lround(scene_words_w(S, V) + 20 * qs), (int)std::lround(340 * qs));
   w = std::min(w, w_ - x - (int)std::lround(8 * qs));
   int top = cr.y + music_base_.h + (int)std::lround(12 * s_);
   if (!in.fullscreen && x + w > chrome_rect().x) top = std::max(top, chrome_room());
-  int bottom = cr.b();
+  // (the split composition of a short window: the list may reach past the cover, to the bar or
+  // the window's foot, so it holds more than a song and a half)
+  int bottom = V.split() ? h_ - (int)std::lround(kMargin * s_) : cr.b();
   Rect d = dock_rect();
-  if (vis_.v > 0 && d.y < bottom + (int)std::lround(8 * s_) && d.r() > x && d.x < x + w) bottom = d.y - (int)std::lround(8 * s_);
+  if ((vis_.v > 0 || V.split()) && d.y < bottom + (int)std::lround(8 * s_) && d.r() > x && d.x < x + w) bottom = d.y - (int)std::lround(8 * s_);
   return {x, top, w, std::max(0, bottom - top)};
 }
+// Centre with the list open: the right half, from under the window's own buttons to above the bar
+// (the room it has); the list itself is as tall as its songs, level with the cover and its words
+Rect PlayView::centre_list_rect() const {
+  Rect a = centre_list_area();
+  if (a.w <= 0 || a.h <= 0) return a;
+  const double qs = std::max(1.0, beside_scale_for(view()));
+  const bool compact = a.h < (120 + QueueView::kFooter) * qs;
+  const int lh = std::min(a.h, (int)std::lround(QueueView::bare_height(in.queue.size(), 12, compact) * qs));
+  // the middle of the cover and its words, where they stand with the list open
+  const MusicScene& S = in.music_scene;
+  int top = a.y;
+  {
+    int bar = h_;
+    const Rect d = dock_rect();
+    if (d.h > 0 && d.cy() > h_ / 2) bar = d.y;
+    const MusicView o = music_view(S, MusicFrame::Centre, w_, h_, bar, music_centre_below(), music_stack_above(), -1, true);
+    const double g0 = o.oy + S.y * o.f, g1 = g0 + S.side * o.f + music_centre_below();
+    top = (int)std::lround((g0 + g1) / 2 - lh / 2.0);
+  }
+  top = std::clamp(top, a.y, a.b() - lh);
+  return {a.x, top, a.w, lh};
+}
+Rect PlayView::centre_list_area() const {
+  if (w_ <= 0 || h_ <= 0) return {};
+  MusicView V = view();
+  V.frame = MusicFrame::Centre;  // (its own frame, also before the first framing is made)
+  const double qs = std::max(1.0, beside_scale_for(V));
+  const int m = (int)std::lround(kMargin * s_);
+  const int x0 = w_ / 2 + m, x1 = w_ - 2 * m;
+  const int w = std::min(x1 - x0, (int)std::lround(420 * qs));
+  const int top = in.fullscreen ? (int)std::lround(std::max(kMargin * s_, h_ * 0.06)) : std::max(chrome_room(), (int)std::lround(h_ * 0.06));
+  int bottom = h_ - m;
+  const Rect d = dock_rect();
+  if (d.h > 0 && d.cy() > h_ / 2) bottom = d.y - (int)std::lround(12 * s_);
+  return {x0 + (x1 - x0 - w) / 2, top, w, std::max(0, bottom - top)};
+}
+
+// over the cover: a centred column from under the window's own buttons to just above the bar
+Rect PlayView::over_list_rect() const {
+  if (cover_screen_rect().w <= 0) return {};
+  const double qs = over_scale();
+  const int w = std::min(w_ - (int)std::lround(2 * kMargin * s_), (int)std::lround(380 * qs));
+  const int top = in.fullscreen ? (int)std::lround(kMargin * s_) : std::max(chrome_room(), (int)std::lround(kMargin * s_));
+  const Rect d = dock_rect();
+  const int bottom = d.h > 0 && d.cy() > h_ / 2 ? d.y - (int)std::lround(8 * s_) : h_ - (int)std::lround(kMargin * s_);
+  return {(w_ - w) / 2, top, w, std::max(0, bottom - top)};
+}
+// Where music's list goes: beside the words when their column holds it (two lines a song, or one
+// in a strip), otherwise over the cover. Never a popup.
+bool PlayView::list_over() const {
+  if (card_ || !in.audio_only || !in.cover_scene) return false;
+  if (in.music_view.frame == MusicFrame::Centre) {
+    // the right half: two lines a song and the list's footer
+    const Rect r = centre_list_area();
+    const double qs = beside_scale_for(view());
+    return !(qs >= 1 && r.w >= 200 * qs && r.h >= (120 + QueueView::kFooter) * qs);
+  }
+  // judged on the composition the window is gliding to (with the list's room), so the list does
+  // not start over the cover and jump beside it when the glide lands
+  const MusicView V = target_view();
+  if (!V.words_beside()) return true;
+  const Rect r = beside_list_rect_for(V);
+  const double qs = beside_scale_for(V);
+  if (qs < 1) return true;
+  if (V.split()) return !(r.w >= 110 * qs && r.h >= 46 * qs);
+  return !(r.w >= 200 * qs && r.h >= (120 + QueueView::kFooter) * qs);
+}
+Rect PlayView::scene_list_rect() const {
+  if (card_ || !list_over()) return beside_list_rect();
+  const ListLayout L = list_layout();
+  return L.on ? L.list : over_list_rect();
+}
+PlayView::ListLayout PlayView::list_layout() const {
+  ListLayout L;
+  if (card_ || panel_ != Panel::Queue || !music_list_ok() || !list_over() || w_ <= 0 || h_ <= 0 || dh_ <= 0) return L;
+  const double qs = over_scale();
+  const int m = (int)std::lround(kMargin * s_);
+  // the column: the list's own width (a little wider in a roomy window), centred
+  const int cw = std::min(w_ - 2 * m, (int)std::lround(400 * qs));
+  const int x0 = (w_ - cw) / 2;
+  const int top = in.fullscreen ? m : std::max(chrome_room(), m), bottom = h_ - (int)std::lround(std::max(kMargin * s_, h_ * 0.06));
+  // the thumbnail: big enough to be the cover still (about a tenth of the height), small enough to
+  // leave the list the room
+  const int T = (int)std::lround(std::clamp((bottom - top) / s_ * 0.13, 40.0, 76.0) * qs);
+  const int g1 = (int)std::lround(16 * qs), g2 = (int)std::lround(16 * s_);
+  const int avail = bottom - top - T - g1 - g2 - dh_;
+  const size_t n = in.queue.size();
+  const double two = QueueView::bare_height(n, 12, false) * qs, one = QueueView::bare_height(n, 12, true) * qs;
+  if (avail < 2 * QueueView::kRowCompact * qs) return L;  // too short for a header and a list: over the cover, dimmed
+  const bool compact = avail < (120 + QueueView::kFooter) * qs;
+  const int lh = std::max(0, std::min(avail, (int)std::lround(compact ? one : two)));
+  const int total = T + g1 + lh + g2 + dh_;
+  const int y0 = top + (int)std::lround(std::max(0, bottom - top - total) * 0.42);  // a little above the middle
+  const int inset = (int)std::lround((compact ? 9 : 20) * qs);  // where the rows' covers start
+  L.on = true;
+  L.thumb = {x0 + inset, y0, T, T};
+  const int wx = L.thumb.r() + (int)std::lround(14 * qs);
+  L.words = {wx, y0, std::max(0, x0 + cw - wx - (int)std::lround(8 * qs)), T};
+  L.list = {x0, y0 + T + g1, cw, lh};
+  L.bar_y = L.list.b() + g2;
+  list_lay_ = L;
+  return L;
+}
+// the wide composition as App frames it now that the words (or the list) have their width
+MusicView PlayView::target_view() const {
+  const MusicView V = view();
+  if (V.frame != MusicFrame::Scene || V.split() || in.music_view.f <= 0) return V;
+  int top = h_;
+  const Rect d = blur_cloud().controls;
+  if (d.h > 0 && d.cy() > h_ / 2) top = d.y;
+  MusicView t = music_view(in.music_scene, MusicFrame::Scene, w_, h_, top, -1, 0, music_words_w());
+  return t.split() ? V : t;
+}
 bool PlayView::scene_list() const {
-  if (panel_ != Panel::Queue || !music_list_ok() || music_vis_.target <= 0) return false;
+  if (panel_ != Panel::Queue || !music_list_ok()) return false;
+  // beside the cover and in the card the list is part of the words (they must be up); over the
+  // cover it needs only the scene itself
+  const bool over = list_over();
+  // (the words' place, not the words themselves: they step out while a song changes, and the
+  // list stays where it is meanwhile; it used to become the films' popover for that moment, in the
+  // card over the turning cover)
+  const bool words_place = in.cover_scene && !viewport_transition_ && (card_ || list_header_ || view().frame != MusicFrame::Cover);
+  if ((card_ || !over) ? !words_place : viewport_transition_) return false;
+  if (over) return over_list_rect().h > 0;  // over the cover: always (one line a song in a small window)
   Rect r = scene_list_rect();
   double qs = scene_list_scale();
-  return qs >= 1 && r.w >= 200 * qs && r.h >= 120 * qs;
+  // (the card: two songs, scrolled; beside the cover: two songs and the list's footer)
+  const bool compact = list_compact();
+  // (a short list asks only for its own height: an empty one is its line that adds songs)
+  const int need = std::min(compact ? 46 : 120 + QueueView::kFooter, QueueView::bare_height(in.queue.size(), 12, compact));
+  return qs >= 1 && r.w >= (compact ? 110 : 200) * qs && r.h >= need * qs;
 }
 
 // "a seguir · Next song": a small pill, the type's own size, a skip mark before the words.
@@ -2331,12 +3818,22 @@ void PlayView::changed(double /*now*/) {
   // (never while the speed panel is open: its button must not slide under the slider)
   bool speed_moved = speed_w != layout_speed_w_ && panel_ != Panel::Speed;
   if (hours != layout_hours_ || in.audios.size() != layout_audio_count_ || speed_moved || layout_speed_w_ < 0 || layout_queue_!=in.queue_active||layout_next_!=(in.queue_active||in.audio_only)||layout_ends_!=((in.has_prev?1:0)|(in.has_next?2:0))||
-      layout_music_!=in.audio_only||layout_cc_!=(!in.audio_only||!in.subs.empty())) {
+      layout_music_!=in.audio_only||layout_cc_!=(!in.audio_only||!in.subs.empty())||
+      music_compact_!=(in.audio_only&&((in.mini_player&&!in.fullscreen)||(in.cover_scene&&music_frame_stacked(view().frame)&&!mini_)))||
+      (in.audio_only&&layout_frame_!=(int)view().frame)||layout_scene_!=in.cover_scene||
+      layout_badge_!=(in.audio_only&&!mini_&&in.queue_active&&in.queue.size()>1?(int)queue_badge_text(in.queue.size()).size():0)) {
     const double mw = in.audio_only ? 1 : 0;
     if (!music_w_init_ || vis_.v <= 0) { music_w_init_ = true; music_w_motion_.snap(mw); music_w_ = mw; }
     else if (std::fabs(music_w_motion_.target - mw) > 1e-6) music_w_motion_.to(mw, .34);
     layout_speed_w_ = speed_w;
     layout_dock();
+    // the bar's width changed in place (a song's framing, a button more or less): it glides to
+    // its new place (centred stays centred) instead of keeping the old left edge
+    if (!dragging_dock_) {
+      double tx, ty;
+      place_target(tx, ty);
+      if (vis_.v <= 0.01) { px_.snap(tx); py_.snap(ty); } else { px_.target = tx; py_.target = ty; }
+    }
     dock_dirty_ = true;
   }
   morph_.target = in.paused ? 0 : 1;
@@ -2351,12 +3848,18 @@ void PlayView::changed(double /*now*/) {
       in.muted, in.fullscreen, in.sub_visible, in.sid, (int64_t)in.audios.size(),
       (int64_t)std::lround(in.speed * 100),
       (in.controls_free ? 0 : (in.accent.r >> 3) << 10 | (in.accent.g >> 3) << 5 | (in.accent.b >> 3)),
-      in.controls_free ? 0 : (int)(in.accent_k * 32), hours, in.audio_only, in.controls_free, (int64_t)in.loop | (int64_t)in.loop_all << 1 | (int64_t)(in.queue.size() > 1) << 2, in.ended};
+      in.controls_free ? 0 : (int)(in.accent_k * 32), hours, in.audio_only, in.controls_free, (int64_t)in.loop | (int64_t)in.loop_all << 1 | (int64_t)(in.queue.size() > 1) << 2 | (int64_t)in.shuffle << 3, in.ended};
   if (!dock_state_valid_ || state != dock_state_) {
     dock_state_ = state;
     dock_state_valid_ = true;
     ++dock_revision_;
     dock_dirty_ = true;
+  }
+  if (panel_ == Panel::Queue && scene_list()) {
+    // music's list follows the composition (a glide, a centred group that moved): its width is
+    // the room it has now, not the room it had when it opened
+    const Rect r = scene_list_rect();
+    if (r.w > 0 && (r.w != pw_ || r.h != list_room_h_)) { list_room_h_ = r.h; layout_rows(); }
   }
   if (panel_ != Panel::None) {
     // the panel is rebuilt only if something it shows changed (never on every tick of the clock)
@@ -2367,15 +3870,24 @@ void PlayView::changed(double /*now*/) {
                      (in.controls_free ? "F" : "B") + (in.ambient ? "A" : "") + (in.audio_only ? "a" : "v") + std::to_string(in.ui_scale) + speed_label(in.speed);
     ps+="|tracks:"+std::to_string(in.tracks_revision);
     ps += "|look:" + std::to_string(in.music_look) + (in.music_mono ? "m" : "c") + (in.cover_tilt ? "t" : "s");  // the picture menu's choices
+    // what the bar handed to "..." (and their state), the mini player and smoothing
+    ps += "|fold:" + std::to_string(overflow_) + (mini_ ? "M" : "") + (in.mini_player ? "P" : "") + (in.smooth_available ? "S" : "") + (in.smooth_motion ? "1" : "0") +
+          (in.loop ? "L" : "") + (in.loop_all ? "A" : "") + std::to_string(in.queue.size() > 1) + (in.fullscreen ? "F" : "");
+    if (panel_ == Panel::Volume || mini_) ps += "|vol:" + std::to_string((int)std::lround(in.volume)) + (in.muted ? "m" : "");
     if (panel_ == Panel::FileInfo) ps += "|info:" + std::to_string(in.file_info_revision);
     if(panel_==Panel::Queue)ps+="|q:"+std::to_string(in.queue_revision)+(in.paused?"p":"r");
     ps += "|up:" + in.update_label + (in.update_ready ? "!" : "");
     ps += "|lang:" + std::to_string(in.language) + ":" + std::to_string(i18n::revision());
-    if (ps != panel_sig_) {
+    ps += "|sub:" + std::to_string(in.sub_selection.shown(in.sid));
+    ps += "|ms:" + std::to_string(in.mini_sub_size);
+    if (panel_ == Panel::SubMini && (!in.mini_player || card_ || in.fullscreen)) close_panel();
+    if (panel_ == Panel::Queue && film_mini()) close_panel();  // (up next stays with the full player)  // (the mini player's own: it goes with it)
+    if (panel_ != Panel::None && ps != panel_sig_) {
       panel_sig_ = ps;
       build_rows();
       layout_rows();
       sw_.target = switch_on() ? 1 : 0;
+      for (auto& r : rows_) if (r.k == RK::Toggle && r.id < (int)tsw_.size()) tsw_[r.id].target = r.checked ? 1 : 0;
       if (pfocus_ >= (int)rows_.size()) pfocus_ = -1;
     }
   }
@@ -2402,6 +3914,9 @@ void PlayView::flash(const std::string& t, double now) {
 }
 
 void PlayView::flash_pause(bool paused, double now) {
+  // (the song's mini player: its own play button says it, under the pointer; a sign over the
+  // cover would only cover it. The film's mini player keeps it: the picture is all there is)
+  if (in.audio_only && in.mini_player && !in.fullscreen) return;
   flash_text_.clear();
   flash_icon_ = paused ? 1 : 0;  // Feedback describes the action just performed: pause or play.
   flash_t0_ = now;
@@ -2484,7 +3999,8 @@ void PlayView::toggle_loop(double now) {
 
 bool PlayView::pinned() const {
   // music hides its bar like a film; only a song without a picture keeps it (nothing else to see)
-  return (in.audio_only && !in.cover_scene) || in.ended || scrubbing_ || vol_drag_ || dragging_dock_ || drag_pending_ || sub_drag_ || panel_ != Panel::None ||
+  // (stacked music keeps it: the bar is part of the composition, under the cover's words)
+  return (in.audio_only && !in.cover_scene) || stack_ || card_ || in.ended || scrubbing_ || vol_drag_ || dragging_dock_ || drag_pending_ || sub_drag_ || panel_ != Panel::None ||
          slider_row_ >= 0 || hover_ != B_NONE || kb_ || back_hot_;
 }
 
@@ -2524,7 +4040,8 @@ void PlayView::set_next_picture(const std::vector<uint32_t>& pixels,int w,int h)
   next_picture_.resize(w,h); next_picture_.px=pixels; toast_dirty_=true;
 }
 void PlayView::next_notice(const std::string& label, double now) {
-  if (label.empty()) { if (next_toast_) { toast_text_.clear(); toast_alpha_ = 0; toast_dirty_ = true; next_toast_ = false; } return; }
+  // (the mini player shows no notices about what comes next: it just goes on)
+  if (label.empty() || (in.mini_player && !in.fullscreen)) { if (next_toast_) { toast_text_.clear(); toast_alpha_ = 0; toast_dirty_ = true; next_toast_ = false; } return; }
   double started = next_toast_ ? toast_t0_ : now;
   toast(label, "skip-forward", started);
   next_toast_ = true; toast_btn_ = true; toast_hold_ = 12;
@@ -2588,12 +4105,23 @@ bool PlayView::tick(double now, double dt) {
     dock_dirty_ = panel_dirty_ = toast_dirty_ = true;
   }
   bool moving = viewport_vis_.step(dt);
+  // music's list with its header: on while the list is open there, and while it closes (the
+  // words and the bar glide back from where the header had them)
+  if (list_layout().on) list_header_ = true;
+  else if (list_k_.x <= 0.001 && list_k_.target <= 0) list_header_ = false;
+  // stacked music: the bar moves with the cover (which glides on its own), locked to it; with the
+  // list's header, between its place and the header's (the list's own spring)
+  if ((stack_ || list_header_) && !dragging_dock_) {
+    double x, y;
+    place_target(x, y);
+    if (std::fabs(px_.x - x) > 0.5 || std::fabs(py_.x - y) > 0.5) { px_.snap(x); py_.snap(y); }
+  }
   if (!in.cover_scene && cov_hot_) pointer_left();
   moving |= cov_rx_.step(dt);
   moving |= cov_ry_.step(dt);
   if (double k = hover_step(cov_k_, cov_hot_, dt); k != cov_k_) { cov_k_ = k; moving = true; }
   // the words show beside the cover or under it; a small window keeps only the cover
-  music_vis_.target = in.cover_scene && !viewport_transition_ && view().frame != MusicFrame::Cover ? 1.0 : 0.0;
+  music_vis_.target = in.cover_scene && !in.music_leaving && !viewport_transition_ && (card_ || list_header_ || view().frame != MusicFrame::Cover) ? 1.0 : 0.0;
   moving |= music_vis_.step(dt);
   {
     // music: what plays next appears in the last 12 seconds (and while paused there)
@@ -2635,6 +4163,17 @@ bool PlayView::tick(double now, double dt) {
     moving = true;
   }
   list_k_.target = scene_list() ? 1.0 : 0.0;
+  if (panel_ == Panel::Queue && scene_list()) {
+    // music's list: its middle follows the place it is given (QueueView glides the height; the
+    // list stays centred on its middle as it does)
+    const Rect r = scene_list_rect();
+    const bool mid = !card_ && view().frame == MusicFrame::Centre && !list_over();
+    if (mid != list_mid_) { list_mid_ = mid; list_top_on_ = false; }
+    const double want = mid ? r.y + r.h / 2.0 : r.y;
+    if (!list_top_on_ || pvis_.v <= 0 || reduce_motion() || card_) { list_top_.snap(want); list_top_on_ = true; }
+    else list_top_.target = want;
+    if (list_top_.step(dt)) { moving = true; }
+  } else list_top_on_ = false;
   if (reduce_motion()) list_k_.snap(list_k_.target);
   moving |= list_k_.step(dt);
   if (style_animating_) {
@@ -2667,7 +4206,10 @@ bool PlayView::tick(double now, double dt) {
       double v = hover_step(phov_[i], act_row == i, dt);
       if (v != phov_[i]) { phov_[i] = v; panel_dirty_ = true; moving = true; }
     }
-    if ((panel_ == Panel::CC || panel_ == Panel::More || panel_ == Panel::Context) && sw_.step(dt)) { panel_dirty_ = true; moving = true; }
+    if ((panel_ == Panel::CC || panel_ == Panel::More || panel_ == Panel::Context || panel_ == Panel::Settings) && sw_.step(dt)) { panel_dirty_ = true; moving = true; }
+    if (panel_ == Panel::Settings) { settings_demo_track(now); if ((demo_ == D_SMOOTH || demo_ == D_TILT || demo_ == D_LOOK) && in.settings_examples && (!settings_compact_ || settings_side_)) moving = true; }
+    for (auto& r : rows_)
+      if (r.k == RK::Toggle && r.id < (int)tsw_.size() && tsw_[r.id].step(dt)) { panel_dirty_ = true; moving = true; }
     bool ack = now < ack_until_;
     if (ack != ack_now_) { ack_now_ = ack; panel_dirty_ = true; }
     if (ack) moving = true;
@@ -2711,6 +4253,8 @@ bool PlayView::tick(double now, double dt) {
     if (nv != tl_near_) { tl_near_ = nv; dock_dirty_ = true; moving = true; }
     if (now - flash_t0_ < 0.9) moving = true;
   }
+  // buttons gliding to a new fold (only while the bar re-folds)
+  if (step_slots(dt)) { dock_dirty_ = true; moving = true; }
   {
     bool want = tip_want();
     tipvis_.target = want ? 1 : 0;
@@ -2783,21 +4327,29 @@ bool PlayView::tick(double now, double dt) {
 }
 
 std::vector<int> PlayView::focus_order() const {
-  std::vector<int> o = layout_music_ ? std::vector<int>{B_VOL, B_SPEED, B_PREV, B_PLAY, B_NEXT, B_QUEUE, B_LOOP}  // left to right
+  std::vector<int> o = layout_music_ ? std::vector<int>{B_VOL, B_SPEED, B_PREV, B_PLAY, B_NEXT, B_QUEUE, B_SHUFFLE, B_LOOP}  // left to right
                                      : std::vector<int>{B_VOL, B_SPEED, B_REW, B_PLAY, B_FWD, B_QUEUE, B_LOOP};
   if(layout_next_&&!layout_music_) {o.insert(o.begin()+5,B_NEXT);o.insert(o.begin()+2,B_PREV);}
   if (layout_cc_) o.push_back(B_CC);
   if (in.audios.size() > 1) o.push_back(B_AUDIO);
+  o.push_back(B_MINI);
   o.push_back(B_FS);
+  o.push_back(B_EXPAND);
   o.push_back(B_MORE);
   o.push_back(B_TIME);
   o.push_back(B_TIMELINE);
+  // only what is on the bar right now (the rest lives in "..."; its keys still work)
+  o.erase(std::remove_if(o.begin(), o.end(), [&](int id) { return !in_bar(id); }), o.end());
   return o;
 }
 
 void PlayView::activate(int b, double now) {
   switch (b) {
-    case B_VOL: act(PA::ToggleMute); break;
+    case B_VOL:
+      // folded into its icon, the volume opens above it; otherwise the icon mutes, as always
+      if (vol_folded_) { if (panel_ == Panel::Volume) close_panel(); else open_panel(Panel::Volume, B_VOL, now); }
+      else act(PA::ToggleMute);
+      break;
     case B_REW: act(PA::SeekRel, -15); flash("-15", now); break;
     case B_FWD: act(PA::SeekRel, 15); flash("+15", now); break;
     case B_NEXT: if(in.queue_active&&in.has_next)act(PA::NextEpisode);break;
@@ -2819,6 +4371,9 @@ void PlayView::activate(int b, double now) {
       break;
     case B_SPEED: if (panel_ == Panel::Speed) close_panel(); else open_panel(Panel::Speed, B_SPEED, now); break;
     case B_FS: act(PA::Fullscreen); break;
+    case B_EXPAND: act(PA::MiniPlayer, 0); break;  // back to the full player
+    case B_MINI: act(PA::MiniPlayer, 1); break;      // music: the song's card
+    case B_SHUFFLE: in.shuffle = !in.shuffle; act(PA::Shuffle, in.shuffle ? 1 : 0); dock_state_valid_ = false; break;
     case B_CC: if (panel_ == Panel::CC || panel_ == Panel::Style) close_panel(); else open_panel(Panel::CC, B_CC, now); break;
     case B_AUDIO: if (panel_ == Panel::Audio || panel_ == Panel::AudioMix) close_panel(); else open_panel(Panel::Audio, B_AUDIO, now); break;
     case B_MORE: if (panel_ == Panel::More) close_panel(); else open_panel(Panel::More, B_MORE, now); break;
@@ -2838,7 +4393,7 @@ Rect PlayView::cover_screen_rect() const {
 // anywhere else (or over the bar, a menu, a drag) it settles flat.
 void PlayView::cover_hover(int x, int y) {
   Rect r = cover_screen_rect();
-  bool hot = in.cover_art && in.cover_tilt && r.w > 0 && r.contains(x, y) && panel_ == Panel::None && hit_dock(x, y) == B_NONE && !dragging() &&
+  bool hot = in.cover_art && in.cover_tilt && !in.mini_player && r.w > 0 && r.contains(x, y) && panel_ == Panel::None && hit_dock(x, y) == B_NONE && !dragging() &&
              !viewport_transition_ && !reduce_motion();
   cov_hot_ = hot;
   if (!hot) { cov_rx_.target = cov_ry_.target = 0; return; }
@@ -2849,6 +4404,48 @@ void PlayView::cover_hover(int x, int y) {
 }
 
 void PlayView::pointer_left() { cov_hot_ = false; cov_rx_.target = cov_ry_.target = 0; }
+
+// the bar under the pointer while it is dragged; with Shift held, its centre stays on the
+// window's middle (it moves only up and down, and lands centred)
+void PlayView::dock_drag_to(int x, int y) {
+  double rx = x - grab_x_, ry = y - grab_y_;
+  rx = std::clamp(rx, 0.0, (double)std::max(0, w_ - dw_));
+  ry = std::clamp(ry, 0.0, (double)std::max(0, h_ - dh_));
+  if (shift_) rx = std::max(0.0, (w_ - dw_) / 2.0);  // (the anchors' own centring: the same place)
+  // magnetic pull toward useful places
+  double best = 1e9, bx = rx, by = ry;
+  // a narrow window: left, centre and right are a few pixels apart, so the bar can only be
+  // centred (a corner chosen there would throw it to the side once the window widens)
+  const bool centred_only = shift_ || side_room() < 24 * s_;
+  auto skip = [&](int a) { return centred_only && (a == (int)DockAnchor::BottomLeft || a == (int)DockAnchor::BottomRight); };
+  for (int a = 0; a < 4; ++a) {
+    if (skip(a)) continue;
+    double ax, ay;
+    anchor_pos((DockAnchor)a, ax, ay);
+    double d = std::hypot(ax - rx, ay - ry);
+    if (d < best) { best = d; bx = ax; by = ay; }
+  }
+  double R = kSnap * s_;
+  double k = best < R ? std::pow(1 - best / R, 2) * 0.7 : 0;
+  px_.snap(lerp(rx, bx, k));
+  py_.snap(lerp(ry, by, k));
+  int ghost = -1;
+  if (best < R) for (int a = 0; a < 4; ++a) {
+    if (skip(a)) continue;
+    double ax, ay; anchor_pos((DockAnchor)a, ax, ay); if (ax == bx && ay == by) { ghost = a; break; }
+  }
+  if (ghost != ghost_) { ghost_ = ghost; ghost_drawn_ = -2; }
+  update_ghost();
+  if (panel_ != Panel::None) panel_dirty_ = true;
+}
+
+bool PlayView::set_shift(bool on) {
+  if (on == shift_) return false;
+  shift_ = on;
+  if (!dragging_dock_) return false;
+  dock_drag_to(mx_, my_);  // pressed (or let go) mid-drag: at once (the pointer can be past the window's edge)
+  return true;
+}
 
 void PlayView::mouse_move(int x, int y, double now) {
   bool moved = x != mx_ || y != my_;
@@ -2876,28 +4473,7 @@ void PlayView::mouse_move(int x, int y, double now) {
   }
   if (dragging_dock_ || drag_pending_) {
     if (drag_pending_ && std::abs(x - down_x_) + std::abs(y - down_y_) > 3 * s_) { drag_pending_ = false; dragging_dock_ = true; }
-    if (dragging_dock_) {
-      double rx = x - grab_x_, ry = y - grab_y_;
-      rx = std::clamp(rx, 0.0, (double)std::max(0, w_ - dw_));
-      ry = std::clamp(ry, 0.0, (double)std::max(0, h_ - dh_));
-      // magnetic pull toward useful places
-      double best = 1e9, bx = rx, by = ry;
-      for (int a = 0; a < 4; ++a) {
-        double ax, ay;
-        anchor_pos((DockAnchor)a, ax, ay);
-        double d = std::hypot(ax - rx, ay - ry);
-        if (d < best) { best = d; bx = ax; by = ay; }
-      }
-      double R = kSnap * s_;
-      double k = best < R ? std::pow(1 - best / R, 2) * 0.7 : 0;
-      px_.snap(lerp(rx, bx, k));
-      py_.snap(lerp(ry, by, k));
-      int ghost = -1;
-      if (best < R) for (int a = 0; a < 4; ++a) { double ax, ay; anchor_pos((DockAnchor)a, ax, ay); if (ax == bx && ay == by) ghost = a; }
-      if (ghost != ghost_) { ghost_ = ghost; ghost_drawn_ = -2; }
-      update_ghost();
-      if (panel_ != Panel::None) panel_dirty_ = true;
-    }
+    if (dragging_dock_) dock_drag_to(x, y);
     return;
   }
   if (scrubbing_) {
@@ -2907,6 +4483,15 @@ void PlayView::mouse_move(int x, int y, double now) {
   }
   if (vol_drag_) { set_volume_from(x); return; }
   if (slider_row_ >= 0) { slider_set(slider_row_, x, true); return; }
+  if (press_ == P_VIDEO && free_dock_grab_ && std::abs(x - press_x_) + std::abs(y - press_y_) > 3 * s_) {
+    pending_click_ = P_NONE;
+    second_click_ = false;
+    press_ = P_NONE;
+    free_dock_grab_ = false;
+    dragging_dock_ = true;  // from here on, the same drag as the bar with a background
+    mouse_move(x, y, now);
+    return;
+  }
   if (press_ != P_NONE && std::abs(x - press_x_) + std::abs(y - press_y_) > 4 * s_) {
     pending_click_ = P_NONE;
     second_click_ = false;
@@ -2919,8 +4504,8 @@ void PlayView::mouse_move(int x, int y, double now) {
       sub_start_pos_ = in.style.pos;
       sub_start_y_ = press_y_;
       update_sub_layers();
-    } else if (press_ == P_STRIP) {
-      win_drag_ = true;
+    } else if (press_ == P_STRIP || press_ == P_GRIP || (press_ == P_VIDEO && mini_ && !in.fullscreen)) {
+      win_drag_ = true;  // the mini player moves by the whole picture, a click still pauses
       act(PA::WinDragBegin);
     }
     press_ = P_NONE;
@@ -3027,7 +4612,10 @@ void PlayView::mouse_down(int x, int y, double now) {
     update_sub_layers();
     return;
   }
-  if (b == B_NONE && back_hit(x, y)) { close_on_release_ = true; return; }  // home, on release (like "fechar vídeo")
+  if (b == B_NONE && back_hit(x, y)) {  // on release (like "fechar vídeo"): home, or from the mini player the full player
+    if (in.mini_player) expand_on_release_ = true; else close_on_release_ = true;
+    return;
+  }
   switch (b == B_NONE ? chrome.hit(x, y, w_) : WindowChrome::None) {
     case WindowChrome::Min: act(PA::WinMin); return;
     case WindowChrome::Max: act(PA::WinMax); return;
@@ -3040,6 +4628,10 @@ void PlayView::mouse_down(int x, int y, double now) {
       // decided on release: a click pauses, a drag moves the subtitle (or the window, from the top strip)
       press_ = sub_draggable() && sub_hit(x, y) ? P_SUB : (y < kStrip * s_ && !in.fullscreen ? P_STRIP : P_VIDEO);
       press_x_ = x; press_y_ = y;
+      // "without background": the bar has no surface to hold, so a drag that starts on its empty
+      // places moves it (a click there is still a click on the picture)
+      free_dock_grab_ = press_ == P_VIDEO && in.controls_free && !mini_ && !stack_ && !music_full_ && vis_.v > 0.5 && dock_rect().contains(x, y);
+      if (free_dock_grab_) { Rect d = dock_rect(); grab_x_ = x - d.x; grab_y_ = y - d.y; down_x_ = x; down_y_ = y; }
       if (press_ != P_SUB) pending_click_ = prior_click;
       second_click_ = pending_click_ == press_ && now - last_click_t_ < double_click_time_ &&
                       std::abs(x - last_click_x_) < 6 * s_ && std::abs(y - last_click_y_) < 6 * s_;
@@ -3048,6 +4640,11 @@ void PlayView::mouse_down(int x, int y, double now) {
     case B_TIMELINE: scrubbing_ = true; seek_scrub(x, false); break;
     case B_VOLBAR: vol_drag_ = true; set_volume_from(x); break;
     case B_DOCKBG: {
+      // the mini player's bar stays where it belongs, but the window moves from it like from the
+      // picture (it covers most of a small window: a drag there was dead, more so with the pin on,
+      // which keeps the bar shown). Music's stacked bar stays put too
+      if (mini_ && !in.fullscreen) { press_ = P_GRIP; press_x_ = x; press_y_ = y; pending_click_ = P_NONE; break; }
+      if (stack_ || music_full_) { swallow_up_ = true; break; }
       Rect d = dock_rect();
       drag_pending_ = true;
       grab_x_ = x - d.x; grab_y_ = y - d.y;
@@ -3056,7 +4653,7 @@ void PlayView::mouse_down(int x, int y, double now) {
     }
     default: activate(b, now);
   }
-  if (press_ == P_NONE || press_ == P_SUB) pending_click_ = P_NONE;
+  if (press_ == P_NONE || press_ == P_SUB || press_ == P_GRIP) pending_click_ = P_NONE;
   dock_dirty_ = true;
 }
 
@@ -3066,13 +4663,14 @@ void PlayView::mouse_up(int x, int y, double now) {
   if (viewport_transition_) return;
   activity(now);
   if (close_on_release_) { close_on_release_ = false; act(PA::CloseVideo); return; }
+  if (expand_on_release_) { expand_on_release_ = false; act(PA::MiniPlayer, 0); return; }
   if (swallow_up_) { swallow_up_ = false; return; }
   if(cc_drag_) {cc_drag_=false;panel_dirty_=true;return;}
   if(panel_==Panel::Queue) {
     Rect r=panel_rect();queue_event(queue_view_.up(x-r.x,y-r.y),now);panel_dirty_=true;return;
   }
   if (win_drag_) { win_drag_ = false; act(PA::WinDragEnd); }
-  if (press_ == P_SUB) press_ = P_NONE;  // a click on the subtitle belongs to it: it never pauses
+  if (press_ == P_SUB || press_ == P_GRIP) press_ = P_NONE;  // a click on the subtitle (or the mini bar's background) never pauses
   if (press_ != P_NONE) {
     // The first click already responded. A double click explicitly restores
     // the pre-gesture state, rather than cycling a possibly stale engine state.
@@ -3122,6 +4720,7 @@ void PlayView::mouse_up(int x, int y, double now) {
     }
   }
   drag_pending_ = false;
+  free_dock_grab_ = false;
   if (dragging_dock_) {
     dragging_dock_ = false;
     update_ghost();
@@ -3129,7 +4728,7 @@ void PlayView::mouse_up(int x, int y, double now) {
     else {
       double m = kMargin * s_;
       place.anchor = DockAnchor::Free;
-      place.fx = clamp01((px_.x - m) / std::max(1.0, w_ - dw_ - 2 * m));
+      place.fx = shift_ || side_room() < 24 * s_ ? 0.5 : clamp01((px_.x - m) / std::max(1.0, w_ - dw_ - 2 * m));  // narrow (or Shift): centred
       place.fy = clamp01((py_.x - m) / std::max(1.0, h_ - dh_ - 2 * m));
     }
     ghost_ = -1;
@@ -3149,6 +4748,9 @@ void PlayView::right_click(int x, int y, double now) {
   if (panel_ != Panel::None) { close_panel(); return; }  // outside click: only dismisses
   // the bar is a control surface: a right click on it means nothing (the menu belongs to the picture)
   if (vis_.v > 0.5 && dock_rect().contains(x, y)) return;
+  // the mini player is a quick look: no menu on the picture (back to full size has the corner's
+  // arrow, Esc and Ctrl+M; the rest is the full player's)
+  if (in.mini_player && !in.fullscreen) return;
   ctx_x_ = x;
   ctx_y_ = y;
   open_panel(Panel::Context, B_NONE, now);
@@ -3161,7 +4763,11 @@ void PlayView::wheel(double dir, double now) {
     panel_dirty_=true;return;
   }
   if(panel_==Panel::Queue&&panel_rect().contains(mx_,my_)) {queue_view_.wheel(dir);panel_dirty_=true;return;}
-  act(PA::Volume, std::clamp(in.volume + 5 * dir, 0.0, kVolMax));
+  const double v = std::clamp(in.volume + 5 * dir, 0.0, kVolMax);
+  act(PA::Volume, v);
+  // with no volume line on the bar (folded, or the mini player), the level shows in the middle
+  if (panel_ == Panel::Volume) { in.volume = v; build_rows(); layout_rows(); panel_dirty_ = true; return; }  // the column shows it
+  if (mini_ || vol_folded_) flash(std::to_string((int)std::lround(v)) + "%", now);
 }
 
 void PlayView::seek_scrub(int x, bool final) {
@@ -3187,8 +4793,8 @@ void PlayView::set_volume_from(int x) {
 }
 
 void PlayView::open_panel_for_preview(int which, double now) {
-  Panel pn = which == 0 ? Panel::CC : which == 1 ? Panel::Style : which == 2 ? Panel::Audio : which == 4 ? Panel::Speed : which == 5 ? Panel::About : which == 6 ? Panel::FileInfo : which == 7 ? Panel::Language : which == 8 ? Panel::Context : which == 9 ? Panel::AudioMix : Panel::More;
-  int btn = which == 2 ? B_AUDIO : (which == 3 || which == 7) ? B_MORE : which == 4 ? B_SPEED : which == 8 ? B_NONE : B_CC;
+  Panel pn = which == 0 ? Panel::CC : which == 1 ? Panel::Style : which == 2 ? Panel::Audio : which == 4 ? Panel::Speed : which == 5 ? Panel::About : which == 6 ? Panel::FileInfo : which == 7 ? Panel::Language : which == 8 ? Panel::Context : which == 9 ? Panel::AudioMix : which == 10 ? Panel::Queue : which == 11 ? Panel::Settings : Panel::More;
+  int btn = which == 2 ? B_AUDIO : (which == 3 || which == 7 || which == 11) ? B_MORE : which == 4 ? B_SPEED : which == 8 ? B_NONE : which == 10 ? B_QUEUE : B_CC;
   activity(now);
   open_panel(pn, btn, now);
 }
@@ -3220,6 +4826,7 @@ const std::vector<KeyGroup>& key_groups() {
       {str::keys_window, {{str::keys_fullscreen, {"f"}},
                           {str::keys_back, {"@esc"}},
                           {str::keys_pin, {"@ctrl", "t"}},
+                          {str::more_mini_player, {"@ctrl", "m"}},
                           {str::keys_ui_size, {"@ctrl", "+", "-"}},
                           {str::keys_these, {"?"}}}},
   };
@@ -3319,6 +4926,7 @@ void PlayView::key(const std::string& k, bool shift, bool ctrl, double now) {
     queue_event(queue_view_.key(k,shift,ctrl),now);panel_dirty_=true;
     if(k=="esc"||k=="q"||k=="tab"||k=="up"||k=="down"||k=="left"||k=="right"||k=="home"||k=="end"||k=="pageup"||k=="pagedown"||k=="enter"||k=="delete"||(ctrl&&k=="o"))return;
   }
+  if (k == "?" && in.mini_player) return;  // the mini player: no sheet over a small picture
   if (k == "?") {  // the shortcut sheet, from anywhere in playback; ? again closes it
     activity(now);
     if (panel_ == Panel::Keys) close_panel(); else open_panel(Panel::Keys, B_NONE, now);
@@ -3326,13 +4934,15 @@ void PlayView::key(const std::string& k, bool shift, bool ctrl, double now) {
   }
   if (k == "esc") {
     if (panel_ == Panel::Keys && panel_btn_ == B_MORE) open_panel(Panel::About, B_MORE, now);
-    else if (panel_ == Panel::About || panel_ == Panel::Language) open_panel(Panel::More, B_MORE, now);
+    else if ((panel_ == Panel::Language && lang_from_settings_) || panel_ == Panel::About || panel_ == Panel::Interface) open_panel(Panel::Settings, panel_btn_, now);
+    else if (panel_ == Panel::Language || panel_ == Panel::Settings) open_panel(Panel::More, B_MORE, now);
     else if (panel_ == Panel::Style) open_panel(Panel::CC, panel_btn_, now);
     else if (panel_ == Panel::AudioMix) open_panel(Panel::Audio, panel_btn_, now);
     else if (panel_ == Panel::Speed && panel_btn_ == B_MORE) open_panel(Panel::More, panel_btn_, now);
     else if (panel_ != Panel::None) close_panel();
     else if (kb_) { kb_ = false; focus_ = B_NONE; dock_dirty_ = true; }
     else if (in.fullscreen) act(PA::Fullscreen);
+    else if (in.mini_player) act(PA::MiniPlayer, 0);  // the mini player: back to full size first
     else act(PA::CloseVideo);  // last step back: the home
     return;
   }
@@ -3364,6 +4974,11 @@ void PlayView::key(const std::string& k, bool shift, bool ctrl, double now) {
   }
   // panels own the arrows and Enter while open
   if (panel_ != Panel::None) {
+    if (panel_ == Panel::Volume && (k == "up" || k == "down" || k == "left" || k == "right")) {
+      panel_adjust(0, (k == "up" || k == "right") ? 1 : -1, now);
+      panel_dirty_ = true;
+      return;
+    }
     if(panel_==Panel::CC&&cc_count_&&(k=="home"||k=="end"||k=="pageup"||k=="pagedown")) {
       int row=pfocus_>=cc_first_&&pfocus_<cc_first_+cc_count_?pfocus_:cc_first_;
       if(k=="home")row=cc_first_;
@@ -3391,13 +5006,13 @@ void PlayView::key(const std::string& k, bool shift, bool ctrl, double now) {
         panel_dirty_ = true;
         return;
       }
-      if (r.k == RK::Contacts) { contact_k_ = std::clamp(contact_k_ + (k == "right" ? 1 : -1), 0, (int)r.segs.size() - 1); panel_dirty_ = true; return; }
+      if (r.k == RK::Contacts || r.k == RK::Tools) { contact_k_ = std::clamp(contact_k_ + (k == "right" ? 1 : -1), 0, std::max(0, (int)r.segs.size() - 1)); panel_dirty_ = true; return; }
       if (r.k == RK::Header && k == "left") { panel_click(pfocus_, -1, 0, now); return; }
       if (r.k == RK::Submenu && k == "right") { panel_click(pfocus_, -1, 0, now); return; }
     }
     if (k == "enter" && pfocus_ >= 0) {
       Row& r = rows_[pfocus_];
-      int part = (r.k == RK::Links && !r.parts.empty()) ? 0 : r.k == RK::Contacts ? contact_k_ : -1;
+      int part = (r.k == RK::Links && !r.parts.empty()) ? 0 : (r.k == RK::Contacts || r.k == RK::Tools) ? contact_k_ : -1;
       if (r.k == RK::Slider || r.k == RK::Stepper || r.k == RK::Fonts || r.k == RK::Segmented || r.k == RK::SpeedBar ||
           r.k == RK::Chips) return;
       panel_click(pfocus_, part, 0, now);
@@ -3455,7 +5070,9 @@ void PlayView::queue_event(QueueView::Event event,double now) {
     case A::Play: {
       auto i=std::find_if(in.queue.begin(),in.queue.end(),[&](const auto& e){return e.id==event.id;});
       if(i!=in.queue.end()&&i->current)activate(B_PLAY,now);
-      else {act(PA::QueuePlay,0,event.id);close_panel();}
+      // (music's list stays open: the song changes and its row lights; Esc, the button or a click
+      // elsewhere closes it. The films' popover over the picture closes: the film is what you chose)
+      else {act(PA::QueuePlay,0,event.id);if(!scene_list())close_panel();}
       break;
     }
     case A::Remove:act(PA::QueueRemove,0,event.id);break;

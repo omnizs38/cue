@@ -5,7 +5,9 @@
 
 // Subtitle look: font, size, text opacity, background opacity, position, outline, line gap, kerning.
 // line spacing range: below 0 the lines come closer than the font's own spacing
-constexpr int kLineGapMin = -10, kLineGapMax = 24;
+// (lines may be pulled closer than the font's own leading: down to -16 px at 44, about a third of a
+// line, where descenders still clear the next line's capitals)
+constexpr int kLineGapMin = -16, kLineGapMax = 24;
 // volume goes past 100% up to this, as a booster (100 stays the natural level)
 constexpr double kVolMax = 125;
 
@@ -37,6 +39,9 @@ struct Track {
   bool selected = false, external = false, forced = false, is_default = false;
   bool albumart = false;
   int demux_w = 0, demux_h = 0;  // a picture's own size, when the file says
+  double demux_fps = 0;          // a film's frame rate, when the file says
+  double demux_par = 0;          // its pixels' shape (anamorphic films), when the file says (0: square)
+  int demux_rotation = -1;       // how it is turned (phone videos), -1: the engine does not say
   bool hearing_impaired = false;
 };
 

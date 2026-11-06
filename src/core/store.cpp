@@ -1,5 +1,8 @@
 #include <chrono>
 #include <thread>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include "store.h"
 #include "remote_proto.h"
 #include "file_io.h"
@@ -79,8 +82,15 @@ bool SettingsStore::parse(const std::string& text) {
   music_look = std::clamp(pf["music_look"].integer(0), 0, 2);
   music_mono = pf["music_mono"].boolean(false);
   cover_tilt = pf["cover_tilt"].boolean(true);
+  // (on by default: each setting shows itself at work; saved under a new name, so the earlier
+  // default of off, kept by the 1.3 test builds, does not carry over)
+  settings_examples = pf["settings_hints"].boolean(true);
+  mini_sub_size = std::clamp(pf["mini_sub_size"].integer(0), 0, 2);
+  smooth_motion = pf["smooth_motion"].boolean(false);
+  mini_pinned = pf["mini_pinned"].boolean(false);
   loop = pf["loop"].boolean(false);
   loop_all = pf["loop_all"].boolean(false) && !loop;
+  shuffle = pf["shuffle"].boolean(false);
   ambient = pf["ambient"].boolean(true);
   // v3 made the light softer by default: older files start again from the new default
   ambient_strength = schema >= 3 ? std::clamp(pf["ambient_strength"].num(0.15), 0.05, 1.0) : 0.15;
@@ -90,6 +100,8 @@ bool SettingsStore::parse(const std::string& text) {
   onboarded = pf["onboarded"].boolean(false);
   news_seen = pf["news_seen"].str();
   news_closed = pf["news_closed"].str();
+  installed = pf["installed"].integer<int64_t>(0);
+  survey = pf["survey"].str();
   language = i18n::normalize_pref(pf["language"].str(i18n::kAuto));  // missing or unknown: follow Windows
   const JVal& rm = pf["remote"];
   remote_on = rm["on"].boolean(false);
@@ -171,10 +183,16 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
   o += "    \"music_look\": " + std::to_string(music_look) + ",\n";
   o += std::string("    \"music_mono\": ") + (music_mono ? "true" : "false") + ",\n";
   o += std::string("    \"cover_tilt\": ") + (cover_tilt ? "true" : "false") + ",\n";
+  o += std::string("    \"settings_hints\": ") + (settings_examples ? "true" : "false") + ",\n";
+  o += "    \"mini_sub_size\": " + std::to_string(mini_sub_size) + ",\n";
+  o += std::string("    \"smooth_motion\": ") + (smooth_motion ? "true" : "false") + ",\n";
+  o += std::string("    \"mini_pinned\": ") + (mini_pinned ? "true" : "false") + ",\n";
   o += std::string("    \"loop\": ") + (loop ? "true" : "false") + ",\n";
   o += std::string("    \"loop_all\": ") + (loop_all ? "true" : "false") + ",\n";
+  o += std::string("    \"shuffle\": ") + (shuffle ? "true" : "false") + ",\n";
   o += std::string("    \"onboarded\": ") + (onboarded ? "true" : "false") + ",\n";
   o += "    \"news_seen\": " + json_quote(news_seen) + ", \"news_closed\": " + json_quote(news_closed) + ",\n";
+  o += "    \"installed\": " + std::to_string((long long)installed) + ", \"survey\": " + json_quote(survey) + ",\n";
   o += "    \"language\": " + json_quote(i18n::normalize_pref(language)) + ",\n";
   o += std::string("    \"remote\": {\"on\": ") + (remote_on ? "true" : "false") + ", \"sound\": " + (remote_sound ? "true" : "false");
   if (remote_folders_set) {
@@ -228,28 +246,56 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
     return true;
   }
   // safe write: a temporary file, the previous version kept as .bak, then an atomic swap
+  // (a failed save leaves no stale .tmp behind: thanks to omnizs38, #17)
+  auto abandon_tmp = [&]() {
+    std::error_code cleanup_ec;
+    std::filesystem::remove(tmp, cleanup_ec);
+    return false;
+  };
   {
     std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
-    if (!f) return false;
+    if (!f) return abandon_tmp();
     f << o;
     f.flush();
-    if (!f) return false;
+    if (!f) return abandon_tmp();
+    f.close();
+    if (!f) return abandon_tmp();
   }
   std::error_code ec;
-  if (std::filesystem::exists(path, ec)) {
-    // the previous good version becomes the backup (remove first: overwrite is unreliable on some runtimes)
-    std::filesystem::remove(bak, ec);
-    std::filesystem::copy_file(path, bak, ec);
+#ifdef _WIN32
+  // Windows: one call swaps the new file in and keeps the previous one as the backup (a rename,
+  // not a copy: one write less every time). Something reading the file for a moment (an
+  // antivirus checking the file just written, the search indexer) can refuse it: tries for about
+  // two seconds (this runs on a worker), then gives up (the next save writes it again).
+  for (int attempt = 0; attempt < 12; ++attempt) {
+    BOOL ok = std::filesystem::exists(path, ec)
+                  ? ReplaceFileW(path.c_str(), tmp.c_str(), bak.c_str(), REPLACEFILE_IGNORE_MERGE_ERRORS | REPLACEFILE_IGNORE_ACL_ERRORS, nullptr, nullptr)
+                  : MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+    if (ok) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(30 + 30 * std::min(attempt, 5)));
   }
-  // atomic replace on the same volume; something reading the file for a moment (an antivirus,
-  // the search indexer, a Cue being started) can refuse it: a few short tries, then give up
+  return abandon_tmp();
+#else
+  const bool had_path = std::filesystem::exists(path, ec);
+  if (ec) return abandon_tmp();
+  if (had_path) {
+    // the previous good version becomes the backup (remove first: overwrite is unreliable on some
+    // runtimes); without a backup the good file is never replaced
+    std::error_code remove_ec, copy_ec;
+    std::filesystem::remove(bak, remove_ec);
+    std::filesystem::copy_file(path, bak, copy_ec);
+    if (copy_ec) return abandon_tmp();
+  }
+  // atomic replace on the same volume; something reading the file for a moment can refuse it: a
+  // few short tries, then give up
   for (int attempt = 0; attempt < 6; ++attempt) {
     ec.clear();
     std::filesystem::rename(tmp, path, ec);
     if (!ec) return true;
     std::this_thread::sleep_for(std::chrono::milliseconds(15 + 15 * attempt));
   }
-  return false;
+  return abandon_tmp();
+#endif
 }
 
 RecentItem* SettingsStore::find(const std::string& p) {
