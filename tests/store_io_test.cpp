@@ -20,16 +20,19 @@ int main() {
   assert(store.save(path) && bytes(backup)==original); // seed the recovery copy once
   auto stamp=std::filesystem::file_time_type::clock::now()-std::chrono::hours(1);
   std::filesystem::last_write_time(path,stamp);std::filesystem::last_write_time(backup,stamp);
-  // Windows/MinGW: last_write_time round-trips off by ~0.16 s, so exact equality below fails although no write happened; known environment failure, unrelated to save logic.
+  // Read back the stored time: some runtimes (e.g. MinGW's std::filesystem) do not return the
+  // exact value that was set, so compare against what the filesystem reports. What matters is
+  // that the unchanged saves leave it alone.
+  auto stamp_path=std::filesystem::last_write_time(path),stamp_backup=std::filesystem::last_write_time(backup);
   for(int i=0;i<1000;++i)assert(store.save(path));
-  assert(std::filesystem::last_write_time(path)==stamp && std::filesystem::last_write_time(backup)==stamp);
+  assert(std::filesystem::last_write_time(path)==stamp_path && std::filesystem::last_write_time(backup)==stamp_backup);
   store.volume=72;assert(store.save(path));assert(bytes(path)!=original && bytes(backup)==original);
   auto changed=bytes(path);assert(store.save(path) && bytes(backup)==changed);
   std::filesystem::last_write_time(path,stamp);std::filesystem::last_write_time(backup,stamp);
+  auto stamp_path2=std::filesystem::last_write_time(path),stamp_backup2=std::filesystem::last_write_time(backup);
   for(int i=0;i<100;++i)assert(store.save(path));
   assert(bytes(path)==changed && bytes(backup)==changed);
-  // Same timestamp caveat as above: unchanged saves must not rotate the backup; the equality check here is only meaningful where last_write_time round-trips exactly.
-  assert(std::filesystem::last_write_time(path)==stamp && std::filesystem::last_write_time(backup)==stamp);
+  assert(std::filesystem::last_write_time(path)==stamp_path2 && std::filesystem::last_write_time(backup)==stamp_backup2);
   assert(!std::filesystem::exists(dir/"state.json.tmp"));
   assert(file_contents_equal(path,changed) && !file_contents_equal(path,changed+"x"));
   assert(!file_contents_equal(path,std::string(changed.size(),'x')));

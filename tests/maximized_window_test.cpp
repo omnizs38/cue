@@ -4,11 +4,13 @@
 #include "../src/core/video_window.h"
 #include <cassert>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
 
-int main() {
+int main(int argc, char** argv) {
+  std::filesystem::path exe = argc > 0 ? argv[0] : "";
   const WinRect work{0, 0, 1920, 1040};
   // grown from the old place's centre, the shape of the new file
   auto size = video_window_size(16.0 / 9, 1920, 1040, 96, 1);
@@ -33,7 +35,9 @@ int main() {
   assert(r.left == -8 && r.top == 0);
 
   // the window code: adapting never restores a maximized window any more
-  std::ifstream in("src/win/app.cpp");
+  // Resolve the source tree from the executable's place (build/tests/…).
+  std::filesystem::path root = std::filesystem::absolute(exe).parent_path().parent_path().parent_path();
+  std::ifstream in(root / "src/win/app.cpp");
   std::stringstream ss; ss << in.rdbuf();
   std::string s = ss.str();
   auto a = s.find("void App::adapt_window(double ar)");

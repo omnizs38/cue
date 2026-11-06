@@ -7,12 +7,14 @@
 #include "../src/core/i18n.h"
 #include <cassert>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
 static void settle(PlayView& p, double& t, int n = 30) { for (int i = 0; i < n; ++i) { t += 1.0 / 60; p.tick(t, 1.0 / 60); } }
 
-int main() {
+int main(int argc, char** argv) {
+  std::filesystem::path exe = argc > 0 ? argv[0] : "";
   i18n::set_language(i18n::Lang::En);
   PlayView p;
   p.in.audio_only = true; p.in.cover_scene = true; p.in.cover_art = true; p.in.has_cover = true;
@@ -43,7 +45,10 @@ int main() {
   for (auto& r : p.rows_) after += r.label + "|";
   assert(before != after);
   // the home's recent list is written again (its lines are built by the app)
-  std::ifstream f("src/win/app.cpp");
+  // Resolve the source tree from the executable's place (build/tests/…), so the
+  // test also passes when launched from another directory.
+  std::filesystem::path root = std::filesystem::absolute(exe).parent_path().parent_path().parent_path();
+  std::ifstream f(root / "src/win/app.cpp");
   std::stringstream ss; ss << f.rdbuf();
   const std::string s = ss.str();
   auto a = s.find("void App::apply_language(bool relayout)"), b = s.find("void App::set_language_pref", a);
