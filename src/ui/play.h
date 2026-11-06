@@ -202,6 +202,12 @@ class PlayView {
   void start_iris(double now);
   bool iris_waiting() const { return iris_ == 1; }
   bool iris_active() const { return iris_ != 0; }
+  // going home (Esc): the same pixel ellipse closes over the picture, from where it is
+  void close_iris(double now);
+  bool iris_closing() const { return iris_ == 3; }
+  bool iris_closed(double now) const { return iris_ == 3 && iris_open(now) < 1e-4; }
+  void cancel_close() { if (iris_ == 3) iris_ = 0; }
+  static constexpr double kIrisCloseFrom = 0.9;  // where the closing ellipse starts (just inside the corners)
   // how far the iris is open: -1 none, 0 covered (waiting for the picture), up to 1 (eased)
   double iris_open(double now) const;
   void prepare(double now) { compose(now); }  // compose the layers right away (before the first tick)
@@ -453,6 +459,10 @@ class PlayView {
   int grab_x_ = 0, grab_y_ = 0, down_x_ = 0, down_y_ = 0;
   bool scrubbing_ = false, vol_drag_ = false;
   double scrub_t_ = 0;
+  // a click on the timeline is one exact jump; quick keyframe jumps only once the hand drags
+  int scrub_x0_ = 0;
+  bool scrub_live_ = false;
+  double scrub_sent_ = -1;
   int mx_ = -1, my_ = -1;
   double last_click_t_ = -10;
   int last_click_x_ = 0, last_click_y_ = 0;
@@ -672,7 +682,7 @@ class PlayView {
   mutable double lift_scale_=0,lift_value_=0;
   mutable std::vector<std::string> lift_text_;
 
-  int iris_ = 0;  // 0 none, 1 covered (waiting for the picture), 2 opening
+  int iris_ = 0;  // 0 none, 1 covered (waiting for the picture), 2 opening, 3 closing (going home)
   double iris_t0_ = 0, iris_drawn_ = -1;
   int iris_frame_ = -1;
   void render_iris(double k);

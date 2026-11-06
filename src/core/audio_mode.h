@@ -307,7 +307,20 @@ inline std::string audio_placeholder_cover() {
   return g + ",";
 }
 
-inline std::string audio_cover_tail(int64_t cover, const MusicScene& S = MusicScene{}) {
+// fps: the picture's rate, 60, or 30 on a weak PC (core/device_tier.h); the analysis and the
+// bars' decay follow it, so the spectrum moves the same at either rate
+inline std::string music_freqs(int fps) {
+  // a new analysis at least once per picture: 4096 samples at 24 kHz, stepping 328 (0.92) at 60
+  return std::string("showfreqs=s=24x20:r=") + std::to_string(fps) + ":mode=bar:ascale=sqrt:fscale=log:win_size=4096:overlap=" +
+         (fps >= 60 ? "0.92" : "0.84") + ":averaging=1:colors=white,";
+}
+inline std::string music_decay(int fps) {
+  char b[32];
+  std::snprintf(b, sizeof b, "lagfun=decay=%.3f", std::pow(0.965, 60.0 / std::max(1, fps)));
+  return b;
+}
+
+inline std::string audio_cover_tail(int64_t cover, const MusicScene& S = MusicScene{}, int fps = 60) {
   auto n = [](int v) { return std::to_string(v); };
   // the cover: the file's own (the engine's album-art track), or Cue's tile
   std::string v = cover > 0 ? "[vid" + n((int)cover) + "]" : audio_placeholder_cover();
@@ -316,10 +329,9 @@ inline std::string audio_cover_tail(int64_t cover, const MusicScene& S = MusicSc
     std::snprintf(c, sizeof c, "crop=w=iw*%.4f:h=ih*%.4f:x=iw*%.4f:y=ih*%.4f,", S.crop_w, S.crop_h, S.crop_x, S.crop_y);
     v += c;
   }
-  return "[cue_wave]aresample=24000,volume=3,"
-         "showfreqs=s=24x20:r=60:mode=bar:ascale=sqrt:fscale=log:win_size=4096:overlap=0.92:averaging=1:colors=white,"
-         "trim=start_frame=2,format=gray,crop=24:19:0:0,pad=24:20:0:0:color=0x262626,"
-         "lagfun=decay=0.965,split=2[cue_bars][cue_beat];"
+  return "[cue_wave]aresample=24000,volume=3," + music_freqs(fps) +
+         "trim=start_frame=2,format=gray,crop=24:19:0:0,pad=24:20:0:0:color=0x262626," + music_decay(fps) +
+         ",split=2[cue_bars][cue_beat];"
          // the wings' cells: bars turned sideways, mirrored so the bass sits level with the cover's middle
          "[cue_bars]transpose=clock,split=2[cue_lo][cue_hi0];[cue_hi0]vflip[cue_hi];[cue_hi][cue_lo]vstack[cue_cells];" +
          v + "format=gbrp,split=2[cue_c1][cue_c2];"
@@ -358,18 +370,17 @@ inline std::string audio_cover_tail(int64_t cover, const MusicScene& S = MusicSc
 // where the cover stands, so the words, the list and the window's framing work the same way.
 // Bars climb at once and fall slowly (lagfun keeps a decaying peak), on the same dot grid as the
 // interface. Everything after showfreqs works on a 48x20 picture, then on 384x200 cells.
-inline std::string audio_spectrum_tail(const MusicScene& S = MusicScene{}) {
+inline std::string audio_spectrum_tail(const MusicScene& S = MusicScene{}, int fps = 60) {
   auto n = [](int v) { return std::to_string(v); };
   const int w = 768, h = 400;  // the 384x200 cells doubled: whole pixels
   int x = S.x + S.side / 2 - w / 2, y = S.y + S.side / 2 - h / 2;
-  return "[cue_wave]aresample=24000,volume=3,"
-         "showfreqs=s=24x20:r=60:mode=bar:ascale=sqrt:fscale=log:win_size=4096:overlap=0.92:averaging=1:colors=white,"
+  return "[cue_wave]aresample=24000,volume=3," + music_freqs(fps) +
          // the analyser needs two frames after a flush; keep the previous image until then
          "trim=start_frame=2,format=gray,"
          // drop showfreqs' always-lit bottom row; a dim row of dots marks silence instead
          "crop=24:19:0:0,pad=24:20:0:0:color=0x2a2a2a,"
          "split=2[cue_r][cue_l];[cue_l]hflip[cue_lf];[cue_lf][cue_r]hstack,"
-         "lagfun=decay=0.965,lutyuv=y=val*0.82,"
+         + music_decay(fps) + ",lutyuv=y=val*0.82,"
          "scale=384:160:flags=neighbor,drawgrid=w=8:h=8:t=2:c=black,"
          "split=2[cue_top][cue_ref];[cue_ref]vflip,crop=384:40:0:8,lutyuv=y=val*0.18[cue_mirror];"
          "[cue_top][cue_mirror]vstack,scale=" + n(w) + ":" + n(h) + ":flags=neighbor,"
@@ -382,7 +393,7 @@ inline std::string audio_spectrum_tail(const MusicScene& S = MusicScene{}) {
 // the words beside it) over the soft, still light the shader draws around it; no spectrum and no
 // light show. The picture changes only twice a second (it is led by the music, so it ends with
 // the song): the cover is drawn once and repeated.
-inline std::string audio_still_tail(int64_t cover, const MusicScene& S = MusicScene{}) {
+inline std::string audio_still_tail(int64_t cover, const MusicScene& S = MusicScene{}, int fps = 60) {
   auto n = [](int v) { return std::to_string(v); };
   std::string v = cover > 0 ? "[vid" + n((int)cover) + "]" : audio_placeholder_cover();
   if (cover > 0 && S.cropped()) {
@@ -396,7 +407,7 @@ inline std::string audio_still_tail(int64_t cover, const MusicScene& S = MusicSc
   // between waits for the next one), so the cover's tilt, the card's turning cover and the
   // interface over the picture moved at the picture's rate (one or two a second: a jump). Each
   // picture is a padded black frame and the cover laid on it: far lighter than the spectrum
-  return "[cue_wave]aresample=8000,showwaves=s=2x2:r=60:mode=point,format=yuv420p,lutyuv=y=16:u=128:v=128,"
+  return "[cue_wave]aresample=8000,showwaves=s=2x2:r=" + n(fps) + ":mode=point,format=yuv420p,lutyuv=y=16:u=128:v=128,"
          "pad=" + n(S.W) + ":" + n(S.H) + ":0:0:black[cue_base];" +
          v + "format=gbrp,"
          "scale=" + n(S.side) + ":" + n(S.side) + ":force_original_aspect_ratio=increase:flags=" + (cover > 0 ? "lanczos" : "neighbor") + ","
@@ -405,27 +416,27 @@ inline std::string audio_still_tail(int64_t cover, const MusicScene& S = MusicSc
 }
 
 // look: 0 cover and spectrum, 1 spectrum only, 2 cover only (the lightest)
-inline std::string audio_visual_tail(int64_t cover, const MusicScene& scene = MusicScene{}, int look = 0) {
-  return look == 1 ? audio_spectrum_tail(scene) : look == 2 ? audio_still_tail(cover, scene) : audio_cover_tail(cover, scene);
+inline std::string audio_visual_tail(int64_t cover, const MusicScene& scene = MusicScene{}, int look = 0, int fps = 60) {
+  return look == 1 ? audio_spectrum_tail(scene, fps) : look == 2 ? audio_still_tail(cover, scene, fps) : audio_cover_tail(cover, scene, fps);
 }
 
-inline std::string audio_waveform_graph(int64_t track, int64_t cover = 0, const MusicScene& scene = MusicScene{}, int look = 0) {
+inline std::string audio_waveform_graph(int64_t track, int64_t cover = 0, const MusicScene& scene = MusicScene{}, int look = 0, int fps = 60) {
   if (track <= 0) return {};
   // Split decoded samples, leaving the audible branch untouched. Only the tiny
   // visual branch is resampled; nearest-neighbour scaling preserves real pixels.
-  return "[aid" + std::to_string(track) + "]asplit=2[ao][cue_wave];" + audio_visual_tail(cover, scene, look);
+  return "[aid" + std::to_string(track) + "]asplit=2[ao][cue_wave];" + audio_visual_tail(cover, scene, look, fps);
 }
 
 // Every audio track at once, as recorded (game, microphone, voice chat...): amix scales each
 // input by 1/n, the volume puts them back at their own level (works with any ffmpeg).
 inline std::string audio_mix_graph(const std::vector<int64_t>& ids, bool waveform, int64_t cover = 0,
-                                   const MusicScene& scene = MusicScene{}, int look = 0) {
+                                   const MusicScene& scene = MusicScene{}, int look = 0, int fps = 60) {
   if (ids.size() < 2) return {};
   std::string g;
   for (int64_t id : ids) g += "[aid" + std::to_string(id) + "]";
   std::string n = std::to_string(ids.size());
   g += "amix=inputs=" + n + ":duration=longest:dropout_transition=0,volume=" + n;
-  return waveform ? g + ",asplit=2[ao][cue_wave];" + audio_visual_tail(cover, scene, look) : g + "[ao]";
+  return waveform ? g + ",asplit=2[ao][cue_wave];" + audio_visual_tail(cover, scene, look, fps) : g + "[ao]";
 }
 
 inline std::string lower_ascii(std::string s) {

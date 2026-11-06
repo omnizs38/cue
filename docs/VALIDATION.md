@@ -627,6 +627,58 @@ Run these on Windows with the release build:
 160. **Opening a film.** From the home, open a 16:9 film, a 21:9 film and a phone video (rotated):
    the window takes the shape while it loads, the opening effect starts with the first picture,
    smooth, no second glide. cue.log: "picture opens (open N ms)"; a song: "song plays (open N ms)".
+161. **Esc to the home.** A film playing (with subtitles on), a paused film, a song, a film in
+   fullscreen (Esc twice: out of fullscreen, then home): Esc. Expected: on the next frame the bar
+   and the subtitles are gone, the picture closes in the pixel ellipse (0.22 s) as the sound fades,
+   then black for the engine's stop, then the home's eyes come in. No frozen frame, no click in the
+   sound, no subtitle over the black. Esc twice quickly: home without the rest of the ellipse.
+   Esc during the opening ellipse: it turns around from where it is. Reduce motion on: straight home.
+162. **Close interrupted.** Esc, and drop a file on the window (or pick one on the phone) before the
+   ellipse closes: the new file plays with its sound at full level and its subtitles as saved.
+163. **Resume is quick.** A 4K film with long keyframe gaps (HEVC from a camera or a remux), left in
+   the middle: open it from Recentes. Expected: it starts a few seconds before the place (the last
+   keyframe), noticeably sooner than before; clicking the timeline afterwards still lands exactly.
+   cue.log "first video frame (open N ms)" before and after.
+164. **4K at the screen's rate.** A 4K 24 fps film (the 12.6 GB test file), plugged in: hover the
+   timeline back and forth, open it from the home. Expected: the hover bubble and the opening iris
+   glide at the screen's rate like a 1080p film; the film plays without new drops (cue.log "video
+   ... sync display-resample"; no "too slow" engine warnings). GPU use in Task Manager stays
+   reasonable at 60 and at 144 Hz. On battery: "sync audio", as before. Unplug while it plays:
+   no stall in the sound.
+165. **Previews of a 4K film.** The same film, after its first seconds: hover the timeline across
+   its length. Expected: the pictures follow the pointer sooner than before; playback unaffected.
+166. **Mini player from the right-click, music.** A song in the full player: right-click the
+   picture > mini player: the song's card. Not in full screen; the card itself has no menu.
+167. **Weaker PCs.** cue.log's "graphics ..." line on this PC (dedicated), on a laptop with Intel
+   graphics only (integrated) and in a VM or with the display driver disabled (software). On the
+   integrated laptop: a 1080p film and a song play smoothly, the picture is sharp; a 4K film plays
+   (its line "sync audio"). Software: films and music play, the interface stays responsive; smooth
+   motion stays off (cue.log). A 4-thread processor: music's spectrum moves as on a strong PC.
+168. **Volume without a pop.** A film and a song with a steady low tone (a bass note, a hum): ↑ and
+   ↓ several times, the wheel, a fast drag of the volume bar, the phone's volume. Expected: no click
+   or crackle, only the level changing; the bar follows the pointer with no jump back. Paused:
+   the change is immediate. Above 100% loud music may still distort (that is the boost itself).
+169. **Music into the mini player.** A song in a big window (cover in the middle), each look
+   (cover and spectrum, spectrum alone, cover alone), with and without the list open: Ctrl+M and
+   back. Expected: the cover never jumps; it flies from where it is into the card's cover (and
+   back out to the middle), the card's words and controls come in around it; no frame of the old
+   picture squeezed. Maximized and on a 4K screen too. A film's flight unchanged.
+170. **Vertical video bar.** Vertical videos at 9:16, 3:4 and 4:5 (and a window a little taller
+   than wide), at the four interface sizes and maximized: the bar and its menus are about 15%
+   smaller than in the first 1.3 builds, still easy to hit; a square or landscape window unchanged.
+171. **A click on the timeline (1.3.1).** A long film (H.264/HEVC with keyframes a few seconds
+   apart), paused and playing: click the same spot of the timeline several times, then other
+   spots. Expected: the picture goes straight to the clicked frame, never a different frame for a
+   moment first (it used to show the keyframe's picture for about 0.3 s and come back). Dragging
+   still previews while the hand moves and lands on the exact frame on release. The mini player too.
+172. **A film of another shape (1.3.1).** From the home, open a 2.39:1 film (and a 4:3 and a vertical
+   one), with a resume point and subtitles on; Esc back home; open it again. Expected: the window
+   glides to the film's shape in one even movement (no big first step), no subtitle over the black
+   window before the picture: the line comes in with the iris. Going home glides back evenly.
+   Subtitles off for that file stay off; C during the black wait is respected.
+173. **The welcome maximized (1.3.1).** `"C:\Cue\Cue.exe" --welcome`, maximize (button, double click on
+   the top, Win+Up) and restore, on each page: a single "skip"/"back" and nothing left from the old
+   size. The home maximized and restored: nothing left behind either.
 
 ## Subtitle selection follow-up — 2026-11-06
 

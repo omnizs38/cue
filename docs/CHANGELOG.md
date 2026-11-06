@@ -1,6 +1,79 @@
 # Changelog
 
+## 1.3.1 — 2026-11-06
+
+- A click on the timeline is one exact jump. The press used to send a quick keyframe jump (meant
+  for dragging) and the release the exact one, so a plain click showed the keyframe's picture for
+  about a third of a second and then the right frame: a frame that skipped and came back, playing
+  or paused. Keyframe previews now start only once the hand drags more than 3 px, never twice for
+  the same point (Windows repeats a move at the same place); the release is still the single
+  exact jump. `audio_test` (click, click with 1 and 4 px of jitter, paused and playing).
+- Opening a film of another shape (2.39:1 after the home's 16:9, say): the window jumped about 70%
+  of its way to the film's shape in one frame and eased the rest. The glide starts while the
+  engine opens the file, and the window's thread can wait on it a few frames; on a wall clock that
+  wait became a jump. The glide's clock now pauses through a stall (a gap over 2.5 frames moves its
+  start forward), so the window goes on from where it was. Going home uses the same glide.
+  `core/glide_clock.h`, `glide_clock_test`.
+- A film's subtitles wait for its picture: the engine draws them after the shader, so the line
+  sat over the black window before the film, moved when the window took the film's shape, and
+  only then did the iris open behind it. They are held while the film opens (the person's choice
+  kept, the menus show it) and come in when the iris is half open; songs, reduced motion and a
+  file that never opens are untouched (`release_open_subs`).
+- The welcome (and the home) after maximizing: two "skip" buttons. Windows repaints only the strip
+  a bigger window uncovers and keeps the old pixels elsewhere; the welcome's frame drawn there then
+  stood for the whole screen, so the next frames saw nothing to change and the old "skip" stayed.
+  A new size now repaints the whole window.
+
 ## 1.3 — 2026-11-06
+
+- Esc to the home: the controls and subtitles go on the next frame and the picture closes in the
+  same pixel iris that opens it (0.22 s, from just inside the corners, also from a half-open
+  opening iris) while the sound fades out under the person's volume; only then does the engine
+  stop, behind black, and the home comes in. Before, the frame froze while the engine stopped,
+  went black and the home popped in. Esc again finishes at once; a file arriving meanwhile plays
+  normally (gain and subtitles restored); reduced motion goes straight home. `close_iris_test`.
+- Music into the mini player (and back): the flight starts from where the new composition's cover
+  lies exactly over the old one (`music_cover_on_screen`), computed right after the switch from the
+  new composition as it will be drawn (its words measured, its framing sent). It used to crop the
+  full player into the card's shape and show the card in that crop: the cover jumped from the
+  middle to the left and changed size as the flight began. (A first try held the whole window
+  until the engine reported its new size: the screen recording showed the card blown up to the old
+  window for two frames, the engine draws sooner than it reports.) Coming back, the room was framed
+  on the card's words while they were hidden and jumped to the right size on landing: the words
+  are now measured during transitions too. Films are unchanged.
+- Vertical videos: the bar (and its menus, half way from the window's scale) about 15% smaller
+  (`portrait_shrink`: 0.85 to the half art px below unless the one above is within a quarter, at
+  least one half step from 2 px up, never under 1), whatever set it: the share of the width or
+  the window's own scale, which is the larger one in wider portrait windows (4:5, 3:4); also in
+  windows a little taller than wide (5:6 to 1:1). Measured 12 to 22% across sizes and scales.
+  `portrait_bar_size_test`.
+- Volume without a pop: the engine applies the volume to the sound as it leaves, at once, so a
+  5% step (keys, wheel, the bar, the phone) cut the wave in one jump, a small click, and a dragged
+  slider a row of them. The engine's volume now glides to the new place in 80 ms (smoothstep, on
+  its own 8 ms timer, also with the window hidden; restarted from the current value when asked
+  again); the bar shows the new place at once and the engine's reports of the steps are ignored
+  until the last one. Paused or muted: set directly. `core/volume_glide.h`, `volume_glide_test`.
+- Weaker PCs: Cue reads the graphics (dedicated, integrated, software) and the processor's
+  threads once at start (`core/device_tier.h`, cue.log "graphics ..."). Integrated graphics get
+  lighter scaling passes and 4K timed by the sound; software rendering gets the engine's fast
+  scalers, no dithering, every film timed by the sound, no smoothing and the interface's pictures
+  at up to 30 a second; a weak processor (4 threads or fewer) gets music's picture at 30 a second
+  (same spectrum motion: analysis step and decay follow) and the film's colours sampled half as
+  often. Dedicated cards are unchanged. `device_tier_test`.
+- 4K films are timed by the display (`video-sync=display-resample`) like every other film,
+  except on battery; beyond 4K (8K) they stay timed by the sound. Timed by the sound, the engine
+  only showed the film's own frames, so everything Cue draws over a 4K film (the timeline's
+  hover, the bar, the opening iris) moved at 24 per second. Chosen once in on_preloaded and never
+  switched while the film plays (`clock_fixed_`: unplugging the laptop mid-film changes nothing).
+- Timeline previews: the helper decodes each picture with slice threads (up to 4, half the cores,
+  still at background priority) instead of one core, so 4K previews follow the pointer sooner.
+- The picture's right-click menu offers the mini player for songs too (music's card).
+  `context_menu_test`.
+- Opening: a resumed film lands on the keyframe at or before its place (`hr-seek` off for that
+  start only, back on at the first restart) instead of decoding every frame up to the exact
+  second; the heavy-video clock (`video-sync`) is chosen in on_preloaded from the file's size,
+  before the decoder starts, instead of being switched at the first picture; `interpolation` is
+  sent only when it changes (each file sent it twice while opening).
 
 - Less repeated work during playback: Windows media-card words are cached until the file or music tags change; opening and list animations avoid redundant shader calculation before the overlay update; matching cover decode requests reuse work through a four-entry weak cache.
 

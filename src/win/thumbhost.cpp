@@ -6,6 +6,7 @@
 #include <thread>
 #include <mutex>
 #include <memory>
+#include <string>
 #include <cmath>
 #include "../core/preview_commands.h"
 
@@ -91,7 +92,15 @@ int thumb_host_main() {
   o("vo", "null");
   o("audio", "no"); o("aid", "no"); o("sid", "no"); o("sub-auto", "no");
   o("hwdec", "no");  // the GPU belongs to the playback
-  o("hr-seek", "no"); o("vd-lavc-threads", "1"); o("vd-lavc-skiploopfilter", "all"); o("vd-lavc-fast", "yes");
+  // One picture at a time, so frame threads would only add delay; slice threads split that one
+  // picture (HEVC with wavefronts, as most 4K encodes have, and sliced H.264): a 4K preview came
+  // from a single core at background priority, a few tenths of a second behind the pointer.
+  // Still background work: playback decodes on the GPU and keeps the higher priority.
+  SYSTEM_INFO si{};
+  GetSystemInfo(&si);
+  const std::string threads = std::to_string(std::clamp((int)si.dwNumberOfProcessors / 2, 1, 4));
+  o("hr-seek", "no"); o("vd-lavc-threads", threads.c_str()); o("vd-lavc-o", "thread_type=slice");
+  o("vd-lavc-skiploopfilter", "all"); o("vd-lavc-fast", "yes");
   o("sws-scaler", "fast-bilinear"); o("cache", "no"); o("demuxer-readahead-secs", "0");
   o("load-scripts", "no"); o("ytdl", "no"); o("osd-level", "0"); o("input-default-bindings", "no");
   o("msg-level", "all=no");

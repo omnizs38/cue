@@ -38,9 +38,9 @@ int main() {
       }
   // a landscape window: nothing changes (menus at the bar's own scale)
   PlayView l; l.set_base_scale(2); l.resize(1920, 1080, 2); assert(l.panel_s() == 2);
-  // the portrait window of the report: the bar at 3.5, its menus at 3 (half way from the window's
-  // 2.5), about as wide as the bar
+  // the portrait window of the report: the bar at 3 (3.5 before it was made 15% smaller), its menus
+  // at the window's own 2.5 (half way, in half steps)
   PlayView v; v.set_base_scale(2.5); v.resize(980, 1700, portrait_scale(2.5, 980, 1700, 2));
-  assert(v.s_ == 3.5 && v.panel_s() == 3.0);
+  assert(v.s_ == 3.0 && v.panel_s() == 2.5);
   std::printf("Portrait panels: menus, subtitles and up next half way between the window's scale and a raised bar's (%d windows) passed\n", checked);
 }

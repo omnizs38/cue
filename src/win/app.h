@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "../core/store.h"
+#include "../core/glide_clock.h"
 #include "../core/playback_warmup.h"
 #include "../core/preview_session.h"
 #include "../core/overlay_buffers.h"
@@ -18,6 +19,8 @@
 #include "../core/episode_advance.h"
 #include "../core/queue.h"
 #include "../core/media_geometry.h"
+#include "../core/device_tier.h"
+#include "../core/volume_glide.h"
 #include "../ui/home.h"
 #include "../ui/onboarding.h"
 #include "../ui/play.h"
@@ -55,7 +58,7 @@ class App {
  private:
   enum class Mode { Home, Play };
   enum : UINT { WM_APP_MPV = WM_APP + 1, WM_APP_ENGINE = WM_APP + 2, WM_APP_RECENTS = WM_APP + 3, WM_APP_THUMB = WM_APP + 4, WM_APP_MOUSE = WM_APP + 5, WM_APP_OPEN_FILES = WM_APP + 6, WM_APP_LEFT_DOWN = WM_APP + 7, WM_APP_LEFT_UP = WM_APP + 8, WM_APP_RIGHT_UP = WM_APP + 9, WM_APP_VSYNC = WM_APP + 10, WM_APP_UPDATE = WM_APP + 11, WM_APP_REMOTE = WM_APP + 12, WM_APP_QUEUE_CANCEL = WM_APP + 13, WM_APP_WHEEL = WM_APP + 14, WM_APP_MEDIA_BUTTON = WM_APP + 15 };
-  enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREFETCH = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14, T_FOLDER = 15, T_QUEUE = 16 };
+  enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREFETCH = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14, T_FOLDER = 15, T_QUEUE = 16, T_VOLUME = 17 };
 
   HINSTANCE inst_ = nullptr;
   HWND hwnd_ = nullptr, video_ = nullptr;
@@ -147,7 +150,10 @@ class App {
   // where the window was to where it lands, the window already there out of sight; from, to: the
   // picture's rects on screen. Without a ghost, the plain flight (out of sight while it changes
   // size, then a spring into the corner)
-  struct MiniFx { bool on = false, cloaked = false, entering = false, ghost = false; int stage = 0; double t0 = 0, rise = 0.14, dur = 0.45, hold = 0.08; RECT to{}, from{}, gto{}; } mini_fx_;
+  struct MiniFx {
+    bool on = false, cloaked = false, entering = false, ghost = false; int stage = 0; double t0 = 0, rise = 0.14, dur = 0.45, hold = 0.08; RECT to{}, from{}, gto{};
+  } mini_fx_;
+  bool music_cover_on_screen(const MusicView& v, double& x, double& y, double& side) const;
   FlightGhost ghost_;
   StageCover stage_cover_;  // black over the screen while full screen changes the window's size
   RECT client_screen() const;  // the client area on screen
@@ -203,6 +209,10 @@ class App {
     double volume = 100;
     bool muted = false, log = false;
   } engine_cfg_;
+  // what this PC can comfortably do (core/device_tier.h): read on the engine thread before the
+  // engine's options (engine_device_, the engine thread's until WM_APP_ENGINE, like engine_cfg_),
+  // then copied for the UI thread in on_engine_ready
+  DeviceTier engine_device_, device_;
   HANDLE engine_thread_ = nullptr, engine_go_ = nullptr;
   bool engine_log_ = false, engine_failed_ = false;  // --log: routine steps too (see trace)
   bool maintenance_started_ = false;
@@ -469,7 +479,7 @@ class App {
   double pending_ar_ = 0;          // decided while fullscreen: applied on the way out
   SIZE landscape_size_{0, 0};      // last landscape window size, to come back to
   // kind: 0 a shape change, 1 growing into fullscreen, 2 coming back out of it
-  struct GeomAnim { bool on = false; RECT from{}, to{}; double t0 = 0, dur = 0.26; int kind = 0; } geom_;
+  struct GeomAnim { bool on = false; RECT from{}, to{}; GlideClock clock; double dur = 0.26; int kind = 0; } geom_;
   double geom_end_t_ = -10;    // when the last window glide landed
   double first_frame_t_ = -1;  // when this file's first frame was up
   bool window_settled() const;  // the window has its shape for this file (the iris may open)
@@ -507,6 +517,7 @@ class App {
   void settle_fullscreen_motion();
   void maybe_adapt_window();
   void decide_window();
+  void release_open_subs(double t);
   std::string video_sync_ = "display-resample", hwdec_;
   bool logged_hw_ = false;
   double hw_log_t_ = 0;
@@ -538,6 +549,25 @@ class App {
   void quit_now();
   bool closing_video_ = false, hide_video_pending_ = false, closing_app_ = false;
   double hide_video_since_ = 0;
+  // Esc / close: the picture closes in the pixel iris and the sound breathes out, then the engine
+  // stops and the home comes in (see close_to_home)
+  bool home_closing_ = false, close_stopped_ = false, close_gain_pending_ = false, close_hid_subs_ = false;
+  bool open_hid_subs_ = false;  // a film's subtitles held until its picture opens (release_open_subs)
+  double close_gain_ = 1;
+  void close_to_home();
+  void stop_to_home();
+  bool step_close_to_home(double t);
+  void cancel_close_to_home();
+  bool resume_keyframe_ = false;  // this film resumes at a keyframe: precise seeking comes back once it plays
+  bool clock_fixed_ = false;      // this film's video-sync is chosen (film_clock): it stays until the next file
+  // the volume glides to where it was asked (set_volume): an instant jump of the engine's gain
+  // cut the wave in one step, a click (a slider drag: a row of them)
+  void set_volume(double v);
+  void step_volume();
+  VolumeGlide vol_glide_;
+  double vol_to_ = -1, vol_now_ = -1, vol_settle_until_ = 0;
+  bool vol_gliding_ = false;
+  bool interp_sent_ = false;      // the engine's interpolation as last sent (starts "no", see start_engine)
   HWND mpv_win_ = nullptr;
   double last_move_t_ = 0;
   void set_title(const std::string& t);

@@ -1,10 +1,15 @@
 // The facts the picture's helpers depend on, read from Windows (cheap, no disk writes).
 #pragma once
+#include "../core/device_tier.h"
 
 // running on battery (a laptop unplugged): the helpers that spend power stay off
 bool on_battery();
 // the adapter the picture is drawn on (the first one) is NVIDIA's
 bool primary_gpu_nvidia();
+// what this PC can comfortably do (core/device_tier.h): the first adapter's kind (the one the
+// engine draws on: Windows lists the person's preferred graphics first) and the processor's
+// threads. Read once, a few milliseconds; thread-safe.
+DeviceTier read_device_tier();
 // NVIDIA's own switch for RTX Video Super Resolution (NVIDIA app / control panel): 1 on, 0 off,
 // -1 unknown (not found: then it is treated as off, so the picture never gets worse)
 int nvidia_vsr_switch();

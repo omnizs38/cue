@@ -54,6 +54,31 @@ int main(int argc, char**) {
     assert(scrub.dock_visible() && !scrub.iris_active());
   }
 
+  // a plain click on the timeline (also with the small jitter of a real hand): one exact jump,
+  // never the quick keyframe jump first (it showed the keyframe's picture, then the right one)
+  for (bool paused : {true, false}) for (int jitter : {0, 1, 4}) {
+    PlayView click;
+    click.in.dur = 3562;
+    click.in.paused = paused;
+    click.resize(1280, 720, 2);
+    click.reset(0);
+    for (int i = 0; i < 60; ++i) click.tick(i / 60.0, 1.0 / 60);
+    const auto& dock = click.layers[PlayView::L_DOCK];
+    int x = dock.x + dock.c.w / 2, y = dock.y + 56;
+    click.mouse_move(x, y, 1);
+    click.take_actions();
+    click.mouse_down(x, y, 1);
+    click.mouse_move(x + jitter, y, 1.02);
+    click.mouse_move(x + jitter, y, 1.03);  // Windows repeats a move at the same place
+    click.mouse_up(x + jitter, y, 1.08);
+    int previews = 0, commits = 0;
+    for (auto action : click.take_actions()) {
+      previews += action.a == PA::SeekAbs;
+      commits += action.a == PA::SeekAbsExact;
+    }
+    assert(previews == 0 && commits == 1);
+  }
+
   PlayView view;
   view.in.audio_only = true;
   view.in.dur = 240;
@@ -72,5 +97,5 @@ int main(int argc, char**) {
   view.reset(11);
   for (int i = 0; i < 600; ++i) view.tick(11 + i / 60.0, 1.0 / 60);
   assert(!view.pinned() && !view.dock_visible()); // normal video auto-hide returns
-  std::puts("audio checks passed: stream detection, visible controls, continuous audio scrub, single release seek, video live scrub unchanged");
+  std::puts("audio checks passed: stream detection, visible controls, continuous audio scrub, single release seek, video live scrub unchanged, a click is one exact jump");
 }

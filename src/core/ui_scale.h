@@ -62,6 +62,17 @@ constexpr int kCompactDockW = 204;
 // the chosen size: narrower than the window, and bigger.
 // The landscape dock's width in px of art (with the subtitles and audio buttons).
 constexpr int kLandscapeDockW = 372;
+// A vertical video's bar: about 15% smaller than the rule that sizes it (on a phone video the bar
+// and its menus took too much of the picture), in half art px; from 2 px up always at least one
+// half step down; never under 1.
+constexpr double kPortraitShrink = 0.85;
+inline double portrait_shrink(double ps) {
+  // (to the half step below unless the one above is within a quarter of it: rounding to the
+  // nearest went up too often at large scales, 4.5 -> 4 is only 11% off)
+  double shrunk = std::floor(ps * kPortraitShrink * 2 + 0.25) / 2;
+  if (shrunk >= ps && ps >= 2) shrunk = ps - 0.5;
+  return std::max(1.0, shrunk);
+}
 inline double portrait_scale(double s, int cw, int ch, int choice) {
   if (cw <= 0) return s;
   if (ch < cw * 1.15) {
@@ -71,13 +82,16 @@ inline double portrait_scale(double s, int cw, int ch, int choice) {
     if (t <= 0) return s;
     static const double sq[kUiSizes] = {0.56, 0.67, 0.76, 0.84};
     double want = cw * sq[ui_size_index(choice)] * t / kLandscapeDockW;
-    double ps = std::floor(want * 2) / 2;
-    return std::max(s, std::min(ps, s + 1.5));
+    double ps = std::max(s, std::min(std::floor(want * 2) / 2, s + 1.5));
+    // a little taller than wide (5:6 ... 1:1): a vertical video too, the same 15% off
+    return ch > cw ? portrait_shrink(ps) : ps;
   }
   static const double share[kUiSizes] = {0.72, 0.80, 0.88, 0.94};
   double want = cw * share[ui_size_index(choice)] / kCompactDockW;
-  double ps = std::floor(want * 2) / 2;  // whole or half art px, like the medium size
-  return std::max(s, std::min(ps, s + 2));
+  double ps = std::max(s, std::min(std::floor(want * 2) / 2, s + 2));  // whole or half art px, like the medium size
+  // then 15% off, whatever set it: the share above, or the window's own scale (a wider portrait
+  // window, 4:5 or 3:4, is big enough for its own scale to be the larger one)
+  return portrait_shrink(ps);
 }
 
 // Music framed close (a small or portrait window, the stacked composition): the window's own scale

@@ -582,6 +582,11 @@ bool App::start_engine() {
   // HDR on an SDR screen: tone mapping without the per-frame peak analysis (a compute pass over
   // every 4K frame); the picture stays right, the GPU does far less
   o("hdr-compute-peak", "no");
+  // a lighter picture where the graphics are inside the processor or missing (device_tier.h);
+  // a dedicated card keeps the engine's own quality
+  engine_device_ = read_device_tier();
+  for (const auto& r : render_options(engine_device_.gpu)) o(r.name, r.value);
+  log(std::string("graphics ") + gpu_tier_name(engine_device_.gpu) + ", " + std::to_string(engine_device_.threads) + " threads");
   o("audio-client-name", "Cue");
   o("sub-auto", "fuzzy");
   o("sub-file-paths", "subs;Subs;legendas;Legendas;legenda");
@@ -666,6 +671,9 @@ void App::on_engine_ready(bool ok) {
     static_cast<App*>(ctx)->wake_mpv();
   }, this);
   mpv_ok_ = true;
+  vol_now_ = engine_cfg_.volume;  // where the engine started (the volume's glides start from it)
+  device_ = engine_device_;  // read on the engine thread; ours from here on
+  refresh_display_rate();    // the interface's picture rate for this graphics
   play_.in.iris_engine = true;  // the opening iris is the video shader's from now on
   drain_mpv();  // whatever the engine said while it was starting
   if (!pending_open_.empty()) { auto p = pending_open_; pending_open_.clear(); open(p); }
@@ -911,7 +919,16 @@ bool App::step_mini_fx(double t) {
     // out of sight and takes its new size and place at once; the picture flies there.
     {
       const RECT here = client_screen();
-      const RECT from = mini_fx_.entering ? contain_rect(here, mini_aspect()) : here;
+      // Music: the card and the full player are two compositions (the cover on the card's left;
+      // in the middle of the full player, with its words under it). Cropping one into the other's
+      // shape made the cover jump in size and place as the flight began. The flight starts from
+      // where the new composition's cover lies exactly over the old one: the cover flies, the rest
+      // of the card (or of the room) gathers round it. (Holding the whole window until the engine
+      // reported its new size showed the new composition blown up to the old window for a frame
+      // or two: the engine draws it sooner than it says so.)
+      double ccx = 0, ccy = 0, cside = 0;
+      const bool music = audio_only_ && cover_scene_ && music_cover_on_screen(play_.in.music_view, ccx, ccy, cside);
+      const RECT from = music || !mini_fx_.entering ? here : contain_rect(here, mini_aspect());
       if (ghost_.begin(inst_, hwnd_, from)) {
         set_cloak(true);
         mini_fx_.cloaked = true;
@@ -920,7 +937,22 @@ bool App::step_mini_fx(double t) {
         mini_switch(mini_fx_.entering);
         mini_fx_.from = from;
         mini_fx_.gto = client_screen();
-        ghost_.place(from);  // (the window changed shape: the picture is cropped to the ghost's again)
+        if (music) {
+          // the new composition, as it will be drawn: its words measured and its framing sent
+          // (twice: the words' size follows the cover's, the cover's place follows the words)
+          for (int i = 0; i < 2; ++i) { play_.prepare(t); step_music_view(t); }
+          double nx = 0, ny = 0, nside = 0;
+          if (music_cover_on_screen(play_.in.music_view, nx, ny, nside) && nside > 1 && cside > 1) {
+            const double k = cside / nside;  // the new client, scaled so its cover covers the old one
+            const RECT& g = mini_fx_.gto;
+            if (k > 0.05 && k < 20) {
+              const double left = ccx - (nx - g.left) * k, top = ccy - (ny - g.top) * k;
+              mini_fx_.from = {(LONG)std::lround(left), (LONG)std::lround(top), (LONG)std::lround(left + (g.right - g.left) * k),
+                               (LONG)std::lround(top + (g.bottom - g.top) * k)};
+            }
+          }
+        }
+        ghost_.place(mini_fx_.from);  // (the window changed shape: the picture is cropped to the ghost's again)
         mini_fx_.stage = 2;
         mini_fx_.t0 = t;
         return true;
@@ -989,6 +1021,17 @@ bool App::step_mini_fx(double t) {
   const double e = 1 - smoothstep(0.0, 0.9, k);  // sharp just before it lands
   set_snap(0.12 * e, snap_px(0.6 * e, ch_), 0.0);
   return true;
+}
+
+// A song's cover on screen (its square's top-left corner and side, screen px) for a framing.
+bool App::music_cover_on_screen(const MusicView& v, double& x, double& y, double& side) const {
+  if (v.f <= 0 || cw_ <= 0 || ch_ <= 0) return false;
+  POINT o{0, 0};
+  ClientToScreen(hwnd_, &o);
+  x = o.x + v.ox + music_scene_.x * v.f;
+  y = o.y + v.oy + music_scene_.y * v.f;
+  side = music_scene_.side * v.f;
+  return side > 1;
 }
 
 void App::enter_mini() {
@@ -1226,13 +1269,31 @@ void App::drain_mpv() {
         double rp = store_.resume && !remote::is_audio_name(p) ? store_.resume_point(p) : -1;
         resume_toast_ = rp;
         if (rp > 0) mpv_.set("file-local-options/start", std::to_string(rp));
+        // Resuming lands on the keyframe at or before the place (a second or a few earlier, a
+        // small recap) instead of decoding every frame from there up to the exact place: on a
+        // 4K film with long keyframe gaps that decode was most of the wait before the picture.
+        // Precise seeking comes back as soon as the film plays (PLAYBACK_RESTART).
+        resume_keyframe_ = rp > 0 && !music_reopening_ && mpv_.set("file-local-options/hr-seek", "no");
         // what the person chose for this file last time: subtitle delay and visibility
+        bool subs_on = true;
         if (const RecentItem* r = store_.find(p)) {
           if (std::fabs(r->sub_delay) > 0.001) mpv_.set("file-local-options/sub-delay", std::to_string(r->sub_delay));
-          mpv_.set("sub-visibility", r->sub_visible ? "yes" : "no");
-        } else {
-          mpv_.set("sub-visibility", "yes");
+          subs_on = r->sub_visible;
         }
+        // A film's subtitles wait for its picture. The engine draws them after the shader, so the
+        // iris never covered them: the line was there over the black window before the film,
+        // moved when the window took the film's shape and only then the picture opened behind it.
+        // Now they are held (as in the other transitions, the person's choice kept) and come in
+        // with the opening iris, half way open (release_open_subs).
+        if (open_hid_subs_) { open_hid_subs_ = false; snap_.subs_hidden = false; }  // (a file that never opened)
+        const bool hold = !music_reopening_ && !remote::is_audio_name(p) && !reduce_motion() && !snap_.subs_hidden;
+        if (hold) {
+          open_hid_subs_ = true;
+          snap_.subs_hidden = true;
+          snap_.subs_were = subs_on;
+          play_.in.sub_visible = subs_on;  // the menus show the choice while the engine waits
+        }
+        mpv_.set("sub-visibility", subs_on && !hold ? "yes" : "no");
         tracks_applied_ = false;
         if (music_reopening_) {
           // the same song again, for a new look: it continues where it was, and stays still
@@ -1313,6 +1374,7 @@ void App::drain_mpv() {
         }
         break;
       case MPV_EVENT_PLAYBACK_RESTART:
+        if (resume_keyframe_) { resume_keyframe_ = false; mpv_.set_async("hr-seek", "yes"); }  // (file-local: restored at unload too)
         // how long a file took to play, once (a song too: a film says it at its first frame)
         if (loaded_ && audio_only_ && !open_timed_) { open_timed_ = true; log("song plays (open " + std::to_string((int)((now() - open_started_) * 1000)) + "ms)"); }
         if (seek_fade_.stage == 2) { seek_fade_.stage = 3; seek_fade_.t0 = now(); ensure_anim(); }  // the new place: breathe back in
@@ -1416,7 +1478,12 @@ void App::on_property(uint64_t id, const mpv_event_property* p) {
       in.dur = dbl(0);
       if (loaded_ && in.dur > 0) store_.set_position(path_, last_time_, in.dur);
       break;
-    case O_VOL: in.volume = dbl(in.volume); store_.volume = in.volume; break;
+    case O_VOL:
+      // (while it glides the engine reports every step: the bar and the saved volume keep the
+      // place the person asked for)
+      if (vol_gliding_ || (now() < vol_settle_until_ && std::fabs(dbl(-1) - vol_to_) > 0.01)) break;
+      in.volume = dbl(in.volume); store_.volume = in.volume; vol_now_ = in.volume;
+      break;
     case O_MUTE: in.muted = flag(false); store_.muted = in.muted; break;
     case O_SUBDELAY:
       in.sub_delay = dbl(0);
@@ -1605,7 +1672,7 @@ void App::select_audio(int64_t id) {
   }
   bool was_mix = amix_;
   if (was_mix || audio_switch_.stage || (audio_only_ && waveform_active_)) {
-    std::string graph = audio_only_ && waveform_active_ ? audio_waveform_graph(id, visual_cover(), music_scene_, music_look_on_) : "";
+    std::string graph = audio_only_ && waveform_active_ ? audio_waveform_graph(id, visual_cover(), music_scene_, music_look_on_, device_.music_fps()) : "";
     if (!change_audio_graph(graph, id)) return;
     aid_reselect_ = id;
   } else {
@@ -1837,6 +1904,50 @@ bool App::step_seek_fade(double t) {
   return true;
 }
 
+// The person's volume. The engine applies it to the sound as it leaves, at once: going up 5% (a
+// key, the wheel, the phone) made the wave jump in one step, a small pop, and a dragged slider a
+// row of them. Now the engine's volume glides there in 80 ms (a dozen small steps, each well under
+// what the ear hears as a click), on its own timer so it also works with the window hidden. The
+// bar shows the new place at once. Paused or silent there is nothing to hear: it is set directly.
+void App::set_volume(double v) {
+  v = std::clamp(v, 0.0, kVolMax);
+  play_.in.volume = v;
+  store_.volume = v;
+  if (!mpv_ok_) return;
+  if (vol_now_ < 0) vol_now_ = v;
+  const bool quiet = play_.in.paused || play_.in.muted || !loaded_ || mode_ != Mode::Play;
+  if (quiet || std::fabs(v - vol_now_) < 0.5) {
+    KillTimer(hwnd_, T_VOLUME);
+    vol_gliding_ = false;
+    vol_now_ = vol_to_ = v;
+    mpv_.set_double_async("volume", v);
+    return;
+  }
+  // a new place while gliding: from where the sound is now, never back to the start
+  vol_glide_ = {vol_now_, v, now()};
+  vol_to_ = v;
+  vol_gliding_ = true;
+  SetTimer(hwnd_, T_VOLUME, 8, nullptr);
+  step_volume();
+}
+
+void App::step_volume() {
+  if (!vol_gliding_ || !mpv_ok_) { KillTimer(hwnd_, T_VOLUME); vol_gliding_ = false; return; }
+  const double t = now();
+  const bool done = vol_glide_.done(t);
+  const double v = vol_glide_.at(t);
+  if (std::fabs(v - vol_now_) >= 0.05 || done) {
+    vol_now_ = v;
+    mpv_.set_double_async("volume", v);
+  }
+  if (done) {
+    KillTimer(hwnd_, T_VOLUME);
+    vol_gliding_ = false;
+    vol_settle_until_ = now() + 0.3;  // reports of the last steps may still be on their way
+    play_.in.volume = store_.volume = vol_to_;
+  }
+}
+
 // The engine's own gain, under the person's volume (volume-gain, in dB): 1 is untouched, 0 silent.
 // Sent only when it changes, so a fade is a dozen messages, and nothing at rest.
 void App::set_switch_gain(double g) {
@@ -1879,7 +1990,7 @@ void App::set_audio_mix(std::vector<int64_t> ids, bool remember) {
     return;
   }
   if (!amix_ || ids != play_.in.amix_ids) {
-    std::string g = audio_mix_graph(ids, audio_only_ && waveform_active_, visual_cover(), music_scene_, music_look_on_);
+    std::string g = audio_mix_graph(ids, audio_only_ && waveform_active_, visual_cover(), music_scene_, music_look_on_, device_.music_fps());
     if (g.empty()) return;
     if (!change_audio_graph(g, 0)) return;
     // Automatic restoration uses the fullscreen pixel fade, without changing window mode.
@@ -2545,9 +2656,9 @@ void App::reopen_music() {
     cover_art_ = look != 1;
     music_look_on_ = look;
     play_.in.cover_art = cover_art_;
-    mpv_.set("file-local-options/scale", cover_art_ ? "spline36" : "nearest");
-    mpv_.set("file-local-options/dscale", cover_art_ ? "mitchell" : "nearest");
-    change_audio_graph(audio_mix_graph(play_.in.amix_ids, true, visual_cover(), music_scene_, music_look_on_), 0);
+    mpv_.set("file-local-options/scale", music_scale(device_.gpu, cover_art_));
+    mpv_.set("file-local-options/dscale", music_dscale(device_.gpu, cover_art_));
+    change_audio_graph(audio_mix_graph(play_.in.amix_ids, true, visual_cover(), music_scene_, music_look_on_, device_.music_fps()), 0);
     update_blur_cloud();
     return;
   }
@@ -2582,12 +2693,14 @@ void App::reopen_song() {
 // the sound, which draws fewer pictures).
 void App::apply_smooth() {
   const double hz = pacer_.interval() > 0 ? 1.0 / pacer_.interval() : 60.0;
-  const bool helps = !audio_only_ && cadence_uneven(video_fps_, hz);
+  const bool helps = !audio_only_ && cadence_uneven(video_fps_, hz) && device_.smoothing_ok();
   play_.in.smooth_available = helps;
   play_.in.smooth_motion = store_.smooth_motion;
   const bool want = helps && store_.smooth_motion && !on_battery();
   smooth_on_ = want;
-  if (mpv_ok_) mpv_.set_async("interpolation", want ? "yes" : "no");
+  // sent only when it changes: every file used to send it twice as it opened (the engine's
+  // renderer takes a changed option as a reason to re-check its whole configuration)
+  if (mpv_ok_ && want != interp_sent_) { mpv_.set_async("interpolation", want ? "yes" : "no"); interp_sent_ = want; }
   send_sync();
   if (!audio_only_ && loaded_) {  // so it can be checked: cue.log says when it works, and why not
     char b[160];
@@ -2597,6 +2710,7 @@ void App::apply_smooth() {
   }
   play_.changed(now());
 }
+
 
 // The film's timing, one place for all three reasons: covered by a full-screen window (the
 // sound times it), smoothing on (the display times it, or the blend does nothing), otherwise
@@ -2649,6 +2763,13 @@ void App::configure_audio_mode() {
       if (vw > 0 && vh > 0 && t.demux_rotation >= 0)
         early_shape_ = {(int64_t)std::lround(vw * (t.demux_par > 0 ? t.demux_par : 1.0)), vh, t.demux_rotation};
       break;
+    }
+    // the film's clock (film_clock) chosen before its decoder starts: deciding it at the first
+    // picture switched the clock of a 4K film right as it began to play
+    clock_fixed_ = false;
+    if (vw > 0 && vh > 0) {  // (the size alone decides: turned or not)
+      const std::string sync = film_clock(early_shape_.width > 0 ? early_shape_.width : vw, vh, on_battery(), device_.gpu);
+      if (sync == video_sync_ || mpv_.set("video-sync", sync)) { video_sync_ = sync; clock_fixed_ = true; }
     }
     // super resolution, NVIDIA's switch decides (Cue has none): on there, a film smaller than
     // the screen, on power. Set before the film starts, so it never rebuilds while it plays.
@@ -2743,8 +2864,8 @@ void App::configure_audio_mode() {
     // song picked in the open list used to be framed centred, the list over it, and stay so)
     play_.in.music_view = {};
     play_.in.music_view.frame = music_frame_;
-    mpv_.set("file-local-options/scale", cover ? "spline36" : "nearest");
-    mpv_.set("file-local-options/dscale", cover ? "mitchell" : "nearest");
+    mpv_.set("file-local-options/scale", music_scale(device_.gpu, cover));
+    mpv_.set("file-local-options/dscale", music_dscale(device_.gpu, cover));
     // several tracks heard at once (remembered for this file, or a recording in parts): the mix is
     // part of the graph from the start, so the song never has to rebuild it while it plays
     std::vector<int64_t> mix;
@@ -2767,8 +2888,8 @@ void App::configure_audio_mode() {
       mix.erase(std::unique(mix.begin(), mix.end()), mix.end());
       if (mix.size() < 2) mix.clear();
     }
-    std::string graph = mix.empty() ? audio_waveform_graph(id, cover ? cover_vid_ : 0, music_scene_, look)
-                                    : audio_mix_graph(mix, true, cover ? cover_vid_ : 0, music_scene_, look);
+    std::string graph = mix.empty() ? audio_waveform_graph(id, cover ? cover_vid_ : 0, music_scene_, look, device_.music_fps())
+                                    : audio_mix_graph(mix, true, cover ? cover_vid_ : 0, music_scene_, look, device_.music_fps());
     waveform_active_ = mpv_.set("file-local-options/lavfi-complex", graph);
     if (waveform_active_ && !mix.empty()) { amix_ = play_.in.amix = true; play_.in.amix_ids = mix; }
     if (!waveform_active_) log("audio waveform filter unavailable; keeping audio controls");
@@ -2868,6 +2989,9 @@ void App::on_file_loaded() {
   // arrives. open() already owns the requested path; never replace it with a stale observation.
   closing_video_ = false;
   hide_video_pending_ = false;
+  // a close to the home that a new file interrupted left the engine's gain down: the last
+  // file's sound is gone now, so it comes back for this one
+  if (close_gain_pending_ && !home_closing_) { close_gain_pending_ = false; set_switch_gain(1); }
   loaded_ = true;
   open_failures_ = 0;
   loaded_at_ = now();
@@ -2974,6 +3098,19 @@ bool App::window_settled() const {
   if (geom_.on || !geom_done_) return false;
   const double frame = pacer_.ok() ? pacer_.interval() : 1.0 / 60;
   return now() - geom_end_t_ >= 2 * frame;  // a couple of frames drawn at the new size
+}
+
+// The subtitles held while a film opens come in once the iris is half open (or at once for a song,
+// a file without the iris, or a film the iris already finished). Another transition that took them
+// in the meantime (full screen, the mini player, the close) gives them back itself.
+void App::release_open_subs(double t) {
+  if (!open_hid_subs_) return;
+  if (mode_ == Mode::Play && !loaded_) return;  // still loading: the iris has not even started
+  if (mode_ == Mode::Play && !audio_only_ && !play_.iris_closing() &&
+      (play_.iris_waiting() || (play_.iris_active() && play_.iris_open(t) < 0.55))) return;
+  open_hid_subs_ = false;
+  if (snap_.on || fullscreen_transition_ || home_closing_ || mini_fx_.on || audio_switch_.stage) return;
+  snap_subtitles(false);
 }
 
 void App::try_start_iris() {
@@ -3116,6 +3253,7 @@ void App::open(std::string path, std::vector<std::string> subs) {
   // Own the argument before clearing next_ep_ (manual, phone and EOF callers
   // can all pass that member). Empty input must not tear down current playback.
   if (path.empty()) { log("ignored empty open request"); return; }
+  cancel_close_to_home();  // a file arriving while the picture closed (the phone, a drop): it plays
   if(folder_scan_&&folder_scan_->replace)folder_scan_->cancelled=true;
   if (!queue_.select_path(path)) queue_.clear();
   next_advance_.clear();
@@ -3175,7 +3313,7 @@ void App::open(std::string path, std::vector<std::string> subs) {
   geom_.on=false; geom_done_=false; user_sized_=false; pending_ar_=0;
   film_idle_ = false;  // file-local: the next file starts without it
   engine_warns_ = 0;
-  sync_decided_ = false; sync_sent_.clear(); smooth_on_ = false;
+  sync_decided_ = false; sync_sent_.clear(); smooth_on_ = false; clock_fixed_ = false;
   KillTimer(hwnd_,T_GEOM);
   path_ = path;
   open_started_ = now();
@@ -3217,7 +3355,67 @@ void App::handle_files(const std::vector<std::string>& files) {
   }
 }
 
+// Esc (or close) on a film or a song: the home used to arrive only after the engine had stopped
+// and torn its picture down, so the frame froze for that moment, went black and the home popped
+// in. Now the answer is on the next frame: the controls and subtitles go, the picture closes in
+// the same pixel iris that opened it (0.22 s, from just inside the corners) while the sound
+// breathes out, and only then does the engine stop, behind black. Esc again skips the rest.
+void App::close_to_home() {
+  if (home_closing_) { if (!close_stopped_) stop_to_home(); return; }
+  const bool animate = mpv_ok_ && loaded_ && mode_ == Mode::Play && play_.in.iris_engine && first_frame_ &&
+                       !play_.iris_waiting() && !reduce_motion() && !hidden_now() && !mini_player_ &&
+                       !audio_switch_.stage && !fullscreen_transition_;
+  if (!animate) { stop_to_home(); return; }
+  home_closing_ = true;
+  close_stopped_ = false;
+  release_video_window();  // input stops here, and the engine's window is let go before it goes
+  save_position();         // the place the person left, not 0.22 s later
+  if (seek_fade_.stage) seek_fade_ = {};  // leaving: a jump still on its way does not matter
+  close_gain_ = switch_gain_;
+  close_gain_pending_ = true;
+  close_hid_subs_ = !snap_.subs_hidden;
+  snap_subtitles(true);
+  end_card_flip(false);
+  play_.close_iris(now());
+  remove_overlays();
+  ensure_anim();
+}
+
+// One step of the close; true while it still moves. After the stop the interface stays as it is
+// (black, no layers) until the engine says it is idle and go_home takes over.
+bool App::step_close_to_home(double t) {
+  if (!home_closing_ || close_stopped_) return false;
+  if (!mpv_ok_ || !loaded_ || mode_ != Mode::Play) { stop_to_home(); return false; }
+  const double k = std::clamp(play_.iris_open(t) / PlayView::kIrisCloseFrom, 0.0, 1.0);
+  set_switch_gain(close_gain_ * k * k);  // the sound follows the picture out (quieter sooner than the ellipse)
+  if (play_.iris_closed(t)) { stop_to_home(); return false; }
+  return true;
+}
+
+void App::stop_to_home() {
+  if (home_closing_) {
+    close_stopped_ = true;
+    set_switch_gain(0);  // silent through the stop (its own gain comes back at the home)
+  } else save_position();
+  release_video_window();
+  mpv_.cmd({"stop"});
+}
+
+// a file opened while the picture was closing: it plays as any other (its gain comes back once
+// the engine has let go of the last sound, in on_file_loaded)
+void App::cancel_close_to_home() {
+  if (!home_closing_) return;
+  home_closing_ = close_stopped_ = false;
+  play_.cancel_close();
+  if (close_hid_subs_) { close_hid_subs_ = false; snap_.subs_hidden = false; }  // the next file sets its own visibility as it loads (on_load hook)
+}
+
 void App::go_home() {
+  home_closing_ = close_stopped_ = false;
+  play_.cancel_close();
+  if (open_hid_subs_) { open_hid_subs_ = false; snap_.subs_hidden = false; }  // (a film that never opened)
+  if (close_hid_subs_) { close_hid_subs_ = false; snap_.subs_hidden = false; }  // (hidden by the close; the next file sets its own)
+  if (close_gain_pending_) { close_gain_pending_ = false; set_switch_gain(1); }  // the engine is idle: no sound left to hear it
   exit_mini(false);  // back home: the full window, at once
   playback_priority(false);
   if (folder_scan_) folder_scan_->cancelled=true;
@@ -3413,7 +3611,7 @@ void App::run_actions() {
         else { seek_in_flight_ = true; mpv_.cmd({"seek", std::to_string(a.v), "absolute+keyframes"}, kReplySeek); }
         break;
       case PA::SeekAbsExact: cancel_audio_switch(); seek_pending_ = -1; hold_seek(a.v); seek_soft({"seek", std::to_string(a.v), "absolute+exact"}); break;
-      case PA::Volume: mpv_.set_double_async("volume", a.v); play_.in.volume = a.v; break;
+      case PA::Volume: set_volume(a.v); break;
       case PA::ToggleMute: mpv_.cmd({"cycle", "mute"}); break;
       case PA::Fullscreen: toggle_fullscreen(); break;
       case PA::SelectSub:
@@ -3444,7 +3642,7 @@ void App::run_actions() {
       case PA::QueueReorder: if(queue_.move_to((uint32_t)a.id,(int)a.v))queue_refresh(); break;
       case PA::QueueClear: queue_clear(); break;
       case PA::OpenFile: { auto f = open_file_dialog(hwnd_, DialogKind::Video); if (!f.empty()) handle_files(f); break; }
-      case PA::CloseVideo: release_video_window(); save_position(); mpv_.cmd({"stop"}); break;
+      case PA::CloseVideo: close_to_home(); break;
       case PA::StyleLive: live_style = true; break;  // coalesced: applied once per frame
       case PA::Style:
         apply_style();
@@ -3621,7 +3819,9 @@ void App::update_blur_cloud() {
   // the opening iris, drawn by the engine's shader on the picture (it was a full-window bitmap
   // made and sent 60 times a second: 33 MB a frame in 4K, while the film was starting)
   // (also while the home still says goodbye: the picture is black before its window shows)
-  const double iris = play_.in.iris_engine && loaded_ ? play_.iris_open(tn) : -1.0;
+  // (and on the way home: black from the closed iris until the engine has let its picture go, or
+  // a redraw while it stops would show the last frame again)
+  const double iris = play_.in.iris_engine && (loaded_ || home_closing_) ? play_.iris_open(tn) : -1.0;
   bool fx = snap_.on || subfx_.on || iris >= 0;
   if (snap_.on) {
     char f[200];
@@ -3889,7 +4089,7 @@ void App::refresh_display_rate() {
   double iv = pacer_.interval();
   // The engine redraws its OSD for every overlay picture: uploads stay near 60 Hz, on a whole
   // divisor of the display's rate so they still land on its frames (144 Hz -> 72, 120 -> 60).
-  int k = std::max(1, (int)std::ceil(1.0 / iv / 90.0 - 0.05));
+  int k = std::max(1, (int)std::ceil(1.0 / iv / device_.overlay_rate_cap() - 0.05));
   play_interval_ = iv * k;
   for (auto& o : ov_) o.cadence.period = play_interval_;
   cloud_cadence_.period = play_interval_;
@@ -4007,6 +4207,12 @@ void App::frame() {
       home_paint_at_ = t;
     }
     if (reveal_pending_) { moving = true; if (home_.leave_done(t)) reveal_play(); }
+  } else if (home_closing_) {
+    // closing to the home: the interface stands still (its layers are already gone); only the
+    // iris and the sound move, and the engine stops when the ellipse has closed
+    moving |= step_close_to_home(t);
+    upload_overlays();  // the iris (shader) and the layers' removal
+    moving |= overlays_pending();
   } else {
     if (play_.iris_waiting()) { try_start_iris(); moving = true; }
     // upload_overlays updates the shader once below, after the UI animation has advanced.
@@ -4015,6 +4221,7 @@ void App::frame() {
       if (p.x != last_cursor_.x || p.y != last_cursor_.y) { last_cursor_ = p; play_.mouse_move(p.x, p.y, t); }
     }
     moving |= play_.tick(t, dt);
+    release_open_subs(t);
     run_actions();
     upload_overlays();
     moving |= overlays_pending();  // a held-back picture still has to go out
@@ -4091,6 +4298,7 @@ void App::mouse_button(int which, bool down, int x, int y) {
 
 void App::key(const std::string& k, bool shift, bool ctrl) {
   double t = now();
+  if (home_closing_) { if (k == "esc" && !close_stopped_) stop_to_home(); return; }  // on its way home: Esc again is "now"
   if (scene_.visible()) { if (k == "esc") scene_.close(t); return; }
   if (k == "esc" && next_count_ >= 0 && !next_cancelled_) {
     next_advance_.clear(); next_cancelled_ = true; next_count_ = -1; play_.next_notice("", t); ensure_anim(); return;
@@ -4761,11 +4969,14 @@ void App::decide_window() {
   KillTimer(hwnd_, T_GEOM);
   if (in_sizemove_ || geom_done_ || !loaded_ || vid_w_ <= 0 || vid_h_ <= 0) return;
   geom_done_ = true;
-  // Heavy video (more than 1440p): the engine draws only real frames. Redrawing every vsync
-  // (display-resample, which makes the UI glide at the screen's rate) costs too much there.
-  bool big = std::max(vid_w_, vid_h_) > 2600 || std::min(vid_w_, vid_h_) > 1600;
-  std::string sync = big ? "audio" : "display-resample";
-  if (sync != video_sync_) { mpv_.set_async("video-sync", sync); video_sync_ = sync; }
+  // (decided in on_preloaded from the file's own size, see film_clock in core/device_tier.h; this
+  // only follows a film whose size was not known there)
+  // (never switched again while it plays, a cable pulled out included: that stalls the sound)
+  if (!clock_fixed_) {
+    std::string sync = film_clock(vid_w_, vid_h_, on_battery(), device_.gpu);
+    if (sync != video_sync_) { mpv_.set_async("video-sync", sync); video_sync_ = sync; }
+    clock_fixed_ = true;
+  }
   sync_decided_ = true;
   send_sync();  // smoothing on, or covered: the film's own timing wins over the size's
   if (!logged_hw_) { logged_hw_ = true; hw_log_t_ = now() + 1.5; }
@@ -4822,7 +5033,7 @@ void App::animate_window_to(const RECT& r) {
   geom_.kind = 0;  // (a caller that wants another curve sets it right after)
   geom_.from = window_rect();
   geom_.to = r;
-  geom_.t0 = now();
+  geom_.clock.start(now());
   geom_.on = true;
   if(fullscreen_transition_) {
     // A file opened in fullscreen gets its final window once, under the live
@@ -4833,7 +5044,7 @@ void App::animate_window_to(const RECT& r) {
   }
   if (reduce_motion()) geom_.dur = 0;
   else geom_.dur = 0.26;
-  step_geom(geom_.t0);
+  step_geom(geom_.clock.t0);
   ensure_anim();
 }
 
@@ -4841,7 +5052,11 @@ void App::animate_window_to(const RECT& r) {
 // the window while it changes shape.
 void App::step_geom(double t) {
   if (!geom_.on) return;
-  double k = geom_.dur <= 0 ? 1.0 : std::clamp((t - geom_.t0) / geom_.dur, 0.0, 1.0);
+  // The glide's clock pauses through a stall (core/glide_clock.h): a film's shape is decided
+  // while the engine opens the file, and the window jumped about 70% of the way in one frame.
+  const double frame = pacer_.ok() ? pacer_.interval() : 1.0 / 60;
+  const double since = geom_.clock.elapsed(t, frame);
+  double k = geom_.dur <= 0 ? 1.0 : std::clamp(since / geom_.dur, 0.0, 1.0);
   // fullscreen: a spring's gentle start and long landing; shape changes keep their ease-out
   double e = geom_.kind == 2 ? bounce_ease(k) : geom_.kind ? spring_ease(k) : 1 - std::pow(1 - k, 3);
   auto L = [&](LONG a, LONG b) { return (int)std::lround(a + (b - a) * e); };
@@ -5227,7 +5442,7 @@ void App::quit_now() {
   next_cancelled_=true;next_advance_.clear();
   if(folder_scan_)folder_scan_->cancelled=true;
   folder_scan_.reset();
-  for (UINT_PTR t : {T_ANIM, T_POLL, T_WAKE, T_SAVE, T_THUMB, T_PERSIST, T_GEOM, T_PREFETCH, T_FINE, T_MAINTENANCE, T_REMOTE, T_REMOTE_START, T_NEXT, T_NEWS, T_FOLDER, T_QUEUE}) KillTimer(hwnd_, t);
+  for (UINT_PTR t : {T_ANIM, T_POLL, T_WAKE, T_SAVE, T_THUMB, T_PERSIST, T_GEOM, T_PREFETCH, T_FINE, T_MAINTENANCE, T_REMOTE, T_REMOTE_START, T_NEXT, T_NEWS, T_FOLDER, T_QUEUE, T_VOLUME}) KillTimer(hwnd_, t);
   if (mpv_ok_) release_video_window();  // focus and mouse leave the engine's window first, as before
   // gone from the screen and the taskbar now, with Windows' own closing animation; the work
   // below happens behind it
@@ -5645,6 +5860,11 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
     }
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: {
+      // A new size draws the whole window. Windows asks only for the strip it uncovered
+      // (maximized: the new edges) and keeps the old pixels elsewhere, but the canvas drawn here
+      // then stood for the whole screen, so the next frames found nothing to change: the
+      // welcome's "skip" stayed where it was and appeared again in its new place.
+      if (mode_ == Mode::Home && (home_canvas_.w != cw_ || home_canvas_.h != ch_)) InvalidateRect(hwnd_, nullptr, FALSE);
       PAINTSTRUCT ps;
       HDC dc = BeginPaint(hwnd_, &ps);
       if (mode_ == Mode::Home) {
@@ -5692,6 +5912,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
           {if(queue_.active()) {if(auto* i=queue_following())queue_play(i->id);} else open(std::move(target));}
       }
       else if (w == T_QUEUE) { queue_thumbnail_tick(); }
+      else if (w == T_VOLUME) step_volume();
       else if (w == T_FOLDER) { finish_folder(); }
       else if (w == T_PREFETCH) { KillTimer(hwnd_, T_PREFETCH); thumb_next(); }
       else if (w == T_FINE) {
@@ -5775,7 +5996,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         }
         // Sample colours independently of drawing the light. No repeated decode
         // while paused; spatial interpolation continues at the UI poll's ~30 Hz.
-        if (atmosphere_ready() && preview_.loaded && !preview_.failed && now() - accent_req_t_ > (store_.ambient && ambient_.active() && !mini_player_ ? 1.5 : 4.0) &&
+        if (atmosphere_ready() && preview_.loaded && !preview_.failed && now() - accent_req_t_ > (store_.ambient && ambient_.active() && !mini_player_ ? 1.5 : 4.0) * device_.colour_interval_scale() &&
             (accent_media_t_ < 0 || std::fabs(play_.in.time - accent_media_t_) >= 0.25) &&
             !hidden_now()) {
           accent_req_t_ = now();

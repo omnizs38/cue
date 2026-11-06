@@ -1201,8 +1201,9 @@ void PlayView::build_rows() {
     R(RK::Separator, R_NONE);
     R(RK::Submenu,R_QUEUE,tr(str::queue_title))->icon="queue";
     // the picture in a small window of its own, in a corner, above everything (like a browser's
-    // picture in picture): where the picture's own menu is
-    if (!in.fullscreen && !in.audio_only) {  // (music: a button on its bar)
+    // picture in picture): where the picture's own menu is. Music too: its card (also a button
+    // on its bar, which may have folded into "···")
+    if (!in.fullscreen) {
       Row* mp = R(RK::Action, R_MINI, tr(in.mini_player ? str::more_mini_exit : str::more_mini_player));
       mp->icon = in.mini_player ? "expand" : "mini";
     }
@@ -2980,9 +2981,26 @@ void PlayView::start_iris(double now) {
   iris_frame_ = -1;
 }
 
+// Closing: the ellipse starts just inside the corners (the first frame already answers the key)
+// and shrinks to its middle, a little faster than it opened.
+static constexpr double kIrisCloseDur = 0.22, kIrisCloseExp = 1.4;
+static double iris_close_k(double t) { return PlayView::kIrisCloseFrom * std::pow(1 - std::clamp(t, 0.0, 1.0), kIrisCloseExp); }
+
+void PlayView::close_iris(double now) {
+  if (iris_ == 3) return;
+  // an iris still opening closes from where it is, never jumps open first
+  double k = iris_ == 2 ? iris_open(now) : iris_ == 1 ? 0.0 : kIrisCloseFrom;
+  double t = k >= kIrisCloseFrom ? 0.0 : 1 - std::pow(std::max(0.0, k) / kIrisCloseFrom, 1 / kIrisCloseExp);
+  iris_ = 3;
+  iris_t0_ = now - t * kIrisCloseDur;
+  iris_frame_ = -1;
+  vis_.target = 0; vis_.v = 0;
+}
+
 double PlayView::iris_open(double now) const {
   if (iris_ == 0) return -1;
   if (iris_ == 1) return 0;
+  if (iris_ == 3) return reduce_motion() ? 0.0 : iris_close_k((now - iris_t0_) / kIrisCloseDur);
   double t = reduce_motion() ? 1.0 : std::clamp((now - iris_t0_) / kIrisDur, 0.0, 1.0);
   return 1 - std::pow(1 - t, 3);  // quick to open, soft landing (as the bitmap below)
 }
@@ -3065,7 +3083,10 @@ void PlayView::compose(double now) {
   // music: the title and artist, beside the cover (wide) or under it (tall)
   Layer& ML = layers[L_MUSIC];
   Rect cr = cover_screen_rect();
-  if (music_vis_.v > 0 && cr.w > 0) {
+  // (kept up to date while they step aside for a transition too: the composition under the cover
+  // is measured on them, and a flight out of the card framed the room on the card's words, then
+  // jumped to the right size as it landed)
+  if ((music_vis_.v > 0 || viewport_transition_) && cr.w > 0) {
     std::string key = in.music_title + "\n" + in.music_artist + "\n" + std::to_string(w_) + "x" + std::to_string(h_) + "@" +
                       std::to_string(s_) + (card_ ? "c" : (list_header_ && list_mix() >= 0.5) ? "H" : view().words_beside() ? "b" : "u") + std::to_string((int)std::lround(view().f * 1000)) + std::to_string(in.queue_active ? in.queue.size() : 0) +
                       (link_hot_ ? "h" : "") + (panel_ == Panel::Queue ? "o" : "");
@@ -4477,6 +4498,7 @@ void PlayView::mouse_move(int x, int y, double now) {
     return;
   }
   if (scrubbing_) {
+    if (!scrub_live_ && std::abs(x - scrub_x0_) > 3 * s_) scrub_live_ = true;
     seek_scrub(x, false);
     if (!in.audio_only && std::fabs(scrub_t_ - last_preview_req_) > std::max(0.5, in.dur / 400)) { last_preview_req_ = scrub_t_; act(PA::Preview, scrub_t_); }
     return;
@@ -4637,7 +4659,7 @@ void PlayView::mouse_down(int x, int y, double now) {
                       std::abs(x - last_click_x_) < 6 * s_ && std::abs(y - last_click_y_) < 6 * s_;
       if (!second_click_ && pending_click_ != P_NONE) commit_click();
       break;
-    case B_TIMELINE: scrubbing_ = true; seek_scrub(x, false); break;
+    case B_TIMELINE: scrubbing_ = true; scrub_live_ = false; scrub_x0_ = x; scrub_sent_ = -1; seek_scrub(x, false); break;
     case B_VOLBAR: vol_drag_ = true; set_volume_from(x); break;
     case B_DOCKBG: {
       // the mini player's bar stays where it belongs, but the window moves from it like from the
@@ -4774,7 +4796,12 @@ void PlayView::seek_scrub(int x, bool final) {
   scrub_t_ = time_at(x);
   // Audio keeps playing/drawing while the hand chooses a new point. Repeated
   // decoder flushes would keep restarting the waveform; commit once on release.
-  if (!in.audio_only || final) act(final ? PA::SeekAbsExact : PA::SeekAbs, scrub_t_);
+  // A plain click is one exact jump on release: the quick keyframe jump on the press showed the
+  // keyframe's picture for a moment and then the exact one (a frame that skipped and came back).
+  // Keyframe previews start only once the hand really drags (more than 3 px), and only when the
+  // point moved, so a still press or the jitter of a click never asks for one.
+  if (final) act(PA::SeekAbsExact, scrub_t_);
+  else if (!in.audio_only && scrub_live_ && scrub_t_ != scrub_sent_) { scrub_sent_ = scrub_t_; act(PA::SeekAbs, scrub_t_); }
   dock_dirty_ = true;
 }
 

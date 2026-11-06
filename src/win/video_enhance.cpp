@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <dxgi.h>
 
+#include <algorithm>
 #include <cwchar>
 
 bool on_battery() {
@@ -31,6 +32,32 @@ bool primary_gpu_nvidia() {
   }
   FreeLibrary(dxgi);
   return known == 1;
+}
+
+DeviceTier read_device_tier() {
+  DeviceTier d;
+  d.threads = std::max(1, (int)GetActiveProcessorCount(ALL_PROCESSOR_GROUPS));
+  d.gpu = GpuTier::Software;  // no adapter at all: everything is drawn by the processor
+  HMODULE dxgi = LoadLibraryW(L"dxgi.dll");
+  if (!dxgi) return d;
+  using Create = HRESULT(WINAPI*)(REFIID, void**);
+  auto create = reinterpret_cast<Create>(reinterpret_cast<void*>(GetProcAddress(dxgi, "CreateDXGIFactory1")));
+  IDXGIFactory1* f = nullptr;
+  if (create && SUCCEEDED(create(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&f))) && f) {
+    IDXGIAdapter1* a = nullptr;
+    if (SUCCEEDED(f->EnumAdapters1(0, &a)) && a) {
+      DXGI_ADAPTER_DESC1 desc{};
+      if (SUCCEEDED(a->GetDesc1(&desc))) {
+        // Microsoft's Basic Render Driver (WARP): flagged software, or its well-known ids
+        const bool software = (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) || (desc.VendorId == 0x1414 && desc.DeviceId == 0x8c);
+        d.gpu = gpu_tier_for(software, (uint64_t)desc.DedicatedVideoMemory);
+      }
+      a->Release();
+    }
+    f->Release();
+  }
+  FreeLibrary(dxgi);
+  return d;
 }
 
 int nvidia_vsr_switch() {
