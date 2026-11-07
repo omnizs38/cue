@@ -8,10 +8,15 @@ OFFICIAL ?= 0
 # Parallel build by default. Override with e.g. `make JOBS=8` (and
 # LTO_JOBS=4 to limit link-time optimisation threads on small machines).
 # An explicit -j/--jobs on the command line always wins.
+# When clean is among the goals, stay serial: `rm -rf build` would race
+# with compiles writing dependency files into build/ ("opening
+# dependency file ... no such file or directory").
 JOBS ?= $(shell nproc 2>/dev/null || echo 4)
 LTO_JOBS ?= $(JOBS)
+ifeq ($(filter clean,$(MAKECMDGOALS)),)
 ifeq ($(findstring -j,$(MAKEFLAGS))$(findstring --jobs,$(MAKEFLAGS)),)
 MAKEFLAGS += -j$(JOBS)
+endif
 endif
 # `make dev` is a fast iteration profile: -O1 without LTO.
 # Switching PROFILE rewrites build/identity, which forces a full
@@ -96,10 +101,10 @@ setup: build/Cue/Cue.exe build/setup/stub.exe
 clean:
 	rm -rf build
 
-# Fast local iteration build (-O1, no LTO). Runs clean first so objects
-# never mix profiles; switching back to plain `make` rebuilds via
-# build/identity.
-dev: clean
+# Fast local iteration build (-O1, no LTO). No clean needed: the
+# build/identity stamp already forces a full rebuild when PROFILE
+# changes, so release and dev objects never mix.
+dev:
 	$(MAKE) all PROFILE=dev
 
 # ── translations ───────────────────────────────────────────────────
