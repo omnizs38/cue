@@ -17,3 +17,9 @@ for source in tests/*_test.cpp; do
   g++ -std=c++20 -O2 "$source" "${objects[@]}" -o "$executable"
   "$executable"
 done
+
+# Headless transport methods with a fake engine/timer; no Win32 or renderer required.
+if command -v python3 >/dev/null; then python3 tests/hidden_playback_test.py; fi
+
+# Deterministic production JavaScript transport regressions (no browser dependency).
+if command -v node >/dev/null; then node tests/remote_lifecycle_test.cjs; node tests/remote_fetch_test.cjs; fi

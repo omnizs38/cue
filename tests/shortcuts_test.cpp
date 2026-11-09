@@ -11,6 +11,7 @@
 #include <cassert>
 #include <cstdio>
 #include <filesystem>
+#include "source_root.h"
 #include <fstream>
 #include <sstream>
 
@@ -44,7 +45,7 @@ int main(int argc, char** argv) {
           for (auto& row : p.rows_) if (row.k == PlayView::RK::Keys) {
             if (row.kh.section) ++sections; else { ++entries; assert(!row.kh.caps.empty() && !row.kh.label.empty()); }
           }
-          assert(entries == 22 && (sections == 4 || (sections == 0 && size.second <= 240 * scale)));  // titles go only in the tiniest
+          assert(entries == 23 && (sections == 4 || (sections == 0 && size.second <= 240 * scale)));  // titles go only in the tiniest
           two_cols += p.keys_cols_ == 2;
           ++sheets;
           // nothing to focus in it; ? again closes it, and so does Esc
@@ -123,7 +124,7 @@ int main(int argc, char** argv) {
   // the engine's picture: the black and white pass, and the keys routed back from the engine's
   // window too (after a click on the picture it has the keyboard)
   {
-    std::filesystem::path root = std::filesystem::absolute(exe).parent_path().parent_path().parent_path();
+    std::filesystem::path root = source_root(exe.string().c_str());
     std::ifstream sh(root / "src/win/blur_shader.h"), app(root / "src/win/app.cpp");
     std::stringstream a, b; a << sh.rdbuf(); b << app.rdbuf();
     assert(a.str().find("//!PARAM mono") != std::string::npos && a.str().find("//!WHEN mono 0 >") != std::string::npos);

@@ -62,6 +62,13 @@ constexpr int kCompactDockW = 204;
 // the chosen size: narrower than the window, and bigger.
 // The landscape dock's width in px of art (with the subtitles and audio buttons).
 constexpr int kLandscapeDockW = 372;
+// Clear portrait proportions (through 3:4) keep the compact composition even when
+// the screen/size choice leaves a wide art canvas. Near-square desktop windows
+// (Windows Snap) only compact when the controls actually lack horizontal room.
+constexpr int kRegularDockRoom = kLandscapeDockW + 28;
+inline bool compact_video_dock(double s, int cw, int ch) {
+  return ch >= cw * (4.0 / 3.0) || (ch >= cw * 1.15 && cw / s < kRegularDockRoom);
+}
 // A vertical video's bar: about 15% smaller than the rule that sizes it (on a phone video the bar
 // and its menus took too much of the picture), in half art px; from 2 px up always at least one
 // half step down; never under 1.
@@ -75,6 +82,7 @@ inline double portrait_shrink(double ps) {
 }
 inline double portrait_scale(double s, int cw, int ch, int choice) {
   if (cw <= 0) return s;
+  if (ch > cw && !compact_video_dock(s, cw, ch)) return s;
   if (ch < cw * 1.15) {
     // a squarish window (1:1 video, 4:3 easing in from 0.75): the landscape dock, but raised
     // until it fills a share of the width, so the controls are not lost under a tall picture

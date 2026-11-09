@@ -1,0 +1,7 @@
+test: /tmp/cue-hidden-playback-s5f5py6v/test.cpp:301: int main(): Assertion `a.seek_fade_.stage==1 && timers.at(App::T_SEEK_FADE)==8 && a.mpv_.sent.empty() && a.paints==0' failed.
+Traceback (most recent call last):
+  File "/workspace/scratch/2ed1b5380997/minimized-before/seek_regression.py", line 178, in <module>
+    subprocess.run([str(exe)],check=True)
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/tmp/cue-hidden-playback-s5f5py6v/test']' died with <Signals.SIGABRT: 6>.

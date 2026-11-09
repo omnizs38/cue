@@ -1,83 +1,106 @@
+// What this PC can comfortably do: read once at start (DXGI adapter 0, the one the engine's D3D11
+// context draws on, and the processor's logical threads) so a weak laptop or a PC without a GPU
+// driver does less work per frame without a setting to find, while a PC with a dedicated card is
+// untouched. Pure decisions here; the Windows query lives in win/video_enhance.cpp.
 #pragma once
-// What this PC can comfortably do, read once (win/video_enhance.cpp: the graphics adapter the
-// engine draws on, and the processor's threads), and the choices that follow from it. Portable,
-// so the choices are tested without Windows.
-//
-// Full: a graphics card with its own memory. Light: graphics inside the processor (Intel UHD /
-// Iris, AMD Radeon in an APU: little or no memory of its own). Software: no graphics driver at
-// all (Windows' "Basic Render Driver"): every picture is drawn by the processor.
+
 #include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
 
-enum class GpuTier { Full, Light, Software };
+enum class GpuTier {
+  Full,      // dedicated card (>= 2 GB of its own video memory): the engine's full defaults
+  Light,     // integrated graphics (Intel UHD/Iris, AMD APUs) or entry 1-2 GB cards: lighter scaling and clocks
+  Software,  // Microsoft Basic Render Driver (WARP) or no DXGI at all: the CPU draws every pixel
+};
 
-inline GpuTier gpu_tier_for(bool software_adapter, uint64_t dedicated_bytes) {
-  if (software_adapter) return GpuTier::Software;
-  return dedicated_bytes < (1ull << 30) ? GpuTier::Light : GpuTier::Full;  // under 1 GB: shared memory
+inline const char* gpu_tier_name(GpuTier t) {
+  switch (t) {
+    case GpuTier::Full: return "dedicated";
+    case GpuTier::Light: return "integrated";
+    case GpuTier::Software: return "software";
+  }
+  return "unknown";
 }
 
-inline const char* gpu_tier_name(GpuTier g) {
-  return g == GpuTier::Software ? "software" : g == GpuTier::Light ? "integrated" : "dedicated";
+// Adapter 0's tier from its DXGI description: software flag / WARP ids first, then its own video
+// memory (integrated GPUs report 0 to ~512 MB of shared "dedicated" memory; 1 GB and entry 2 GB
+// cards that report < 2 GiB usable in DXGI also benefit from the lighter scaling path).
+inline GpuTier gpu_tier_for(bool software_adapter, uint64_t dedicated_bytes) {
+  if (software_adapter) return GpuTier::Software;
+  if (dedicated_bytes < (2ull << 30)) return GpuTier::Light;
+  return GpuTier::Full;
 }
 
 struct DeviceTier {
   GpuTier gpu = GpuTier::Full;
-  int threads = 8;  // logical processors
+  int threads = 8;
+
   bool software() const { return gpu == GpuTier::Software; }
-  bool integrated() const { return gpu != GpuTier::Full; }
-  // two cores with hyper-threading, or four plain ones: the laptops and office PCs where a film
-  // decoded by the processor already takes most of it
-  bool weak_cpu() const { return threads <= 4; }
-  // music's picture is made by the processor (the engine's filters) at 60 a second; where that
-  // or drawing it costs too much, 30 (the interface over it follows the same rate)
-  int music_fps() const { return weak_cpu() || software() ? 30 : 60; }
-  // the interface's pictures sent to the engine: a software renderer redraws the whole window for
-  // each one, so it gets at most 30 a second (Cue's own frames are unchanged)
-  double overlay_rate_cap() const { return software() ? 45.0 : 90.0; }
-  // how often a film's colours are sampled for the light (a picture decoded by the processor in
-  // the preview helper each time): less often where the processor is the bottleneck
-  double colour_interval_scale() const { return weak_cpu() || software() ? 2.0 : 1.0; }
-  // smoothing blends frames on the graphics side: never offered without real graphics
-  bool smoothing_ok() const { return !software(); }
+  bool integrated() const { return gpu == GpuTier::Light; }
+  bool weak_cpu() const { return threads <= 8; }
+
+  // Music's spectrum picture: 30 fps on a weak CPU or non-dedicated graphics halves the lavfi
+  // graph's work while the spectrum's analysis window and decay scale with fps so its motion and
+  // the room's 30 Hz light show stay the same.
+  int music_fps() const { return weak_cpu() || gpu != GpuTier::Full ? 30 : 60; }
+
+  // The UI overlays sent to the engine while a film plays: 30 Hz on software rendering (every
+  // upload is a full-window BGRA copy through the CPU renderer); 60 Hz everywhere else.
+  double ui_frame_interval() const { return software() ? 1.0 / 30.0 : 1.0 / 60.0; }
+
+  // Scene colour sampling for the ambient light / accent: half as often on a weak CPU or
+  // integrated/software graphics (each sample decodes a small frame in the helper).
+  double colour_interval_scale() const { return weak_cpu() || gpu != GpuTier::Full ? 2.0 : 1.0; }
+
+  // Smooth motion (temporal frame blending): never on software rendering, where blending two
+  // full frames on the CPU at the monitor's rate makes the film drop frames instead.
+  bool allow_smooth_motion() const { return !software(); }
 };
 
-// A film's clock (App::decide_window). Timed by the display, the engine shows a picture at every
-// refresh and everything Cue draws over the film (the bar, the timeline's preview, the opening
-// iris) moves at the screen's rate; timed by the sound it shows only the film's own frames (24 a
-// second), which is lighter. Full graphics: by the display up to 4K (not on battery). Integrated:
-// by the display up to 1440p. Software: always by the sound. Beyond 4K: always by the sound.
+// The film's clock (`video-sync`): `display-resample` draws at the screen's refresh rate so the UI
+// over the film glides at 60 Hz+, and is what a dedicated card on power uses up to 4K. On
+// software rendering every refresh is a full-window CPU copy, so any film uses `audio` (one draw
+// per video frame); on integrated graphics or on battery, anything above 1080p (> 1920x1080,
+// including 1440p and 4K, turned or not) uses `audio`; above 4K (8K) always uses `audio`.
 inline std::string film_clock(int64_t w, int64_t h, bool battery, GpuTier gpu) {
-  const bool heavy = std::max(w, h) > 2600 || std::min(w, h) > 1600;  // more than 1440p
-  const bool huge = std::max(w, h) > 4600 || std::min(w, h) > 2600;   // more than 4K
-  if (gpu == GpuTier::Software || huge) return "audio";
-  if (heavy && (battery || gpu == GpuTier::Light)) return "audio";
+  if (w <= 0 || h <= 0) return "display-resample";
+  if (gpu == GpuTier::Software) return "audio";
+  const bool above_4k = w > 4096 || h > 2160;
+  const bool heavy = std::max(w, h) > 1920 || std::min(w, h) > 1080;
+  if (above_4k || (heavy && (battery || gpu == GpuTier::Light))) return "audio";
   return "display-resample";
 }
 
-// The engine's picture options for this graphics (set once, before it starts). Full keeps the
-// engine's own high-quality defaults. Integrated keeps a sharp scaler but drops the passes that
-// cost the most for the least visible gain (linear-light and sigmoid scaling, the correct but
-// heavy downscaler on 4K, a high-quality chroma scaler). Software takes the engine's "fast"
-// choices: bilinear everywhere, no dithering.
-struct RenderOption { const char* name; const char* value; };
+struct RenderOption {
+  const char* name;
+  const char* value;
+};
+
+// Engine scaling options set once at start (`vo=gpu-next`). Dedicated cards keep mpv's own
+// defaults. Integrated and software graphics use single-pass hardware bilinear scaling without
+// linear-light/sigmoid conversions, anti-ringing downscalers, or dithering.
 inline std::vector<RenderOption> render_options(GpuTier gpu) {
   if (gpu == GpuTier::Full) return {};
-  std::vector<RenderOption> o = {
-      {"correct-downscaling", "no"}, {"linear-downscaling", "no"}, {"sigmoid-upscaling", "no"},
-      {"cscale", "bilinear"}};
-  if (gpu == GpuTier::Light) {
-    o.push_back({"scale", "spline16"});
-    o.push_back({"dscale", "hermite"});
-  } else {
-    o.push_back({"scale", "bilinear"});
-    o.push_back({"dscale", "bilinear"});
-    o.push_back({"dither", "no"});
-  }
-  return o;
+  return {
+      {"scale", "bilinear"},
+      {"dscale", "bilinear"},
+      {"cscale", "bilinear"},
+      {"dither", "no"},
+      {"correct-downscaling", "no"},
+      {"linear-downscaling", "no"},
+      {"sigmoid-upscaling", "no"},
+  };
 }
 
-// music's own scalers (file-local, per look): smooth for a cover, square pixels for the spectrum
-inline const char* music_scale(GpuTier gpu, bool cover) { return !cover ? "nearest" : gpu == GpuTier::Software ? "bilinear" : "spline36"; }
-inline const char* music_dscale(GpuTier gpu, bool cover) { return !cover ? "nearest" : gpu == GpuTier::Software ? "bilinear" : "mitchell"; }
+// Music's cover scene: the spectrum-alone look always uses `nearest` so its dots stay crisp; with
+// the cover, non-dedicated graphics use `bilinear` instead of two multi-tap filters per frame.
+inline const char* music_scale(GpuTier gpu, bool cover) {
+  if (!cover) return "nearest";
+  return gpu != GpuTier::Full ? "bilinear" : "spline36";
+}
+inline const char* music_dscale(GpuTier gpu, bool cover) {
+  if (!cover) return "nearest";
+  return gpu != GpuTier::Full ? "bilinear" : "mitchell";
+}

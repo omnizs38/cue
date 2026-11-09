@@ -1,0 +1,106 @@
+i18n ok: 416 keys x 8 languages
+About: menu navigation, centered layout, keyboard links, back, the shortcut sheet's link and outside dismissal passed for audio/video at six scales
+activation click: wakes without pausing (playing and paused), next click pauses, double click goes fullscreen only, bar buttons act on the first click passed
+Adaptive bar: 4032 layouts (video/music, playlist, both styles, four scales) with play centred, "..." at the end, no overlaps, priority order, everything reachable, folded volume, no flicker at thresholds, menus re-anchored, the mini player and settled motion passed
+ambient checks passed: replacement recovery, stale replies rejected, exact premultiplied raster, smooth 30 Hz transition
+async IO: 1000 latest-only requests => 999 cancelled, 1 completed; 128 FIFO limit/order; nonblocking destruction passed
+Audio graph commands never seek before the rebuild finishes
+audio checks passed: stream detection, visible controls, continuous audio scrub, single release seek, video live scrub unchanged, a click is one exact jump
+async sample: 10000 coalesced reads, generation, age and enqueue failures passed
+bounded worker: 1000 requests, 1 active + 4 pending, 996 obsolete jobs discarded, newest completed
+background lifecycle: shutdown and obsolete music readings passed
+Bar placement: drag without background, Shift centres a dragged bar, narrow windows centre, in-place width changes stay centred, the compact music bar reads, close music framings reach the edges, a small log, the mini player's place and flight, smoothing's timing, music framed close as one group, a song's mini card and its list, the wide composition centred, soft jumps passed
+Blur cloud: pure white ink, shadow, continuous/reversible style transitions, no scene churn, letterbox mapping and all eight resize targets passed
+Card art: the card's cover drawn by Cue over its square, with its shadow, redrawn only when it changes passed
+Card size: 112 cards at seven DPIs and four sizes, a mini player's window at all of them, the title always whole above the playback, the controls under the window's buttons (smallest pixels 0.60 of the chosen) passed
+Close iris: curve, continuity from an opening iris, dock, cancel and reduced motion passed
+Context menu: mini player offered for films and songs (not in full screen, no menu in the mini player) passed
+Controls: one-row folded bar, compact width, raised position, C opens CC, clock toggles without pause/seek, central feedback and default light passed
+cover art: passed
+Cover turn: the cover where the engine draws it, its shadow, narrowing, edge-on, the quick path and the timing passed
+DIB ownership: old sequence leaves 50/50 bitmaps unfreed under documented API contract; fixed owner remains at one surface across 5000 resizes, rolls back allocation failures and releases all handles
+Digit seeks: 0-90%, short/long video, exact single seek, modifiers, mini/audio/menu/drag/transition guards and invalid durations passed
+Dock clicks: right click on the bar does nothing, other buttons act through an open menu, full screen takes the menu along passed
+Dock/subtitle motion: reversals at 10/50/90 percent of the exit interval across 60/120/144 Hz, continuous trajectory and reduced motion passed
+double-click checks passed: playing/paused audio/video, enter/exit fullscreen, explicit state restoration, immediate single click exactly once, reset and keyboard cancellation, maximize, duplicate release
+Episode handoff: owned destination, duplicate EOF, one-shot timer and cancellation passed
+Frame cache: 1000 high-resolution preview inserts bounded to 11.87 MiB; 400-image count-only fixture uses 87.89 MiB; capacity accounting, LRU, replacements, rejection and clear passed
+Free controls: saved preference, white ink, transparent corners, responsive width, soft shadow, video clicks and restoration passed
+Fullscreen: live viewport mapping, analytic spring overshoot/landing at 60/120/144 Hz, renderer gate and 16:9 home passed
+Glide clock: steady frames, a stall at the start is one frame, jitter untouched, 60/144 Hz, restart passed
+Unsupported glyph probes: 65533; retained allocation growth: 0
+home christmas: passed
+Hover frames: continuous card during a 200 ms sweep, stable dimensions, clean re-entry, timestamp pairing and no blends passed
+Layout: 42536 checks in 8 languages x 4 sizes x 10 windows (DPI 100-250%, full screen, portrait) for every player panel, tooltips, toasts, the home and its menu, the welcome and the installer passed
+i18n: Windows UI language order, Simplified/Traditional Chinese, manual priority, English fallback, persistence across restart/update, 8 complete catalogs (416 keys), placeholders, plurals, decimals and full glyph coverage passed
+Language refresh: the song's captions, up next, open menus and the home's recent list follow a new language at once passed
+launch request checks passed
+all checks passed
+maximized window: passed
+Media geometry: complete per-file dimensions, unchanged width/height, repeated formats, portrait/square/rotation, stale reply rejection and the shape at load passed
+Metadata: formats, missing values, audio waveform exclusion, right-click route, top-right bounds, dismissal and stable playback passed
+Menu fit: 1136 menus at four sizes on twelve windows, whole, clear of the window's buttons, the back arrow and the bar, a closed menu keeps no pixels passed
+Mini card: compact rows, labels, cover/grip, menu scale, title motion and persistent shuffle state passed
+Mini player subtitles: a short panel, arrows round the tracks, three sizes saved, the full player's panel untouched passed
+Motion/cadence: finite subtitle motion and continuous clearance, continuous reversal, 60 Hz deadlines with timer jitter, no alternate upload skips, lighter cloud geometry and subtitle return in both modes passed
+Music cover: cover track, graph, saved look, tilt toward the pointer and back, wide and tall captions, right-click choice, music dock, up-next pill, album list, repeat modes, narrow bar, the list beside the cover, Cue tile, spectrum scene, drop-to-add and covers cut out of black bars passed
+music light: 20 rings in 10 s
+music light: breath 0.80 deep every 4.9 s (full), 0.64 every 5.7 s (sparse)
+music light: passed
+music cache: stable full/mini text surfaces, both styles, late metadata and independent fields passed
+Welcome: analytic springs at 60/144 Hz and through hitches, Apple-like overshoot, eased exits, four screens by keyboard and mouse, live light/size choices and the hand-off to the home passed
+performance checks passed: 63.28 MiB of 4K overlay buffers released after acknowledgement; stable UI avoids invalidation
+Player refinements: smooth subtitle return in both styles, small default migration, exact per-file aspect fits and every chrome button protected from resize passed
+Portrait bar: 140 vertical windows (9:16 to 5:6) at four sizes and four window scales, bar about 15% smaller passed
+Portrait panels: menus, subtitles and up next at the raised bar's scale, constrained to the window (60 windows) passed
+preview command bounds, cancellation and 100000 replacements passed
+Preview dispatch: immediate entry, 30 Hz burst bound, stable buckets, stale events and warmup passed
+Preview layout: 144 window/DPI/aspect/style cases, mini/full cache reuse, 5% smaller portraits, first-card geometry, clean re-entry, top dock and music passed
+Preview policy: fast navigation, precise colour mode, actual sample time, stable cache and wire layout passed
+Preview progress: 125 Hz sweeps/reversals, 12-300 ms decodes, cached revisits, final destination, colour preemption and file cancellation passed
+Hover preview sizing: quarter pixel count, portrait aspect, source resolution for colour sampling, display size and small default passed
+Queue refinement: zero/single counts hidden, bounded visible clear snapshots, immediate edits, finite motion at 60/120/144 Hz and closure/reduced-motion cleanup passed
+Queue: stable IDs, audio/video order, duplicate paths, playing-file seed, current removal, end, cap, repeated mutation, strict remote commands and transient UI passed
+Queue transport: separate next/15-second actions, stable play position, 288 layouts, previous/next either side of a centred play, inert at the ends, up next on the bar or in the more menu without overlaps in 288 docks, previous/play/next when the bar is too narrow for the steps, strict absolute reorder, menus clear of the bar in short wide windows and authoritative folder status passed
+Queue sheet: complete 512-item list, drag/drop, cancellation, scroll, keyboard, image bounds, 96 adaptive layouts and panels anchored to their button and clear of the controls passed
+Raster: pixel spans match individual cells at integer/half scales, clipping and alpha passed
+Recents view: shows grouped under their latest episode, titles without extensions, audio, caps and spans passed
+Release controls: small default, optional music selector and audio selection, immediate pause targets, double-click restoration and hidden/contained fullscreen overlays passed
+remote reconnect flood bounded with disconnect headroom
+Remote gate: slot accounting, generation cancel, lost-wakeup guard, handoff and 8s timeout passed
+Remote portrait scale, Esc lifecycle and next-episode/cancel hit targets passed
+Remote security: strict HTTP/WS/JSON, credential migration, path attacks, command ranges, rate limits, 12000 malformed inputs and portrait/landscape pointer routes passed
+remote sessions: state round-trip, legacy compatibility, integer limits and internal-field isolation passed
+remote checks passed
+Repeat: 64 video/audio bar/menu cycles, list/single/off, markers and numerals passed
+Regional contrast: pink, brown, orange, blue, green, yellow, grey, white/black, mixed scene and letterbox mapping passed
+seek dispatch: rejected enqueue recovery, 1000-target sweep and stale destination clearing passed
+Seek audio envelope: timer-only dispatch, one seek, gain recovery, restart, timeout and idle at 8/10/16/250 ms passed
+Series identity: mixed shows, final episode, next season, separators, release group and manual fallback passed
+Settings examples: on by default, the header's button, saved, on top or beside the rows at every scale, a new interface size decided afresh, the interface's page back to Settings when it fits passed
+Shortcuts: the sheet (? and Esc, 480 windows in every language, two columns where there is room, clear of the window's buttons), keys in button names, black and white choice saved passed
+Shuffle: each song once a round, the way back, repeat-all's new round, songs added and removed passed
+Smooth playback: minimizing touches no engine chain, a new look fades the sound out and in (never the volume) passed
+Song change: music's bar holds still between songs, follows its scene and a resize, the cleared list stays music's, a pick keeps music's list open, and music's while the song changes (card and beside) passed
+startup checks passed: 1.5-second atmosphere / 3-second timeline, replacement reset, reveal capped at 60 Hz, 4K resize
+state bounds: extreme integers, geometry, JSON node budget, oversized-file backup recovery passed
+Settings I/O: after recovery-copy warm-up, 1100 unchanged saves skip file writes/backup rotation; changed settings remain atomic, recoverable and loadable
+Subtitle scale: same reading size at equal widths across 16:9 to 32:9, 4K, font sizes, drag bounds, outlines, ASS preservation, invalid geometry and repeated changes passed
+Subtitle list: 0/1/2/500 tracks, 96 bounded layouts, pinned controls, menu over its button, long labels/metadata, selected visibility, fractional wheel, keyboard, no steady rebuild and close cleanup passed
+Subtitle selection: full/mini rapid A-B-A, delayed replies/observers, no observer change, failure, panel reopen and file replacement passed
+Survey: the home's card in 108 windows (left out of 12 where it would cover something), answers by click and keyboard, a scene that rests, kept passed
+UI scale: four even choices, DPI bounds, stable resize, saved preferences, all menu hitboxes at six scales in audio/video passed
+up next without a list: only the same series (episode numbers or the same name with the next number), never another film or a song passed
+Updates: version order, 3-day schedule, release parsing, installer asset and digest passed
+Version text: the summary, the sources note, the licenses and the readmes all say 1.3.2 passed
+Video helpers: super resolution only below the screen (360p-1080p, never 1440p or 4K, at most 4x), smoothing off by default, smoothing only on uneven cadences, kept in Settings passed
+Volume glide: 80 ms, smooth at both ends, no overshoot, small steps, continuous when asked again passed
+window drag checks passed: native handoff clears custom gesture, late release does not pause, next click works, idle resumes
+Hidden reveal: no offscreen iris, pending ratio and active restore geometry remain covered, reveal after settling passed
+Hidden previews: explicit phone warmup, latest-only decode, no local/color work, no phone/no decode and repeated cached gestures passed
+Production transport: hidden seek dispatch/gain recovery, latest target, cancellation, audio graph/reopen/watchdog and close completion without render frames passed
+1000 volume inputs => 2 messages; latest value retained
+remote lifecycle: final command ordering, bounded coalescing, no reconnect replay, socket identity, heartbeat/deadline, backpressure and media generations passed
+remote recovery: 12 simulated hours, 200 sleep/resume cycles, freeze, offline, transient pairing, event deduplication and stale deadlines passed
+remote idle: paused UI rebuilds eliminated; cover retry and delayed timeline refresh preserved
+remote async: stale queue revisions, cover cancellation/retry/release, selection debounce and settled-disc cadence passed

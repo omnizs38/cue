@@ -666,7 +666,8 @@ std::string state_json(const State& s) {
   o += ",\"next\":" + escape(s.next);
   o += std::string(",\"nextAuto\":") + (s.next_auto ? "true" : "false");
   if (!s.lang.empty()) o += ",\"lang\":" + escape(s.lang);
-  o += ",\"color\":" + escape(s.color) + "}";
+  o += ",\"color\":" + escape(s.color);
+  o += ",\"media\":" + std::to_string(s.media) + "}";
   return o;
 }
 
@@ -674,6 +675,11 @@ bool parse_command(std::string_view text, Command& out) {
   JVal j;
   if (text.size() > kMaxFrame || !json_parse(std::string(text), j) || j.t != JVal::Obj) return false;
   out = Command{};
+  const auto& media = j["media"];
+  if (media.t != JVal::Null) {
+    if (media.t != JVal::Num || media.num() < 0 || media.num() > 9007199254740991.0 || std::floor(media.num()) != media.num()) return false;
+    out.has_media = true; out.media = (uint64_t)media.num();
+  }
   out.c = j["c"].str();
   if (out.c.empty() || out.c.size() > 24) return false;
   const JVal& v = j["v"];

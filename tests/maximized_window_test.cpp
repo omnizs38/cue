@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cstdio>
 #include <filesystem>
+#include "source_root.h"
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -36,7 +37,7 @@ int main(int argc, char** argv) {
 
   // the window code: adapting never restores a maximized window any more
   // Resolve the source tree from the executable's place (build/tests/…).
-  std::filesystem::path root = std::filesystem::absolute(exe).parent_path().parent_path().parent_path();
+  std::filesystem::path root = source_root(exe.string().c_str());
   std::ifstream in(root / "src/win/app.cpp");
   std::stringstream ss; ss << in.rdbuf();
   std::string s = ss.str();

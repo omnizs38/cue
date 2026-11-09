@@ -1,0 +1,37 @@
+# Timeline preview policy
+
+Cue separates navigation previews from precise playback seeks. The video's first frame and opening animation have priority; previews never need to be ready before playback starts.
+
+## Fast, stable navigation samples
+
+Each one-second timeline interval has a fixed request time. A cache miss sends a single `absolute+keyframes` request to the helper and stores the returned image for that interval. Hovering within the interval or returning to it reuses that image. There is no automatic precise refinement while the pointer rests. The actual frame time returned by the helper is stored with the pixels and displayed with them. GOP/keyframe spacing determines how far that time may be from the pointer's requested position; this is a navigation sample rather than a frame-accurate preview.
+
+Clicking or releasing the timeline continues to use the main player's existing exact seek. Scene-colour probes continue to use exact seeks and their original sampling resolution. Only navigation requests use the cheaper keyframe policy.
+
+## Startup and dispatch
+
+After the first frame and reveal settle, a 250 ms playback warmup permits the helper to load the current file in advance. This starts no timeline scan. Explicit hover requests can start as soon as the reveal settles, without waiting for this timer. Video-folder enumeration for episode discovery retains its separate 1.5-second delay after the first frame.
+
+A new hover epoch resets its dispatch clock, so its first uncached request has no imposed cooldown when navigation is idle. Subsequent destinations are coalesced to at most 30 per second. An active navigation request finishes before another is dispatched; only the latest desktop and phone destinations are retained, with desktop priority. Its result enters this file's cache and is displayed only if it matches the current destination. This prevents pointer updates from repeatedly cancelling a slow seek. Interactive requests still immediately preempt colour work. File changes/close interrupt old work through the helper's control generation. Its command reader checks superseding commands every 10 ms while awaiting engine events. Replies and the dispatch timer serve the final destination without needing another mouse move.
+
+Finishing an active request trades some final-position latency for progress and less wasted work: the newest uncached destination may wait for the remainder of one navigation operation. This is not a guarantee of instant previews while sweeping over uncached positions. The scheduler model and its before/after comparison are documented in [the pipeline review](THUMBNAIL-PIPELINE-REVIEW.md).
+
+The earlier 40–120 ms adaptive cooldown and speculative lookahead have been removed. There is no arbitrary cache population, no full-timeline scan and no persistent thumbnail cache. Reintroducing optional pre-generation requires measured benefit on Windows.
+
+## Display lifetime and resources
+
+A new hover clears the displayed image and resets duplicate-request suppression, while preserving the per-file RAM cache. During one continuous hover, the displayed picture stays in place until a matching new sample is available, and its timestamp remains attached to it. An ordinary cache miss never collapses the card to a time-only tooltip. On a new hover the old pixels are cleared, while the per-file card aspect is retained; the requested time appears in the same footer while waiting. Known media geometry reserves space even before the first image. File changes clear the pixels and geometry. Late replies cannot paint another destination. Returning at the same screen coordinate is processed after leaving the window or losing focus. The desktop and phone keep independent requested destinations.
+
+The view retains the small source pixels, rather than an enlarged copy tied to a previous window size. Nearest-neighbour expansion writes directly into the tooltip canvas only on content/geometry changes, using colour runs and repeated-row copies. Card placement stays within the client area, below the window-button strip and beside the dock. Full-window cached images are fitted to mini-player bounds, including portrait media and a top-positioned dock; portrait preview images are reduced by 5% in both dimensions after fitting, with pixel-grid rounding and the timestamp kept readable; landscape and square images retain their size. If a narrow portrait card needs extra width for its timestamp, the image fills that area with a centred crop instead of adding side bars. Audio-only timelines remain time-only. No extra decoder, cache or process is created for the mini player.
+
+The cache is still bounded to 12 MiB of pixel buffers and 256 images, with LRU eviction. The small source allocation is reused and released on file changes. The production helper uses software decoding with the existing 1–4 decoder-thread limit. Warmup and colour work run below normal CPU priority; explicit navigation work uses normal priority only during its operation, returning below normal on success, cancellation and failure. These classes control CPU scheduling, not a total memory or I/O budget. The playback process retains its existing higher priority. Hidden windows and resizing defer new requests; one already active navigation operation may finish and cache its result. File/session/request IDs reject stale replies.
+
+## Timing and verification
+
+`Cue --log` includes local queue wait, dispatch-to-reply, request-to-ready time (until the image is handed to the UI, not a physical display measurement), helper decode time and image-preparation time. Queue wait is reported as -1 for a destination without a matching local timing request, such as a phone-only request. Ordinary playback does not format or write these timing rows.
+
+`tools/preview_benchmark.cpp` builds a separate Windows console diagnostic with `make preview-benchmark`. It runs the real helper in CPU-fast, CPU-exact and optional GPU-fast/auto-copy modes. Its CSV includes process/file startup, requested and actual times, round-trip, decode and preparation timings, actual hardware use and pixel hashes. The GPU request may fall back to CPU; the CSV reports actual use. This diagnostic does not enable GPU previews in the installed player. OS file caches and test order influence results, and the diagnostic does not measure UI painting or contention with simultaneous playback.
+
+Portable tests cover stable interval keys, fast versus precise command selection, immediate first dispatch, burst bounds, progress under 125 Hz pointer updates with 12–300 ms simulated decoding, pending final destinations, image-owned timestamps, same-pixel re-entry, old-epoch reply rejection, continuous card geometry during a simulated 200 ms decoder wait, a blank re-entry without stale pixels, cache limits and protocol layout. A further 144 window/DPI/aspect/style cases cover mini-player bounds, first-card geometry, larger cached sources, nearest-neighbour pixels, window-button clearance and music. Existing audio tests continue to verify one exact click/release seek and no premature keyframe jump. Windows builds check the executable; installer verification checks CRC and exact payload contents.
+
+This environment is Linux without Wine or a Windows GPU. Native end-to-end latency and CPU/GPU benchmark results have not been measured here. Portable tests and cross-compilation verify policy and build integrity, not responsiveness on the user's hardware.

@@ -426,9 +426,10 @@ function holdOn(k, ms) { hold[k] = performance.now() + (ms || 1500); }
 function reconcile(m, prev, prevLive) {
 var now = performance.now();
 function keep(k, same) { if (!(hold[k] > now)) return false; if (same) { delete hold[k]; return false; } return true; }
-if (m.view === 'play' && prev.view === 'play' && m.file === prev.file) {
-if (keep('pos', Math.abs(m.pos - prevLive) < 2.5)) m.pos = prevLive;
-if (keep('paused', m.paused === prev.paused)) m.paused = prev.paused;
+if (m.view === 'play' && prev.view === 'play' && m.file === prev.file && m.media === prev.media) {
+var pausePending = keep('paused', m.paused === prev.paused);
+if (pausePending || keep('pos', Math.abs(m.pos - prevLive) < 2.5)) m.pos = prevLive;
+if (pausePending) { m.paused = prev.paused; m.ended = prev.ended; }
 if (keep('vol', Math.abs(m.vol - prev.vol) < 1.5)) m.vol = prev.vol;
 if (keep('timer', m.timer.m === prev.timer.m)) m.timer = prev.timer;
 if (keep('audio', m.audio.i === prev.audio.i)) m.audio = prev.audio;
@@ -438,40 +439,84 @@ if (keep('sub.' + k, Math.abs(+m.sub[k] - +prev.sub[k]) < .05)) m.sub[k] = prev.
 } else hold = {};
 }
 function livePos() {
-if (S.view !== 'play' || S.paused || S.ended) return S.pos;
+if (!linkReady || S.view !== 'play' || S.paused || S.ended) return S.pos;
 return Math.min(S.dur, S.pos + (performance.now() - stamp) / 1000 * (S.speed || 1));
 }
 
-var ws = null, token = null, retry = 0, offlineT = 0, retryT = 0, everConnected = false;
+var ws = null, token = null, retry = 0, offlineT = 0, retryT = 0;
+var linkReady = false, linkStopped = false, heartbeatT = 0, deadlineT = 0;
+var pendingCode = null, codeUntil = 0, linkFrozen = false, lastPacket = 0, connectAt = 0;
+var linkInstance = Date.now().toString(36) + Math.random().toString(36).slice(2);
+function linkAvailable() { return !document.hidden && !linkFrozen; }
+function armDeadline(socket) {
+clearTimeout(deadlineT);
+deadlineT = setTimeout(function () { if (ws === socket) linkFailed(); }, 10000);
+}
+function stopHeartbeat() { clearTimeout(heartbeatT); clearTimeout(deadlineT); }
+function retireLink() {
+S.pos = livePos(); stamp = performance.now();
+var socket = ws; ws = null; linkReady = false;
+stopHeartbeat(); clearSends(); suspendRemoteWork();
+if (socket) {
+socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
+try { socket.close(); } catch (e) {}
+}
+}
+function linkFailed() { retireLink(); if (!linkStopped) scheduleRetry(); }
+function heartbeat(socket) {
+clearTimeout(heartbeatT);
+if (!linkAvailable()) return;
+heartbeatT = setTimeout(function () {
+if (ws !== socket || !linkReady || !linkAvailable()) return;
+armDeadline(socket);
+try { socket.send('{"t":"ping"}'); } catch (e) { linkFailed(); }
+}, 15000);
+}
 try { token = localStorage.getItem('cue.token.v2'); } catch (e) {}
 var codeFromLink = (location.hash.match(/(?:^#|&)c=(\d{6})(?:&|$)/) || [])[1] || null;
 if (codeFromLink) history.replaceState(null, '', location.pathname);
 function connect(code) {
+if (code) { pendingCode = code; codeUntil = Date.now() + 120000; linkStopped = false; }
+if (!linkAvailable() || linkStopped) return;
 if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
-clearTimeout(retryT);
-if (!code && !token) { showPair(''); return; }
-try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); } catch (e) { scheduleRetry(); return; }
-ws.onopen = function () { retry = 0; ws.send(JSON.stringify(code ? {t:'auth',c:code} : {t:'auth',k:token})); };
-ws.onmessage = function (ev) {
+if (pendingCode && Date.now() >= codeUntil) pendingCode = null;
+code = pendingCode;
+clearTimeout(retryT); retryT = 0; linkReady = false;
+if (!code && !token) { clearTimeout(offlineT); showPair(''); return; }
+var socket;
+try { socket = ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); } catch (e) { ws = null; scheduleRetry(); return; }
+connectAt = Date.now(); armDeadline(socket);
+socket.onopen = function () {
+if (ws !== socket) return;
+try { socket.send(JSON.stringify(code ? {t:'auth',c:code,i:linkInstance} : {t:'auth',k:token,i:linkInstance})); }
+catch (e) { linkFailed(); }
+};
+socket.onerror = function () { if (ws === socket) linkFailed(); };
+socket.onmessage = function (ev) {
+if (ws !== socket) return;
 var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+if (!linkAvailable()) return;
+lastPacket = Date.now();
+if (m.t === 'pong') { if (linkReady) { clearTimeout(deadlineT); heartbeat(socket); } return; }
 if (m.t === 'hello') {
-everConnected = true;
+clearTimeout(deadlineT); pendingCode = null; linkReady = true; retry = 0; hold = {}; heartbeat(socket);
 if (m.token) { token = m.token; try { localStorage.setItem('cue.token.v2', token); } catch (e) {} }
 var wasOff = !$('offline').classList.contains('hide');
-hidePair(); setOffline(false);if(queueOpen){queueLoaded=-1;loadQueue();}
+hidePair(); setOffline(false); resumeRemoteWork();
 if (code) linked(m.pc || '');
 else if (wasOff) { toast(t('remote.linked')); celebrate(); }
 } else if (m.t === 'state') {
+if (!linkReady) return;
 if (relocalize(m.lang)) return;
-var was = S.view, wasFile = S.file, prev = S, prevLive = livePos();
+var was = S.view, wasFile = S.file, wasMedia = S.media, prev = S, prevLive = livePos();
 reconcile(m, prev, prevLive);
 S = m; stamp = performance.now();
-if (wasFile !== S.file || was !== S.view) clearPeek();
+if (wasFile !== S.file || was !== S.view || wasMedia !== S.media) { coverRetry = 0; clearSends(); cancelGestures(); clearPeek(); }
 if (!U.scrub) U.prev = S.pos;
 if (was !== S.view || (wasFile && wasFile !== S.file)) { U.menu = null; U.edit = null; if (wasFile !== S.file && S.view === 'play' && was === 'play') celebrate(); }
-render(); if(queueOpen)loadQueue();
+if (!document.hidden) { render(); if(queueOpen)loadQueue(); }
 } else if (m.t === 'peek') {
-if (!U.scrub) return;
+if (!U.scrub || document.hidden || !linkReady) return;
 var n = m.n, epoch = peekEpoch;
 if (peekFetch) peekFetch.abort();
 peekFetch = new AbortController();
@@ -486,24 +531,37 @@ $('peekImg').src = peekURL;
 $('scrub').classList.add('peeking');
 }).catch(function() {});
 } else if (m.t === 'bye') {
-ws.onclose = null; ws.close(); setOffline(true, t('remote.off_by_pc'));
+linkStopped = true; retireLink(); clearTimeout(retryT); setOffline(true, t('remote.off_by_pc'));
 }
 };
-ws.onclose = function (ev) {
-ws = null;
-if (ev.code === 4001) { token = null; try { localStorage.removeItem('cue.token.v2'); } catch (e) {} showPair(code ? t('remote.code_wrong') : ''); return; }
-if (ev.code === 4002) { showPair(t('remote.code_closed')); return; }
-if (ev.code === 4003) { showPair(t('remote.locked')); return; }
-if (!everConnected && code) { showPair(t('remote.code_wrong')); return; }
+socket.onclose = function (ev) {
+if (ws !== socket) return;
+retireLink();
+if (ev.code === 4001) { pendingCode = null; linkStopped = true; token = null; try { localStorage.removeItem('cue.token.v2'); } catch (e) {} showPair(code ? t('remote.code_wrong') : ''); return; }
+if (ev.code === 4002) { pendingCode = null; linkStopped = true; showPair(t('remote.code_closed')); return; }
+if (ev.code === 4003) { pendingCode = null; linkStopped = true; showPair(t('remote.locked')); return; }
 scheduleRetry();
 };
 }
 function scheduleRetry() {
+clearTimeout(retryT); retryT = 0;
+if (linkStopped || !linkAvailable()) return;
 clearTimeout(offlineT);
+if (navigator.onLine === false) { setOffline(true); return; }
 offlineT = setTimeout(function () { setOffline(true); }, 1500);
 var wait = Math.min(10000, 1000 * Math.pow(2, retry++));
 clearTimeout(retryT);
-retryT = setTimeout(function () { if (!ws && !document.hidden) connect(null); }, wait);
+retryT = setTimeout(function () { retryT = 0; if (!ws && linkAvailable() && !linkStopped) connect(null); }, wait);
+}
+function wakeLink() {
+if (!linkAvailable() || linkStopped || (!token && !pendingCode)) return;
+var age = Date.now() - (linkReady ? lastPacket : connectAt);
+if (ws && (ws.readyState === 0 || ws.readyState === 1) && age < (linkReady ? 20000 : 10000)) return;
+retireLink(); retry = 0; connect(null);
+}
+function sleepLink() {
+retireLink(); clearTimeout(retryT); retryT = 0; clearTimeout(offlineT);
+releaseAwake();
 }
 function setOffline(on, msg) {
 if (!on) clearTimeout(offlineT);
@@ -511,16 +569,36 @@ $('offline').classList.toggle('hide', !on);
 $('offMsg').textContent = msg || t('remote.offline');
 $('offSub').textContent = msg ? '' : t('remote.reconnecting');
 }
-var sendT = {}, sendLast = {};
-function send(o, throttle) {
-if (!ws || ws.readyState !== 1) return;
-if (throttle) {
-var key = o.c, now = performance.now();
-clearTimeout(sendT[key]);
-if (now - (sendLast[key] || 0) < 80) { sendT[key] = setTimeout(function () { send(o); }, 80); return; }
-sendLast[key] = now;
+var sendPending = new Map(), sendTimer = 0, sendAt = -1000, peekAt = -1000;
+function clearSends() { clearTimeout(sendTimer); sendTimer = 0; sendPending.clear(); }
+function writeCommand(o) {
+if (!ws || ws.readyState !== 1 || !linkReady || document.hidden) return false;
+if (ws.bufferedAmount > 65536) { linkFailed(); return false; }
+try { ws.send(JSON.stringify(o)); return true; } catch (e) { linkFailed(); return false; }
 }
-ws.send(JSON.stringify(o));
+function drainSends() {
+sendTimer = 0;
+if (!sendPending.size) return;
+var now = performance.now(), wait = Math.max(0, 80 - (now - sendAt));
+var key = sendPending.keys().next().value;
+if (key === 'peek') wait = Math.max(wait, 250 - (now - peekAt));
+if (wait > 0) { sendTimer = setTimeout(drainSends, wait); return; }
+var o = sendPending.get(key); sendPending.delete(key);
+if (writeCommand(o)) { sendAt = now; if (key === 'peek') peekAt = now; }
+if (sendPending.size) sendTimer = setTimeout(drainSends, 80);
+}
+function send(o, throttle) {
+if (/^(toggle|skip|seek|what|peek|next|sub|subdelay|subsize|subpos|audio)$/.test(o.c) && S.media !== undefined) o.media = S.media;
+if (!ws || ws.readyState !== 1 || !linkReady || document.hidden) return false;
+if (throttle) {
+sendPending.set(o.c, o);
+if (!sendTimer) drainSends();
+return true;
+}
+if (o.c === 'open' || o.c === 'next' || o.c === 'queue-play') clearSends();
+sendPending.delete(o.c);
+if (o.c === 'seek') sendPending.delete('peek');
+return writeCommand(o);
 }
 
 var typed = '';
@@ -577,7 +655,7 @@ wake();
 
 var anims = [], raf = 0, DUR = { hop: 300, dart: 420, shake: 420, celebrate: 1300 };
 function anim(type, opt) {
-if (reduced) return;
+if (reduced || document.hidden || !linkReady) return;
 var a = { type: type, t0: performance.now() };
 for (var k in opt) a[k] = opt[k];
 anims.push(a);
@@ -603,7 +681,8 @@ raf = keep.length ? requestAnimationFrame(stepAnim) : 0;
 function relocalize(lang) {
 if (!lang || lang === BOOT.lang) { try { sessionStorage.removeItem('cue.lang'); } catch (e) {} return false; }
 var tried = null;
-try { tried = sessionStorage.getItem('cue.lang'); sessionStorage.setItem('cue.lang', lang); } catch (e) { return false; }
+)CUEPAGE",
+R"CUEPAGE(try { tried = sessionStorage.getItem('cue.lang'); sessionStorage.setItem('cue.lang', lang); } catch (e) { return false; }
 if (tried === lang) return false;  // already reloaded for it: never loop
 location.reload();
 return true;
@@ -651,7 +730,8 @@ o.connect(g); g.connect(ac.destination); o.start(at); o.stop(at + .55);
 function pop(i) { U.flash = i; }
 var peekShown = 0, peekURL = null, peekFetch = null, peekEpoch = 0;
 function clearPeek() {
-++peekEpoch;
+++peekEpoch; sendPending.delete('peek');
+clearTimeout(pickT); if (pickFetch) { pickFetch.abort(); pickFetch = null; }
 if (peekFetch) { peekFetch.abort(); peekFetch = null; }
 if (peekURL) { URL.revokeObjectURL(peekURL); peekURL = null; }
 $('peekImg').removeAttribute('src');
@@ -661,8 +741,9 @@ peekShown = 0;
 function authHeaders() { return {Authorization: 'Bearer ' + (token || '')}; }
 function scrubStart() { clearPeek(); U.turns = 0; }
 function peek() { if (S.audioOnly) return; send({ c: 'peek', v: Math.round(U.prev * 10) / 10 }, true); }  // audio has no picture
-var thumbObserver = null, thumbQueue = [], thumbBusy = 0, thumbURLs = [], thumbRequests = new Set();
+var thumbObserver = null, thumbQueue = [], thumbBusy = 0, thumbURLs = [], thumbRequests = new Set(), thumbEpoch = 0;
 function clearThumbs() {
+++thumbEpoch;
 if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null; }
 thumbQueue = [];
 thumbRequests.forEach(function(controller) { controller.abort(); });
@@ -670,17 +751,18 @@ thumbRequests.clear();
 thumbURLs.forEach(function(url) { URL.revokeObjectURL(url); }); thumbURLs = [];
 }
 function pumpThumbs() {
+if (document.hidden || !linkReady) return;
 while (thumbBusy < 3 && thumbQueue.length) {
 var img = thumbQueue.shift();
 if (!img.isConnected) continue;
 thumbBusy++;
 (function(img) {
 if (!img.classList.contains('sq')) img.insertAdjacentHTML('beforebegin',pixelThumb({path:img.dataset.thumb},0));
-var controller = new AbortController(); thumbRequests.add(controller);
+var epoch = thumbEpoch, controller = new AbortController(); thumbRequests.add(controller);
 fetch('/thumb?p=' + encodeURIComponent(img.dataset.thumb), {headers:authHeaders(), cache:'no-store', signal:controller.signal})
 .then(function(r) { if (!r.ok) throw Error(); return r.blob(); })
 .then(function(blob) {
-if (!img.isConnected || U.browse === null) return;
+if (controller.signal.aborted || epoch !== thumbEpoch || !img.isConnected || U.browse === null) return;
 var url = URL.createObjectURL(blob); thumbURLs.push(url);
 img.onload = function() { img.classList.add('ok'); };
 img.src = url;
@@ -694,8 +776,7 @@ clearThumbs();
 var imgs = $('grid').querySelectorAll('img[data-thumb]');
 if (window.IntersectionObserver) {
 thumbObserver = new IntersectionObserver(function(entries) {
-)CUEPAGE",
-R"CUEPAGE(entries.forEach(function(e) { if (e.isIntersecting) { thumbObserver.unobserve(e.target); thumbQueue.push(e.target); } });
+entries.forEach(function(e) { if (e.isIntersecting) { thumbObserver.unobserve(e.target); thumbQueue.push(e.target); } });
 pumpThumbs();
 }, {root:$('grid'), rootMargin:'100px'});
 imgs.forEach(function(img) { thumbObserver.observe(img); });
@@ -713,24 +794,32 @@ function wake() {
 if (U.sleep) { U.sleep = 0; anim('hop'); drawFace(); }
 if (pausedAt) pausedAt = Date.now();
 }
-(function blink() {
-setTimeout(function () {
+var faceTimers = new Set(), idleTimer = 0;
+function faceLater(fn, ms) {
+var id = setTimeout(function () { faceTimers.delete(id); if (!document.hidden && linkReady) fn(); }, ms);
+faceTimers.add(id);
+}
+function startFaceTimers() {
+if (idleTimer || document.hidden || !linkReady) return;
+function blink() {
+faceLater(function () {
 U.blink = true; drawFace();
-setTimeout(function () { U.blink = false; drawFace(); }, 110);
-if (Math.random() < .25) { setTimeout(function () { U.blink = true; drawFace(); }, 240); setTimeout(function () { U.blink = false; drawFace(); }, 350); }
+faceLater(function () { U.blink = false; drawFace(); }, 110);
+if (Math.random() < .25) { faceLater(function () { U.blink = true; drawFace(); }, 240); faceLater(function () { U.blink = false; drawFace(); }, 350); }
 blink();
 }, 2200 + Math.random() * 4200);
-})();
-(function glance() {
-setTimeout(function () {
-if (!document.hidden && S.view === 'play' && !S.paused && !drag && !U.menu && !U.browse && !U.scrub && !anims.length) {
+}
+function glance() {
+faceLater(function () {
+if (S.view === 'play' && !S.paused && !drag && !U.menu && U.browse === null && !U.scrub && !anims.length) {
 U.glance = Math.random() < .5 ? -1 : 1; drawFace();
-setTimeout(function () { U.glance = 0; drawFace(); }, 700 + Math.random() * 600);
+faceLater(function () { U.glance = 0; drawFace(); }, 700 + Math.random() * 600);
 }
 glance();
 }, 4000 + Math.random() * 5000);
-})();
-setInterval(function () {
+}
+blink(); glance();
+idleTimer = setInterval(function () {
 var idle = S.view === 'play' ? (S.paused || S.ended) : true;
 if (idle && !pausedAt) pausedAt = Date.now();
 if (!idle) { pausedAt = 0; if (U.sleep) { U.sleep = 0; drawFace(); } }
@@ -738,13 +827,20 @@ if (idle && pausedAt && U.sleep < 2) {
 var lv = Date.now() - pausedAt > 180000 ? 2 : (Date.now() - pausedAt > 60000 ? 1 : 0);
 if (lv !== U.sleep) { U.sleep = lv; drawFace(); drawGlow(); }
 }
-if (!document.hidden) render();
+if (!idle && performance.now() - stamp >= 750) render();
+else syncCover();
 }, 500);
+}
+function stopFaceTimers() {
+faceTimers.forEach(clearTimeout); faceTimers.clear(); clearInterval(idleTimer); idleTimer = 0;
+U.blink = false; U.glance = 0;
+}
 
 function nextVisible() {
 return S.view === 'play' && !!S.next && !S.audioOnly && U.mode !== 'tracks' && (S.ended || (S.dur > 0 && S.dur - livePos() <= 90)) && !U.menu && !U.scrub && !U.browse;
 }
 function drawFace() {
+if (document.hidden) return;
 var show = !U.menu && !U.scrub;
 var spin = !!(U.scrub && !U.menu && coverOK && S.view === 'play' && S.audioOnly);
 var cover = (show || spin) && coverOK && S.view === 'play' && S.audioOnly;
@@ -802,6 +898,7 @@ g.innerHTML = h; pg.innerHTML = ph;
 })();
 var glowColor = '', glowDim = -1;
 function drawGlow() {
+if (document.hidden) return;
 var c = (coverOK && S.audioOnly && coverTint) || S.color || '#a0508f', dim = U.sleep === 2 ? .5 : 1;
 if (c === glowColor && dim === glowDim) return;
 glowColor = c; glowDim = dim;
@@ -836,7 +933,8 @@ dotEls = Array.prototype.slice.call($('dots').children);
 })();
 
 var TIMERS = [0, -1, 30, 60];
-function timerText(m) { return m === 0 ? t('remote.timer_off') : m === -1 ? t('remote.timer_end') : t('remote.timer_min', { n: m }); }
+)CUEPAGE",
+R"CUEPAGE(function timerText(m) { return m === 0 ? t('remote.timer_off') : m === -1 ? t('remote.timer_end') : t('remote.timer_min', { n: m }); }
 function subPosText() { return Math.abs(S.sub.pos - S.sub.posDefault) < .5 ? t('remote.default') : Math.round(100 - S.sub.pos) + '%'; }
 function subSizeText() { return Math.round(S.sub.size / 44 * 100) + '%'; }
 function rows() {
@@ -884,7 +982,7 @@ send({ c: 'subpos', v: S.sub.pos }, true);
 render();
 }
 function navBack() {
-if (U.browse) { browseUp(); return; }
+if (U.browse !== null) { browseUp(); return; }
 if (U.edit) U.edit = null;
 else if (U.menu === 'subs') { U.menu = 'main'; U.idx = 0; }
 else U.menu = null;
@@ -944,8 +1042,7 @@ if (!it) return;
 if (it.dir) { openBrowse(it.path); return; }
 if(queueAddMode) {
 var tile=$('grid').querySelector('[data-i="'+i+'"]'),badge=tile&&tile.querySelector('.q-badge');
-)CUEPAGE",
-R"CUEPAGE(if(queueAdded.has(it.path)){if(badge)replay(badge,'boing');return;}
+if(queueAdded.has(it.path)){if(badge)replay(badge,'boing');return;}
 if(!ws||ws.readyState!==1)return;
 queueAdded.add(it.path);++queueAddedCount;send({c:'queue-add',path:it.path});
 if(tile){tile.classList.add('queued');tile.setAttribute('aria-pressed','true');}
@@ -1049,7 +1146,8 @@ document.documentElement.classList.toggle('sheet-lock',on);document.body.classLi
 if(!on&&sheetLocked)window.scrollTo(0,sheetScroll);sheetLocked=on;
 }
 function queueHeader(){
-$('queueTitle').textContent=t('queue.title')+(queueData.length>1?' · '+queueData.length:'');
+)CUEPAGE",
+R"CUEPAGE($('queueTitle').textContent=t('queue.title')+(queueData.length>1?' · '+queueData.length:'');
 var addLabel=svgIcon(P.plus,15,15,3)+'<span class="ell">'+esc(t('queue.add_short'))+'</span>';if($('queueAdd').__html!==addLabel){$('queueAdd').innerHTML=addLabel;$('queueAdd').__html=addLabel;}
 var folderLabel=svgIcon(P.plus,15,15,3)+'<span class="ell">'+esc(t('queue.add_folder'))+'</span>';if($('browseAddFolder').__html!==folderLabel){$('browseAddFolder').innerHTML=folderLabel;$('browseAddFolder').__html=folderLabel;}
 $('browseDone').textContent=t('queue.done');
@@ -1073,11 +1171,13 @@ var picture=queuePictures.get(id);if(!picture)return;
 picture.img.removeAttribute('src');picture.img.classList.remove('ok');URL.revokeObjectURL(picture.url);queuePictures.delete(id);
 }
 function clearQueueThumbs(){
+$('queueItems').querySelectorAll('img[data-queue-thumb]').forEach(function(img){img.dataset.requested='';});
 ++queueThumbEpoch;if(queueObserver)queueObserver.disconnect();queueObserver=null;queueImages=[];queueVisible.clear();
 queueRequests.forEach(function(c){c.abort();});queueRequests.clear();
 Array.from(queuePictures.keys()).forEach(releaseQueuePicture);
 }
 function pumpQueueThumbs(){
+if(document.hidden||!linkReady)return;
 while(queueOpen&&queueThumbBusy<2&&queueImages.length){
 var img=queueImages.shift(),id=+img.dataset.queueThumb;
 if(!img.isConnected||img.dataset.requested==='yes')continue;
@@ -1118,8 +1218,7 @@ var grip=document.createElement('button');grip.className='q-grip';grip.dataset.g
 grip.setAttribute('aria-label',t('queue.drag')+' · '+item.name);
 var handle=document.createElement('span');handle.className='q-handle';handle.setAttribute('aria-hidden','true');handle.innerHTML='<i></i><i></i><i></i><i></i><i></i><i></i>';grip.appendChild(handle);
 var picture=document.createElement('span');picture.className='q-picture'+(item.audio?' sq':'');picture.innerHTML=svgIcon(item.audio?P.note:P.stack,21,21,3);
-)CUEPAGE",
-R"CUEPAGE(if(item.preview){var img=document.createElement('img');img.dataset.queueThumb=item.id;img.alt='';picture.appendChild(img);}
+if(item.preview){var img=document.createElement('img');img.dataset.queueThumb=item.id;img.alt='';picture.appendChild(img);}
 grip.appendChild(picture);row.appendChild(grip);
 var play=document.createElement('button');play.className='q-play';play.dataset.qid=item.id;play.dataset.qcmd='queue-play';play.title=item.name;
 var name=document.createElement('span');name.className='q-name';name.textContent=stem(item.name);play.appendChild(name);
@@ -1192,7 +1291,8 @@ function closeQueue(restoreFocus){
 if(!queueOpen)return;queueOpen=false;var epoch=++queueEpoch;if(queueFetch)queueFetch.abort();queueFetch=null;
 cancelQueueDrag();cancelQueueAnimations();clearQueueGhosts();
 ++queueThumbEpoch;if(queueObserver)queueObserver.disconnect();queueObserver=null;queueImages=[];
-queueRequests.forEach(function(c){c.abort();});queueRequests.clear();
+)CUEPAGE",
+R"CUEPAGE(queueRequests.forEach(function(c){c.abort();});queueRequests.clear();
 $('queueSheet').inert=true;$('queueSheet').setAttribute('aria-hidden','true');$('queueSheet').style.pointerEvents='none';
 syncSheets();
 qAnimate($('queueSheet'),[{opacity:1,transform:'translateY(0)'},{opacity:0,transform:'translateY(16px)'}],200,function(){
@@ -1208,11 +1308,11 @@ syncSheets();queueHeader();qAnimate(sheet,[{opacity:opacity,transform:transform}
 loadQueue();$('queueClose').focus({preventScroll:true});
 }
 function loadQueue(){
-if(!queueOpen||queueFetch||queueLoaded===S.queueRevision)return;
+if(document.hidden||!linkReady||!queueOpen||queueFetch||queueLoaded===S.queueRevision)return;
 var epoch=++queueEpoch,revision=S.queueRevision;queueFetch=new AbortController();
 fetch('/queue',{headers:authHeaders(),cache:'no-store',signal:queueFetch.signal})
 .then(function(r){if(!r.ok)throw Error();return r.json();})
-.then(function(j){if(!queueOpen||epoch!==queueEpoch)return;queueLoaded=revision;reconcileQueue(j.items.slice(0,512));})
+.then(function(j){if(!queueOpen||epoch!==queueEpoch||revision!==S.queueRevision)return;queueLoaded=revision;reconcileQueue(j.items.slice(0,512));})
 .catch(function(e){if(queueOpen&&epoch===queueEpoch&&e.name!=='AbortError'){$('queueStatus').textContent=t('remote.offline');$('queueStatus').classList.remove('hide');}})
 .finally(function(){if(epoch===queueEpoch){queueFetch=null;if(queueOpen&&revision!==S.queueRevision)loadQueue();}});
 }
@@ -1253,8 +1353,7 @@ if(item.top+item.height>=list.scrollTop&&item.top<=list.scrollTop+list.clientHei
 function stepQueueDrag(now){
 if(!queueDrag)return;var d=queueDrag,list=$('queueItems'),edge=42*d.scale,speed=0;
 if(d.y<d.bounds.top+edge)speed=-Math.min(1,(d.bounds.top+edge-d.y)/edge);
-)CUEPAGE",
-R"CUEPAGE(else if(d.y>d.bounds.bottom-edge)speed=Math.min(1,(d.y-d.bounds.bottom+edge)/edge);
+else if(d.y>d.bounds.bottom-edge)speed=Math.min(1,(d.y-d.bounds.bottom+edge)/edge);
 list.scrollTop+=speed*420*Math.min(.04,(now-d.time)/1000);d.time=now;moveQueueDrag();queueRAF=requestAnimationFrame(stepQueueDrag);
 }
 $('queueItems').addEventListener('pointerdown',function(e){
@@ -1282,6 +1381,7 @@ if(qMotion.addEventListener)qMotion.addEventListener('change',qMotionChange);els
 }
 
 function render() {
+if (document.hidden) return;
 $('bQueueLabel').textContent=t('queue.title');
 $('bQueue').setAttribute('aria-label',t('queue.title'));
 queueHeader();syncSheets();
@@ -1333,7 +1433,8 @@ var timeOnly = !!(U.scrub && S.audioOnly && !spin);  // audio: only the time, ne
 $('scrub').classList.toggle('bare', timeOnly); $('stage').classList.toggle('timeonly', timeOnly);
 if (U.menu && !subEdit) {
 $('menuTitleText').textContent = U.menu === 'subs' ? t('remote.subtitles') : t('remote.menu');
-var h = '', key = U.menu + '|' + (U.menu === 'subs' ? 1 : 0), fresh = U.menuShown !== key;
+)CUEPAGE",
+R"CUEPAGE(var h = '', key = U.menu + '|' + (U.menu === 'subs' ? 1 : 0), fresh = U.menuShown !== key;
 U.menuShown = key;
 rows().forEach(function (r, j) {
 var on = j === U.idx, cls = (fresh ? ' rise' : '') + (U.flash === j ? ' flash' : ''), st = fresh ? ' style="animation-delay:' + j * 20 + 'ms"' : '';
@@ -1406,8 +1507,7 @@ $('bBackRew').classList.toggle('hide', inNav); $('bBackArrow').classList.toggle(
 $('bFwdSkip').classList.toggle('hide', inNav); $('bFwdArrow').classList.toggle('hide', !list); $('bFwdRight').classList.toggle('hide', !grid);
 $('bPlayPP').classList.toggle('hide', inNav); $('bPlayDown').classList.toggle('hide', !inNav);
 $('bMenuLabel').classList.toggle('hide', inNav); $('bMenuUp').classList.toggle('hide', !inNav);
-)CUEPAGE",
-R"CUEPAGE(['bBack', 'bFwd', 'bPlay', 'bMenu'].forEach(function (id, i) {
+['bBack', 'bFwd', 'bPlay', 'bMenu'].forEach(function (id, i) {
 var el = $(id).firstElementChild; while (el && el.classList.contains('hide')) el = el.nextElementSibling;
 if (el) { el.style.animationDelay = i * 16 + 'ms'; replay(el, 'popin'); }
 });
@@ -1526,25 +1626,25 @@ if (r) { tick(); act(+r.getAttribute('data-row')); }
 $('subMinus').addEventListener('click', function () { tick(); adjust(U.edit, -1); });
 $('subPlus').addEventListener('click', function () { tick(); adjust(U.edit, 1); });
 function togglePlay() {
-if (S.view !== 'play') return;
+)CUEPAGE",
+R"CUEPAGE(if (S.view !== 'play' || !send({ c: 'toggle' })) return;
+var pos = S.ended ? 0 : livePos();
 if (S.paused || S.ended) { S.paused = false; S.ended = false; anim('hop'); } else S.paused = true;
-S.pos = livePos(); stamp = performance.now();
+S.pos = pos; stamp = performance.now();
 holdOn('paused'); holdOn('pos', 900);
-send({ c: 'toggle' });
 render();
 }
 function skip(n) {
-if (S.view !== 'play') return;
+if (S.view !== 'play' || !send({ c: 'skip', v: n })) return;
 S.pos = Math.max(0, Math.min(S.dur, livePos() + n)); stamp = performance.now(); U.prev = S.pos;
 holdOn('pos');
-send({ c: 'skip', v: n });
 toast(n < 0 ? '-15 s' : '+15 s');
 anim('dart', { dir: n < 0 ? -1 : 1 });
 }
 function what() {
+if (S.view !== 'play' || !send({ c: 'what' })) return;
 S.pos = Math.max(0, livePos() - 10); stamp = performance.now();
 holdOn('pos');
-send({ c: 'what' });
 toast(t('remote.what'));
 U.react = true; anim('hop');
 setTimeout(function () { U.react = false; drawFace(); }, 700);
@@ -1564,16 +1664,16 @@ anim('hop');
 var trackItems = [], trackRev = -1, trackFetch = null, pickT = 0, pickFetch = null;
 function wheelModes() { return S.queueActive ? ['tempo', 'volume', 'tracks'] : ['tempo', 'volume']; }
 function loadTracks(then) {
-if (trackFetch) return;
-var rev = S.queueRevision; trackFetch = new AbortController();
+if (trackFetch || document.hidden || !linkReady) return;
+var rev = S.queueRevision, controller = trackFetch = new AbortController();
 fetch('/queue', {headers:authHeaders(), cache:'no-store', signal:trackFetch.signal})
 .then(function (r) { if (!r.ok) throw Error(); return r.json(); })
-.then(function (j) { trackItems = j.items.slice(0, 512); trackRev = rev; if (U.pick >= trackItems.length) U.pick = trackItems.length - 1; if (then) then(); render(); })
+.then(function (j) { if (controller.signal.aborted || rev !== S.queueRevision) return; trackItems = j.items.slice(0, 512); trackRev = rev; if (U.pick >= trackItems.length) U.pick = trackItems.length - 1; if (then) then(); render(); })
 .catch(function () {})
-.finally(function () { trackFetch = null; });
+.finally(function () { if (trackFetch === controller) trackFetch = null; });
 }
 function musicSteps() { return S.audioOnly && S.queueActive; }
-var coverRev = 0, coverURL = '', coverOK = false, coverTint = '', coverFetch = null;
+var coverRetry = 0, coverRev = 0, coverURL = '', coverOK = false, coverTint = '', coverFetch = null;
 var disc = { src: null, key: '', k: 0, ang: 0, want: 0, on: false, raf: 0, t: 0 };
 function discSource() {
 var im = $('coverImg');
@@ -1613,6 +1713,7 @@ if (on) disc.ang = ang;
 if (on && !disc.on && !discSource()) return;  // no picture to turn yet
 if (on) disc.on = true;
 if (!disc.on) return;
+if (disc.k === disc.want && (on || disc.ang === 0)) { if (on) discDraw(); return; }
 if (reduced) { disc.k = disc.want; if (!on) disc.ang = 0; }
 if (!disc.raf) disc.raf = requestAnimationFrame(discStep);
 }
@@ -1627,21 +1728,22 @@ $('spinDisc').classList.toggle('hide', !shown);
 $('coverFace').classList.toggle('disc', !!shown);
 if (shown) discDraw();
 if (!shown) { disc.on = false; disc.t = 0; return; }
-disc.raf = requestAnimationFrame(discStep);
+if (disc.k !== disc.want || (!disc.want && disc.ang !== 0)) disc.raf = requestAnimationFrame(discStep);
 }
 
 function syncCover() {
 var want = S.view === 'play' && S.audioOnly && S.cover ? S.cover : 0;
-if (want === coverRev) return;
+if (document.hidden || !linkReady || want === coverRev || performance.now() < coverRetry) return;
 coverRev = want; coverOK = false; coverTint = '';
 if (coverFetch) { coverFetch.abort(); coverFetch = null; }
+if (coverURL) { URL.revokeObjectURL(coverURL); coverURL = ''; }
+$('coverImg').onload = null; $('coverImg').removeAttribute('src'); disc.src = null; disc.key = '';
 if (!want) return;
-coverFetch = new AbortController();
+var controller = coverFetch = new AbortController();
 fetch('/cover?r=' + want, {headers:authHeaders(), cache:'no-store', signal:coverFetch.signal})
-)CUEPAGE",
-R"CUEPAGE(.then(function (r) { if (!r.ok) throw Error(); return r.blob(); })
+.then(function (r) { if (!r.ok) throw Error(); return r.blob(); })
 .then(function (b) {
-if (coverRev !== want) return;
+if (controller.signal.aborted || coverRev !== want) return;
 if (coverURL) URL.revokeObjectURL(coverURL);
 coverURL = URL.createObjectURL(b);
 var im = $('coverImg');
@@ -1652,8 +1754,8 @@ render(); replay($('coverFace'), 'popin');
 };
 im.src = coverURL;
 })
-.catch(function () {})
-.finally(function () { coverFetch = null; });
+.catch(function () { if (!controller.signal.aborted && coverRev === want) { coverRev = 0; coverRetry = performance.now() + 3000; } })
+.finally(function () { if (coverFetch === controller) coverFetch = null; });
 }
 function averageColor(im) {
 try {
@@ -1671,8 +1773,9 @@ function currentTrack() { return trackItems.findIndex(function (it) { return it.
 function pickPreview() {
 clearTimeout(pickT); if (pickFetch) { pickFetch.abort(); pickFetch = null; }
 var it = trackItems[U.pick]; if (!it || !it.preview) { clearPeek(); return; }  // a song: its cover
+var epoch = ++peekEpoch;
 pickT = setTimeout(function () {
-var epoch = ++peekEpoch; pickFetch = new AbortController();
+pickFetch = new AbortController();
 fetch('/queue-thumb?id=' + it.id, {headers:authHeaders(), cache:'no-store', signal:pickFetch.signal})
 .then(function (r) { if (!r.ok) throw Error(); return r.blob(); })
 .then(function (b) { if (epoch !== peekEpoch || U.pick < 0) return; if (peekURL) URL.revokeObjectURL(peekURL); peekURL = URL.createObjectURL(b); $('peekImg').src = peekURL; $('scrub').classList.add('peeking'); render(); })
@@ -1718,6 +1821,7 @@ $('bar').addEventListener('pointermove', barMove);
 function barUp() {
 if (!barDrag) return;
 barDrag = false;
+if (U.mode === 'volume') send({c:'vol',v:S.vol});
 if (U.scrub) { U.scrub = false; clearPeek(); S.pos = U.prev; stamp = performance.now(); holdOn('pos'); send({ c: 'seek', v: U.prev }); }
 render();
 }
@@ -1737,7 +1841,7 @@ var v = Math.max(S.sub.posMin, Math.min(S.sub.posMax, Math.round(100 - (f * 100 
 if (v !== S.sub.pos) { tick(); S.sub.pos = v; holdOn('sub.pos'); send({ c: 'subpos', v: v }, true); render(); }
 }
 $('frame').addEventListener('pointermove', frameMove);
-['pointerup', 'pointercancel'].forEach(function (ev) { $('frame').addEventListener(ev, function () { frameDrag = false; }); });
+['pointerup', 'pointercancel'].forEach(function (ev) { $('frame').addEventListener(ev, function () { if (frameDrag) send({c:'subpos',v:S.sub.pos}); frameDrag = false; }); });
 
 var drag = null;
 function geo(e) {
@@ -1772,7 +1876,8 @@ if (d < -180) d += 360;
 drag.last = g.a;
 if (drag.direct) {
 drag.travel += d;
-U.prev = Math.max(0, Math.min(S.dur, drag.start + drag.travel / 360 * S.dur));
+)CUEPAGE",
+R"CUEPAGE(U.prev = Math.max(0, Math.min(S.dur, drag.start + drag.travel / 360 * S.dur));
 U.ang = g.a; peek(); render(); return;
 }
 drag.acc += d;
@@ -1825,6 +1930,7 @@ send({ c: 'vol', v: S.vol }, true);
 }
 function wheelUp() {
 if (!drag) return;
+if (U.mode === 'volume' && !U.menu && U.browse === null) send({c:'vol',v:S.vol});
 drag = null; U.ang = null;
 if (U.pick >= 0) {
 var it = trackItems[U.pick]; U.pick = -1; clearTimeout(pickT); clearPeek();
@@ -1837,18 +1943,59 @@ render();
 $('wheel').addEventListener('pointerup', wheelUp);
 $('wheel').addEventListener('pointercancel', wheelUp);
 
-var lock = null;
-function keepAwake() {
-if (lock || !navigator.wakeLock || document.hidden) return;
-navigator.wakeLock.request('screen').then(function (l) { lock = l; l.addEventListener('release', function () { lock = null; }); }).catch(function () {});
+var lock = null, lockPending = false;
+function releaseAwake() {
+if (lock) { var old = lock; lock = null; old.release().catch(function () {}); }
 }
-document.addEventListener('pointerdown', keepAwake);
+function keepAwake() {
+if (lock || lockPending || !navigator.wakeLock || !linkAvailable() || !linkReady) return;
+lockPending = true;
+navigator.wakeLock.request('screen').then(function (l) {
+if (!linkAvailable() || !linkReady) { l.release().catch(function () {}); return; }
+lock = l;
+l.addEventListener('release', function () { if (lock === l) lock = null; });
+}).catch(function () {}).finally(function () { lockPending = false; });
+}
+document.addEventListener('pointerdown', function () { wakeLink(); keepAwake(); });
 
 render();
 if (codeFromLink) connect(codeFromLink);
 else if (token) connect(null);
 else showPair('');
-document.addEventListener('visibilitychange', function () { if (!document.hidden && !ws && token) { retry = 0; connect(null); } });
+function cancelGestures() {
+drag = null; barDrag = false; frameDrag = false; U.scrub = false; U.pick = -1;
+clearTimeout(holdT); cancelQueueDrag(); discTo(false);
+}
+function suspendRemoteWork() {
+stopFaceTimers();
+cancelGestures(); clearPeek();
+if (browseFetch) { ++browseRequest; browseFetch.abort(); browseFetch = null; }
+clearThumbs(); clearQueueThumbs();
+if (queueFetch) { ++queueEpoch; queueFetch.abort(); queueFetch = null; }
+if (trackFetch) { trackFetch.abort(); trackFetch = null; } trackRev = -1;
+if (coverFetch) { coverFetch.abort(); coverFetch = null; coverRev = 0; }
+cancelQueueAnimations(); clearQueueGhosts();
+if (raf) cancelAnimationFrame(raf); raf = 0; anims = []; U.fx = {dx:0,dy:0,sy:1,happy:false};
+if (disc.raf) cancelAnimationFrame(disc.raf); disc.raf = 0; disc.t = 0;
+}
+function resumeRemoteWork() {
+if (document.hidden || !linkReady) return;
+startFaceTimers();
+if (U.browse !== null) openBrowse(U.browse);
+if (queueOpen) { queueLoaded = -1; loadQueue(); }
+discTo(false); render();
+}
+document.addEventListener('visibilitychange', function () {
+if (document.hidden) sleepLink();
+else { wakeLink(); keepAwake(); }
+});
+document.addEventListener('freeze', function () { linkFrozen = true; sleepLink(); });
+document.addEventListener('resume', function () { linkFrozen = false; wakeLink(); });
+window.addEventListener('focus', wakeLink);
+window.addEventListener('offline', function () { sleepLink(); if (!linkStopped) setOffline(true); });
+window.addEventListener('online', wakeLink);
+window.addEventListener('pagehide', sleepLink);
+window.addEventListener('pageshow', function () { linkFrozen = false; wakeLink(); });
 })();
 </script>
 </body>

@@ -38,7 +38,8 @@ void App::queue_play_now(uint32_t id) {
   for(int guard=0;guard<(int)MediaQueue::kLimit;++guard) {
     const auto* item=queue_.get(id); if(!item)return;
     const std::string path=item->path;
-    if(path.find("://")!=std::string::npos||GetFileAttributesW(widen(path).c_str())!=INVALID_FILE_ATTRIBUTES) {
+    bool validated = path == remote_verified_path_; remote_verified_path_.clear();
+    if(validated||path.find("://")!=std::string::npos||GetFileAttributesW(widen(path).c_str())!=INVALID_FILE_ATTRIBUTES) {
       queue_.select(id); open(path); queue_refresh(); return;
     }
     play_.toast(i18n::format(str::queue_skipped,{{"name",file_stem(path)}}),nullptr,now());
@@ -85,7 +86,7 @@ void App::queue_folder(const std::string& path,bool replace,bool from_remote) {
   if(path.empty())return;
   if(folder_scan_) { say(tr(str::queue_reading));queue_notice(tr(str::queue_reading)); return; } // one bounded filesystem worker
   auto job=std::make_shared<FolderScan>();
-  job->path=path;job->replace=replace;job->remote=from_remote;
+  job->path=path;job->replace=replace;job->remote=from_remote;job->remote_epoch=remote_path_epoch_;
   auto* context=new std::shared_ptr<FolderScan>(job);
   HANDLE worker=CreateThread(nullptr,0,scan_folder,context,CREATE_SUSPENDED,nullptr);
   if(!worker) {delete context;say(tr(str::notice_open_failed));queue_notice(tr(str::notice_open_failed),3);return;}
@@ -107,9 +108,13 @@ void App::finish_folder() {
   if(!folder_scan_||!folder_scan_->done.load(std::memory_order_acquire))return;
   auto job=std::move(folder_scan_);KillTimer(hwnd_,T_FOLDER);
   if(job->cancelled) {queue_notice("");return;}
-  // Revalidate the shared folder once after enumeration. Child paths were
-  // validated by the worker; the UI must not open hundreds of filesystem handles.
-  if(job->remote&&!remote_path_ok(job->path,true)) {queue_notice(tr(str::notice_open_failed),3);return;}
+  // Children were resolved on the worker. A changed share epoch invalidates the
+  // complete scan; the UI only checks the current lexical permission snapshot.
+  if(job->remote) {
+    bool shared=false;
+    for(const auto& root:store_.remote_folders) if(root.on&&remote::path_within(root.path,job->path))shared=true;
+    if(!remote_.running()||job->remote_epoch!=remote_path_epoch_||!shared) {queue_notice(tr(str::notice_open_failed),3);return;}
+  }
   if(job->failed) {say(tr(str::notice_open_failed));queue_notice(tr(str::notice_open_failed),3);return;}
   if(job->files.empty()) {auto label=tr(job->limited?str::queue_limit:str::queue_no_media);say(label);queue_notice(label,job->limited?3:2);return;}
   size_t added=queue_add(job->files,job->replace);
@@ -140,6 +145,8 @@ void App::queue_notice(const std::string& text,int result) {
   queue_notice_=text;queue_result_=result;++queue_notice_id_;remote_publish();
 }
 void App::queue_clear() {
+  ++remote_add_epoch_;
+  for(auto& job:remote_path_jobs_)if(job->add_epoch)job->cancelled=true;
   if(folder_scan_)folder_scan_->cancelled=true;
   if(queue_.active())queue_.clear();
   queue_notice_.clear();queue_result_=0;++queue_notice_id_;queue_refresh();

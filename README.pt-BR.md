@@ -21,7 +21,7 @@ Um player de vídeo e áudio gratuito e de código aberto para Windows. Leve, lo
 
 ## Comece aqui
 
-Baixe `Cue-1.3.1-Setup.exe` na [última release](https://github.com/tinypeep/cue/releases/latest) e execute. **Windows x64.** Não exige administrador.
+Baixe `Cue-1.3.2-Setup.exe` na [última release](https://github.com/tinypeep/cue/releases/latest) e execute. **Windows x64.** Não exige administrador.
 
 Abra um arquivo, arraste para o Cue ou use **Abrir com** no Explorador de Arquivos.
 
@@ -30,6 +30,7 @@ Abra um arquivo, arraste para o Cue ou use **Abrir com** no Explorador de Arquiv
 | Espaço | Reproduzir / pausar |
 | F ou duplo clique | Tela cheia |
 | ← / → | Voltar / avançar 5 segundos |
+| 0–9 | Ir para 0–90% do vídeo (player principal) |
 | C | Controles de legenda |
 | N / P | Próximo arquivo, quando o Cue encontrar um / arquivo anterior da fila |
 | Ctrl+O | Abrir arquivo |
@@ -56,6 +57,6 @@ A tradução em russo foi revisada com a ajuda de [omni38](https://github.com/om
 
 O código do Cue usa **GPL-3.0-or-later**. Fontes e componentes de terceiros mantêm suas próprias licenças. Veja [LICENSE](LICENSE), [autoria](COPYRIGHT.md) e [licenças dos componentes](docs/LICENSES.md).
 
-As fontes correspondentes ao motor estão em `Cue-1.3.1-Engine-Source.zip`, na [página da versão](https://github.com/tinypeep/cue/releases/tag/v1.3.1).
+As fontes correspondentes ao motor estão em `Cue-1.3.2-Engine-Source.zip`, na [página da versão](https://github.com/tinypeep/cue/releases/tag/v1.3.2).
 
 Forks e versões modificadas: [NOTICE](NOTICE.md) · [Identidade e branding](docs/BRANDING.md).

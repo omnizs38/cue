@@ -1,0 +1,1 @@
+async IO: 1000 latest-only requests => 999 cancelled, 1 completed; 128 FIFO limit/order; nonblocking destruction passed

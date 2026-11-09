@@ -1,0 +1,4 @@
+==123==Can't open /proc/122/task for reading.
+==122==LeakSanitizer has encountered a fatal error.
+==122==HINT: For debugging, try setting environment variable LSAN_OPTIONS=verbosity=1:log_threads=1
+==122==HINT: LeakSanitizer does not work under ptrace (strace, gdb, etc)

@@ -1,0 +1,3 @@
+Hidden reveal: no offscreen iris, pending ratio and active restore geometry remain covered, reveal after settling passed
+Hidden previews: explicit phone warmup, latest-only decode, no local/color work, no phone/no decode and repeated cached gestures passed
+Production transport: hidden seek dispatch/gain recovery, latest target, cancellation, audio graph/reopen/watchdog and close completion without render frames passed

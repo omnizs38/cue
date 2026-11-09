@@ -5,6 +5,7 @@
 #include <atomic>
 #include <climits>
 #include <filesystem>
+#include <deque>
 #include <map>
 #include <set>
 #include <string>
@@ -14,6 +15,8 @@
 #include "../core/glide_clock.h"
 #include "../core/playback_warmup.h"
 #include "../core/preview_session.h"
+#include "../core/preview_dispatch.h"
+#include "../core/preview_timeline.h"
 #include "../core/overlay_buffers.h"
 #include "../core/frame_cache.h"
 #include "../core/episode_advance.h"
@@ -27,6 +30,10 @@
 #include "../ui/atmosphere.h"
 #include "ambient.h"
 #include "flight_ghost.h"
+#include "../core/async_sample.h"
+#include "../core/async_worker.h"
+#include "../core/seek_dispatch.h"
+#include "../core/seek_fade.h"
 #include "cover_turn_window.h"
 #include "mpv.h"
 #include "thumbhost.h"
@@ -58,7 +65,7 @@ class App {
  private:
   enum class Mode { Home, Play };
   enum : UINT { WM_APP_MPV = WM_APP + 1, WM_APP_ENGINE = WM_APP + 2, WM_APP_RECENTS = WM_APP + 3, WM_APP_THUMB = WM_APP + 4, WM_APP_MOUSE = WM_APP + 5, WM_APP_OPEN_FILES = WM_APP + 6, WM_APP_LEFT_DOWN = WM_APP + 7, WM_APP_LEFT_UP = WM_APP + 8, WM_APP_RIGHT_UP = WM_APP + 9, WM_APP_VSYNC = WM_APP + 10, WM_APP_UPDATE = WM_APP + 11, WM_APP_REMOTE = WM_APP + 12, WM_APP_QUEUE_CANCEL = WM_APP + 13, WM_APP_WHEEL = WM_APP + 14, WM_APP_MEDIA_BUTTON = WM_APP + 15 };
-  enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREFETCH = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14, T_FOLDER = 15, T_QUEUE = 16, T_VOLUME = 17 };
+  enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREVIEW = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14, T_FOLDER = 15, T_QUEUE = 16, T_VOLUME = 17, T_REMOTE_PATH = 18, T_SEEK_FADE = 19 };
 
   HINSTANCE inst_ = nullptr;
   HWND hwnd_ = nullptr, video_ = nullptr;
@@ -105,8 +112,7 @@ class App {
   std::vector<std::string> launch_files_;
   int ext_subs_ = 0;
   double last_time_ = 0;
-  bool seek_in_flight_ = false;
-  double seek_pending_ = -1;
+  SeekDispatch seek_dispatch_;
   // After a seek the engine can still report the old time for a while (music rebuilds its picture
   // around the cover first): the bar keeps showing where it was sent until the engine agrees.
   double seek_hold_ = -1, seek_hold_until_ = 0;
@@ -159,9 +165,11 @@ class App {
   RECT client_screen() const;  // the client area on screen
   bool cloaked_ = false;
   void set_cloak(bool on);
-  struct SeekFade { int stage = 0; double t0 = 0; std::vector<std::string> cmd; } seek_fade_;  // 1 out, 2 jumped, 3 in
+  SeekFade seek_fade_;
   void seek_soft(std::vector<std::string> cmd);
   bool step_seek_fade(double t);
+  void cancel_seek_fade();
+  void step_hidden_playback(double t);
   bool start_mini_fx(bool entering);
   void end_mini_fx(bool apply = true);  // apply: a switch still pending happens now (else it is dropped)
   void mini_switch(bool entering);  // the mini player on or off, the window at its new size  // false: no pixels (Windows' animations off, another effect running)
@@ -292,11 +300,13 @@ class App {
   uint32_t queue_thumb_id_=0;
   bool queue_thumb_timer_=false;
   size_t queue_add(const std::vector<std::string>& paths, bool replace = false);
+  std::string remote_verified_path_;
   void queue_play(uint32_t id);  // (in the card, through the cover's turn: flip_)
   struct FolderScan {
     std::atomic<bool> cancelled{false}, done{false};
     std::string path;
     bool replace=false, remote=false, limited=false, failed=false;
+    uint64_t remote_epoch=0;
     std::vector<std::string> files;
   };
   std::shared_ptr<FolderScan> folder_scan_;
@@ -310,8 +320,15 @@ class App {
   ThumbClient thumbs_;  // previews + film colour, decoded in a background helper process
   std::string thumb_path_;
   PreviewSession preview_;
+  PreviewDispatch preview_dispatch_;
+  uint64_t thumb_want_epoch_ = 0, thumb_shown_epoch_ = 0;
+  int thumb_metrics_key_ = INT_MIN;
+  double thumb_request_at_ = 0;
+  double thumb_dispatched_at_ = 0;
+  double thumb_interaction_at_ = -1;
   double thumb_want_ = -1, thumb_seek_t_ = -1;
   int thumb_shown_ = INT_MIN;
+  int thumb_seek_key_ = 0;
   using ThumbImg = FrameCache::Image;
   FrameCache thumb_cache_;  // on-demand timeline frames, bounded by bytes and count
   double thumb_step() const;
@@ -319,9 +336,10 @@ class App {
   bool first_frame_ = false, reveal_pending_ = false, swallow_next_ = false;
   void reveal_play();
   void try_start_iris();
-  void thumb_request(double t);  // t < 0: just keep filling in the background
+  void thumb_request(double t, bool local = true);  // t < 0: open for background colours
+  bool thumb_show(int key, uint64_t epoch, bool cache_hit = true);
   void thumb_next();
-  void thumb_store(std::vector<uint32_t>&& px, int w, int h);
+  void thumb_store(std::vector<uint32_t>&& px, int w, int h, double sample_time);
   void on_thumb(ThumbMsg* m);
   void thumb_stop();
   unsigned recents_gen_ = 0;
@@ -363,6 +381,7 @@ class App {
   // music's light show: the engine's loudness for each audio frame (an astats filter on the
   // song's own filter chain), the cover's colours, and the motion they make
   MusicLight music_light_;
+  AsyncSample light_sample_;
   std::shared_ptr<CoverJob> light_cover_job_;
   double bg_ready_t_ = -1;  // when the cover's colours arrived (the room's light fades in from then)
   bool bg_sent_ = false;
@@ -371,6 +390,8 @@ class App {
   // seconds): up next and a song's album wait for it, the window never does.
   struct FolderList { std::wstring dir; std::vector<std::wstring> names; std::atomic<bool> done{false}; };
   std::shared_ptr<FolderList> folder_list_;
+  std::unique_ptr<AsyncWorker> folder_reader_;
+  std::wstring deferred_folder_;
   bool folder_wait_ = false;  // up next / the album asked before the folder was read
   void list_folder(const std::wstring& dir);
   bool folder_names(const std::wstring& dir, std::vector<std::string>& out);
@@ -451,8 +472,9 @@ class App {
   std::shared_ptr<CoverJob> media_cover_job_;
   std::shared_ptr<CardStillJob> media_still_job_;
   std::string media_title_, media_sub_;
-  double media_still_due_ = -1;  // a film: when to take its still (in memory, see kReplyStill)
+  double media_still_due_ = -1;  // a film: when to take its still (in memory, see media_still_request_)
   int media_still_tries_ = 0;
+  uint64_t media_still_request_ = 1ull << 47;  // reject screenshots from an earlier file
   void media_sync();
   PlaybackWarmup background_warmup_;
   bool atmosphere_sampled_ = false;
@@ -549,6 +571,7 @@ class App {
   void quit_now();
   bool closing_video_ = false, hide_video_pending_ = false, closing_app_ = false;
   double hide_video_since_ = 0;
+  bool home_enter_pending_ = false;  // black during the return glide; home fades in at its final size
   // Esc / close: the picture closes in the pixel iris and the sound breathes out, then the engine
   // stops and the home comes in (see close_to_home)
   bool home_closing_ = false, close_stopped_ = false, close_gain_pending_ = false, close_hid_subs_ = false;
@@ -604,7 +627,18 @@ class App {
   void remote_events();
   void remote_command(const remote::Command& c);
   uint64_t remote_queue_revision_=~uint64_t(0),remote_queue_epoch_=0;
-  bool remote_path_ok(const std::string& path,bool directory=false) const;
+  struct RemotePathJob {
+    remote::Command cmd;
+    std::string source;
+    uint64_t epoch = 0, open_epoch = 0, add_epoch = 0;
+    bool allowed = false;
+    std::atomic<bool> done{false}, cancelled{false};
+  };
+  std::unique_ptr<AsyncWorker> remote_path_worker_;
+  std::deque<std::shared_ptr<RemotePathJob>> remote_path_jobs_;
+  uint64_t remote_path_epoch_ = 0, remote_open_epoch_ = 0, remote_add_epoch_ = 0, remote_media_epoch_ = 0;
+  void remote_validate(remote::Command cmd);
+  void remote_paths_ready();
   void remote_boot();
   void remote_roots();
   void remote_progress();
@@ -649,6 +683,7 @@ class App {
   std::vector<std::string> remote_devices_;  // phones connected now, by name
   double remote_peek_want_ = -1;              // a phone's wheel points here (its preview)
   int remote_peek_sent_ = INT_MIN;
+  bool remote_preview_pending() const;
   void remote_peek(double t);
   void remote_peek_send();
   // "saiu do forno": once, after an update, over the home

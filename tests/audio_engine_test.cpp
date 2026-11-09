@@ -1,5 +1,5 @@
 // Windows integration check against the actual shipped DLL. Compile with src/win/mpv.cpp and
-// src/core/i18n.cpp (engine errors are catalog keys).
+// src/core/i18n.cpp and src/core/json.cpp (engine errors are catalog keys).
 // Usage: audio_engine_test.exe DLL_DIRECTORY AUDIO_MP4 AUDIO_OGG VIDEO_MP4
 #ifdef _WIN32
 #include "../src/win/mpv.h"
@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cmath>
+#include <cstring>
 
 int wmain(int argc, wchar_t** argv) {
   assert(argc == 5);
@@ -27,6 +28,7 @@ int wmain(int argc, wchar_t** argv) {
   assert(mpv.api().initialize(mpv.handle()) >= 0);
   mpv.hook_add("on_preloaded", 201);
   int stage = 0;
+  bool meter_reply = false;
   auto events = [&]() {
     while (auto* e = mpv.wait()) {
       if (e->event_id == MPV_EVENT_NONE) break;
@@ -39,6 +41,7 @@ int wmain(int argc, wchar_t** argv) {
         auto id = audio_visual_track(tracks);
         assert((id > 0) == (stage != 2));
         if (id) {
+          assert(mpv.set("file-local-options/af", "@cuelvl:lavfi=[astats=metadata=1:reset=1:measure_perchannel=Zero_crossings_rate:measure_overall=RMS_level]"));
           assert(mpv.set("file-local-options/force-window", "yes"));
           assert(mpv.set("file-local-options/video-sync", "audio"));
           assert(mpv.set("file-local-options/keep-open", "always"));
@@ -47,6 +50,22 @@ int wmain(int argc, wchar_t** argv) {
           assert(mpv.set("file-local-options/lavfi-complex", audio_waveform_graph(id)));
         }
         mpv.hook_continue(h->id);
+      }
+      if (e->event_id == MPV_EVENT_GET_PROPERTY_REPLY && e->reply_userdata == 7001) {
+        assert(e->error >= 0);
+        auto* property = static_cast<mpv_event_property*>(e->data);
+        assert(property && property->format == MPV_FORMAT_NODE && property->data);
+        auto* node = static_cast<mpv_node*>(property->data);
+        assert(node->format == MPV_FORMAT_NODE_MAP && node->u.list);
+        bool rms = false, zcr = false;
+        for (int i = 0; i < node->u.list->num; ++i) {
+          if (node->u.list->values[i].format != MPV_FORMAT_STRING) continue;
+          const auto* key = node->u.list->keys[i];
+          if (!key) continue;
+          rms |= !std::strcmp(key, "lavfi.astats.Overall.RMS_level");
+          zcr |= !std::strcmp(key, "lavfi.astats.1.Zero_crossings_rate");
+        }
+        assert(rms && zcr); meter_reply = true;
       }
       if (e->event_id == MPV_EVENT_END_FILE) {
         auto* end = static_cast<mpv_event_end_file*>(e->data);
@@ -67,6 +86,13 @@ int wmain(int argc, wchar_t** argv) {
     assert(mpv.get_double("dwidth") == (stage == 2 ? 320 : 1024));
     assert(mpv.get_string("video-sync") == (stage == 2 ? "display-resample" : "audio"));
     if (stage == 2) assert(mpv.get_string("lavfi-complex").empty());
+    if (stage != 2) {
+      meter_reply = false;
+      assert(mpv.api().get_property_async(mpv.handle(), 7001, "af-metadata/cuelvl", MPV_FORMAT_NODE) >= 0);
+      auto until = GetTickCount64() + 2000;
+      do { pump(10); } while (!meter_reply && GetTickCount64() < until);
+      assert(meter_reply);
+    }
     assert(mpv.set("pause", "yes")); pump(100);
     double before = mpv.get_double("time-pos"); pump(200);
     assert(std::abs(mpv.get_double("time-pos") - before) < 0.05);

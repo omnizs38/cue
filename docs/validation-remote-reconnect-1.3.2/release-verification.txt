@@ -1,0 +1,1 @@
+Verified: installer SHA256, LZMA, CRC32, 103 payload files, staged byte comparisons, DLL manifest and 16 source archives

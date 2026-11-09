@@ -1,0 +1,19 @@
+/workspace/scratch/2ed1b5380997/toolchain/usr/bin/x86_64-w64-mingw32-g++-posix -DCUE_OFFICIAL_BUILD=1  -MMD -MP -std=c++20 -O2 -flto -ffunction-sections -fdata-sections -Wall -Wextra -Wno-missing-field-initializers -DUNICODE -D_UNICODE -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0A00 -DNOMINMAX -c src/win/remote_server.cpp -o build/obj/win/remote_server.o
+/workspace/scratch/2ed1b5380997/toolchain/usr/bin/x86_64-w64-mingw32-g++-posix build/obj/core/cover_art.o build/obj/core/i18n.o build/obj/core/json.o build/obj/core/media_info.o build/obj/core/qr.o build/obj/core/release.o build/obj/core/remote_proto.o build/obj/core/remote_sound.o build/obj/core/store.o build/obj/core/sub_metrics.o build/obj/core/sub_style.o build/obj/core/util.o build/obj/ui/atmosphere.o build/obj/ui/face.o build/obj/ui/gfx.o build/obj/ui/home.o build/obj/ui/music_light.o build/obj/ui/news_view.o build/obj/ui/onboarding.o build/obj/ui/play.o build/obj/ui/play_tracks.o build/obj/ui/queue_view.o build/obj/ui/remote_view.o build/obj/ui/scene_contrast.o build/obj/win/ambient.o build/obj/win/app.o build/obj/win/app_queue.o build/obj/win/app_remote.o build/obj/win/cover_image.o build/obj/win/cover_turn_window.o build/obj/win/file_thumbnail.o build/obj/win/flight_ghost.o build/obj/win/licenses.o build/obj/win/main.o build/obj/win/media_controls.o build/obj/win/mpv.o build/obj/win/overlay.o build/obj/win/platform.o build/obj/win/remote_scene.o build/obj/win/remote_server.o build/obj/win/single_instance.o build/obj/win/taskbar_buttons.o build/obj/win/thumbhost.o build/obj/win/ui_language.o build/obj/win/updater.o build/obj/win/video_enhance.o build/obj/win/vsync.o build/obj/res.o -o build/Cue/Cue.exe -flto=2 -Wl,--gc-sections -municode -mwindows -static -static-libgcc -static-libstdc++ -s -ldwmapi -lole32 -lshell32 -luuid -lshcore -lcomdlg32 -lwinmm -lwindowscodecs -lwinhttp -lbcrypt -lws2_32 -liphlpapi
+cp assets/fonts/*.ttf build/Cue/fonts/
+mkdir -p build/Cue/licenses && cp assets/fonts/*.txt build/Cue/licenses/
+cp third_party/fusion-pixel-font/OFL.txt build/Cue/licenses/FusionPixel-OFL.txt
+cp docs/LICENSES.md build/Cue/LICENSES.md
+cp docs/ASSETS.md build/Cue/ASSETS.md
+cp docs/SECURITY.md build/Cue/SECURITY.md
+mkdir -p build/Cue/sources && cp res/sources-README.txt build/Cue/sources/README.txt
+cp LICENSE COPYRIGHT.md NOTICE.md docs/BRANDING.md docs/VALIDATION.md build/Cue/
+mkdir -p build/Cue/docs && cp docs/*.md build/Cue/docs/
+mkdir -p build/Cue/third_party && cp -r third_party/libmpv build/Cue/third_party/
+cp docs/LICENSES.md build/Cue/LICENSES.md && cp docs/ASSETS.md build/Cue/ASSETS.md && cp docs/SECURITY.md build/Cue/SECURITY.md
+cp res/sources-README.txt build/Cue/sources/README.txt
+cp LICENSE COPYRIGHT.md NOTICE.md docs/BRANDING.md docs/VALIDATION.md build/Cue/ && cp docs/*.md build/Cue/docs/
+mkdir -p build/Cue/third_party && cp -r third_party/libmpv build/Cue/third_party/
+python3 tools/make_setup.py build/Cue build/setup/stub.exe dist/Cue-1.3.2-Setup.exe
+dist/Cue-1.3.2-Setup.exe: 106 files, 59.4 MB -> 18.0 MB
+sha256 fa7c50aa4b6be39042db8d9c8b6bb8673e7c07d6c8e286036bc4f9c011e7e655

@@ -113,5 +113,32 @@ int main() {
     p.in.music_leaving = false; p.in.music_title = "Two"; p.changed(now); run(p, now, 1);
     assert(p.music_vis_.v > 0.99);
   }
-  std::puts("Mini card: one-line list at the card's own size (12 cards at 100-200%), names read as artist and title without the uploads' labels, the cover plays and the grip drags, the menu keeps the card's scale, the words step out while a song changes passed");
+  // Shuffle in the compact menu must keep a visible state even with a pointer on it.
+  for (double scale : {1.,1.5,2.}) {
+    PlayView p;p.in.dur=180;p.in.audio_only=true;p.in.mini_player=true;p.in.cover_scene=true;
+    p.resize(480*scale,270*scale,scale);double now=1;p.reset(now);run(p,now,.6);
+    p.open_panel_for_preview(3,now);run(p,now,.5);
+    auto where=std::find(p.tool_ids_.begin(),p.tool_ids_.end(),PlayView::B_SHUFFLE);
+    assert(where!=p.tool_ids_.end());int part=where-p.tool_ids_.begin();
+    auto row=std::find_if(p.rows_.begin(),p.rows_.end(),[](const auto& r){return r.id==PlayView::R_TOOLS;});
+    assert(row!=p.rows_.end());const int row_index=row-p.rows_.begin();Rect cell=row->parts[part];
+    auto click=[&] {
+      Rect panel=p.panel_rect();p.take_actions();
+      p.mouse_move(panel.x+cell.cx(),panel.y+cell.cy(),now);
+      p.mouse_down(panel.x+cell.cx(),panel.y+cell.cy(),now);
+      p.mouse_up(panel.x+cell.cx(),panel.y+cell.cy(),now);
+      auto actions=p.take_actions();assert(actions.size()==1&&actions[0].a==PA::Shuffle);
+      assert((actions[0].v>.5)==p.in.shuffle);run(p,now,.2);
+    };
+    click();assert(p.in.shuffle && p.panel_==PlayView::Panel::More);
+    const auto& on=p.layers[PlayView::L_PANEL].c;
+    const int mark_x=cell.cx(),mark_y=std::lround(cell.b()-2*scale);
+    uint32_t mark=on.px[(size_t)mark_y*on.w+mark_x];
+    assert((mark>>24)>240 && ((mark>>16)&255)>200);
+    assert(p.rows_[row_index].segs[part]==tr(str::tip_shuffle_on));
+    click();assert(!p.in.shuffle);
+    const auto& off=p.layers[PlayView::L_PANEL].c;
+    assert(off.px[(size_t)mark_y*off.w+mark_x]!=mark);
+  }
+  std::puts("Mini card: compact rows, labels, cover/grip, menu scale, title motion and persistent shuffle state passed");
 }

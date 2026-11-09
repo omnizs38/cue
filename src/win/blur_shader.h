@@ -306,7 +306,7 @@ vec4 hook() {
     // Pair adjacent taps through bilinear filtering: no sparse square-grid replicas.
     vec3 sum = original.rgb;
     float norm = 1.0;
-    for (int i=1; i<=21; i+=2) {
+    for (int i=1; i<=13; i+=2) {
         float a=float(i), b=a+1.0;
         float wa=exp(-0.5*a*a/49.0), wb=exp(-0.5*b*b/49.0);
         float weight=wa+wb;
@@ -332,7 +332,7 @@ vec4 hook() {
     if (cloud_alpha < 0.0001 || q.x>cloud_rx || q.y>cloud_ry) return original;
     vec3 sum=original.rgb;
     float norm=1.0;
-    for (int i=1; i<=21; i+=2) {
+    for (int i=1; i<=13; i+=2) {
         float a=float(i), b=a+1.0;
         float wa=exp(-0.5*a*a/49.0), wb=exp(-0.5*b*b/49.0);
         float weight=wa+wb;
@@ -494,11 +494,11 @@ vec4 hook() {
     float jit = fract(sin(dot(p * LIT_MASK_size, vec2(12.9898, 78.233))) * 43758.5453);
     vec3 sum = vec3(0.0);
     float w = 1.0, norm = 0.0;
-    for (int i = 0; i < 32; i++) {
-        vec2 s = mix(p, a, (float(i) + jit) / 32.0 * reach);
+    for (int i = 0; i < 16; i++) {
+        vec2 s = mix(p, a, (float(i) + jit) / 16.0 * reach);
         sum += LIT_MASK_tex(s).rgb * w;
         norm += w;
-        w *= 0.915;
+        w *= 0.837;
     }
     return vec4(sum / norm, 1.0);
 }

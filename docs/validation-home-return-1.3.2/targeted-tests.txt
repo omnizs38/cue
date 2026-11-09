@@ -1,0 +1,11 @@
+ambient checks passed: replacement recovery, stale replies rejected, exact premultiplied raster, smooth 30 Hz transition
+Close iris: curve, continuity from an opening iris, dock, cancel and reduced motion passed
+Fullscreen: live viewport mapping, analytic spring overshoot/landing at 60/120/144 Hz, renderer gate and 16:9 home passed
+Glide clock: steady frames, a stall at the start is one frame, jitter untouched, 60/144 Hz, restart passed
+Media geometry: complete per-file dimensions, unchanged width/height, repeated formats, portrait/square/rotation, stale reply rejection and the shape at load passed
+Motion/cadence: finite subtitle motion and continuous clearance, continuous reversal, 60 Hz deadlines with timer jitter, no alternate upload skips, lighter cloud geometry and subtitle return in both modes passed
+window drag checks passed: native handoff clears custom gesture, late release does not pause, next click works, idle resumes
+Portrait bar: 140 vertical windows (9:16 to 5:6) at four sizes and four window scales, bar about 15% smaller passed
+Portrait panels: menus, subtitles and up next at the raised bar's scale, constrained to the window (60 windows) passed
+Bar placement: drag without background, Shift centres a dragged bar, narrow windows centre, in-place width changes stay centred, the compact music bar reads, close music framings reach the edges, a small log, the mini player's place and flight, smoothing's timing, music framed close as one group, a song's mini card and its list, the wide composition centred, soft jumps passed
+All 10 targeted regression executables passed

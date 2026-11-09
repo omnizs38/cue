@@ -1,0 +1,12 @@
+AssertionError [ERR_ASSERTION]: a superseded queue revision must not enter the wheel
+
+1 !== -1
+
+    at <source>/tests/remote_fetch_test.cjs:25:10 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: 1,
+  expected: -1,
+  operator: 'strictEqual',
+  diff: 'simple'
+}

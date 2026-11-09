@@ -369,6 +369,7 @@ enum Id : uint16_t {
   keys_play_pause,
   keys_seek,
   keys_seek_long,
+  keys_seek_percent,
   keys_volume,
   keys_mute,
   keys_speed,

@@ -15,6 +15,10 @@ int main() {
       for (double ar : {16.0 / 9, 2.0, 1.5, 1.25, 1.2}) {
         const int ch = (int)std::lround(cw * ar);
         for (double base : {1.0, 2.0, 3.0, 4.0}) {
+          if (!compact_video_dock(base, cw, ch)) {
+            assert(portrait_scale(base, cw, ch, choice) == base);
+            continue;  // a tall but roomy window retains the regular controls
+          }
           const double old_want_b = std::floor(cw * before[i] / kCompactDockW * 2) / 2;
           const double old_ps = std::max(base, std::min(old_want_b, base + 2));
           const double ps = portrait_scale(base, cw, ch, choice);
@@ -30,9 +34,8 @@ int main() {
         ++checked;
       }
   }
-  // a little taller than wide (5:6): the landscape dock's rule, 15% off; square and wider: unchanged
-  assert(portrait_scale(3.0, 1000, 1100, kDefaultUiSize) < portrait_scale(3.0, 1100, 1000, kDefaultUiSize) ||
-         portrait_scale(3.0, 1100, 1000, kDefaultUiSize) < 2);
+  // A snapped desktop window a little taller than wide keeps its regular scale.
+  assert(portrait_scale(3.0, 1000, 1100, kDefaultUiSize) == 3.0);
   assert(portrait_scale(2.5, 1675, 1675, kDefaultUiSize) == 3.0 && portrait_scale(2.5, 1675, 942, kDefaultUiSize) == 2.5);
   std::printf("Portrait bar: %d vertical windows (9:16 to 5:6) at four sizes and four window scales, bar about 15%% smaller passed\n", checked);
 }

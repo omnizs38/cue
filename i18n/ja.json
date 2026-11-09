@@ -368,6 +368,7 @@
   "keys.play_pause": "再生 / 一時停止",
   "keys.seek": "5 秒戻る / 進む",
   "keys.seek_long": "30 秒戻る / 進む",
+  "keys.seek_percent": "動画の0～90%に移動",
   "keys.volume": "音量",
   "keys.mute": "ミュート",
   "keys.speed": "遅く / 速く",

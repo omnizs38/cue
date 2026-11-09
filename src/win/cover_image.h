@@ -24,6 +24,7 @@ bool decode_image(const std::string& data, std::vector<uint32_t>& px, int& w, in
 // The last few songs are kept in memory (never on disk), so going back to one is instant.
 struct CoverJob {
   std::atomic<bool> done{false};
+  bool cancelled = false;  // published with done; a queued request was superseded
   bool found = false;  // a cover, bars or not
   double x = 0, y = 0, w = 1, h = 1;
   int full_w = 0, full_h = 0;
@@ -39,6 +40,7 @@ std::shared_ptr<CoverJob> request_cover(const std::string& path);
 #include "../core/cover_turn.h"
 struct CoverArtJob {
   std::atomic<bool> done{false};
+  bool cancelled = false;  // published with done; retry if still visible
   std::shared_ptr<const CoverArt> art;
   int side = 0;
 };

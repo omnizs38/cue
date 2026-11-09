@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.3.2 — 2026-11-09
+
+- the phone clock anchors before changing play/pause state, ignores opposing stale pause positions while awaiting confirmation, and starts replay from zero. unavailable gestures no longer change optimistic playback state.
+
+- phone seeks and previews work independently of the minimized PC's animation loop. audio transitions finish without hidden shader animation, and remote file opens no longer wait for the hidden home animation.
+- delayed seeks are cancelled across file changes; file shape changes made while minimized apply when the window is restored.
+
+- returning from a portrait video to the home avoids halo geometry rebuilds during resizing and prepares recent rows before the window starts moving.
+
+- phone remote recovers after idle, screen lock, browser suspension and network return; retries keep one active attempt and never replay old commands.
+- transient pairing failures retain the unconfirmed code within its validity window. a page's replacement connection retires its older session.
+- paused phone controls avoid redundant UI rebuilds; the server shares current state frames and skips unnecessary snapshot copies.
+
+- timeline previews load on demand, reuse a bounded cache and keep their image and size stable while you move the pointer. each preview shows its actual sample time; clicks still seek precisely.
+- split-screen and portrait windows keep usable controls across interface sizes and display scales. mini-player previews stay inside the window.
+- repeat and shuffle keep a visible active marker, including in compact menus. repeat-one also shows a small 1.
+- number keys 0–9 jump to 0–90% of a video. music, mini players, open panels and active drags keep their existing controls.
+- seeking recovers when the engine rejects a request. changing files or making a precise jump clears older pending destinations.
+- music titles and artists reuse their rendered text during animation. lighting reads audio levels asynchronously and discards old readings after track changes, seeks and pauses.
+- cover loading uses bounded background workers and reuses current requests. failed cover jobs stop requesting animation frames; hidden players do not start card-cover prefetches.
+- minimizing during a music-card turn settles the animation and keeps the selected track change.
+- late screenshots from a previous video cannot replace the current windows media-card image.
+- settings hints stay inside a stable panel, respect reduced motion and enter with a short animation. volume boost above 100% keeps its orange indication with either control style.
+
+
 ## 1.3.1 — 2026-11-06
 
 - A click on the timeline is one exact jump. The press used to send a quick keyframe jump (meant

@@ -73,5 +73,21 @@ int main() {
     assert(p.iris_closed(1));
     reduce_motion() = false;
   }
+  {  // Music fades as one composition (cover, spectrum, room and audio), also when paused.
+    for (bool paused : {false, true}) {
+      PlayView p; p.in.audio_only = true; p.in.paused = paused;
+      p.resize(1280, 720, 2); p.reset(10);
+      assert(p.close_opacity(10) == 1);
+      p.close_iris(10);
+      double last = 1;
+      for (int i = 0; i <= 30; ++i) {
+        const double opacity = p.close_opacity(10 + i / 120.0);
+        assert(opacity >= 0 && opacity <= last && opacity <= 1);
+        last = opacity;
+      }
+      assert(last == 0 && p.close_opacity(12) == 0); // held black through asynchronous stop
+      p.cancel_close(); assert(p.close_opacity(12) == 1);
+    }
+  }
   puts("Close iris: curve, continuity from an opening iris, dock, cancel and reduced motion passed");
 }

@@ -370,6 +370,7 @@
   "keys.play_pause": "Wiedergabe / Pause",
   "keys.seek": "5 s zurück / vor",
   "keys.seek_long": "30 s zurück / vor",
+  "keys.seek_percent": "zu 0–90% des videos springen",
   "keys.volume": "Lautstärke",
   "keys.mute": "stumm",
   "keys.speed": "langsamer / schneller",

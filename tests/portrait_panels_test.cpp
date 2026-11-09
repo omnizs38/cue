@@ -1,6 +1,6 @@
 // A portrait (or square) window raises the control bar to fill the width; its menus, the subtitle
-// list and up next do not follow it: they keep the window's own scale, or a size that suits the
-// width (a menu about half of it), never bigger than the bar and never past the window.
+// list and up next follow that approved scale when it fits, and step down for the window's
+// width or height; never bigger than the bar and never past the window.
 #define private public
 #include "../src/ui/play.h"
 #undef private
@@ -39,8 +39,8 @@ int main() {
   // a landscape window: nothing changes (menus at the bar's own scale)
   PlayView l; l.set_base_scale(2); l.resize(1920, 1080, 2); assert(l.panel_s() == 2);
   // the portrait window of the report: the bar at 3 (3.5 before it was made 15% smaller), its menus
-  // at the window's own 2.5 (half way, in half steps)
+  // at the approved bar's 3.0 (20% larger than the previous 2.5)
   PlayView v; v.set_base_scale(2.5); v.resize(980, 1700, portrait_scale(2.5, 980, 1700, 2));
-  assert(v.s_ == 3.0 && v.panel_s() == 2.5);
-  std::printf("Portrait panels: menus, subtitles and up next half way between the window's scale and a raised bar's (%d windows) passed\n", checked);
+  assert(v.s_ == 3.0 && v.panel_s() == 3.0);
+  std::printf("Portrait panels: menus, subtitles and up next at the raised bar's scale, constrained to the window (%d windows) passed\n", checked);
 }

@@ -36,17 +36,21 @@ while ($watch.Elapsed.TotalSeconds -lt $Seconds) {
       if (-not [CueResourceProbe.Native]::GetProcessIoCounters($process.Handle,[ref]$io)) { continue }
       $time = $watch.Elapsed.TotalSeconds
       $key = '{0}:{1}' -f $process.Id,$process.StartTime.Ticks
-      $readRate = 0.0; $writeRate = 0.0
+      $readRate = 0.0; $writeRate = 0.0; $cpuPercent = 0.0
+      $cpuSeconds = $process.TotalProcessorTime.TotalSeconds
       if ($previous.ContainsKey($key)) {
         $last = $previous[$key]; $delta = $time - $last.Time
         if ($delta -gt 0) {
+          $cpuPercent = [Math]::Max(0.0,100.0*($cpuSeconds-$last.Cpu)/$delta/[Environment]::ProcessorCount)
           $readRate = [Math]::Max(0.0,([double]$io.ReadBytes-$last.Read)/$delta/1MB)
           $writeRate = [Math]::Max(0.0,([double]$io.WriteBytes-$last.Write)/$delta/1MB)
         }
       }
-      $previous[$key] = @{Time=$time; Read=[double]$io.ReadBytes; Write=[double]$io.WriteBytes}
+      $previous[$key] = @{Time=$time; Read=[double]$io.ReadBytes; Write=[double]$io.WriteBytes; Cpu=$cpuSeconds}
       $rows.Add([pscustomobject]@{
         Seconds=[Math]::Round($time,2); ProcessId=$process.Id
+        CpuPercent=[Math]::Round($cpuPercent,2)
+        Threads=$process.Threads.Count; Handles=$process.HandleCount
         PrivateMiB=[Math]::Round($process.PrivateMemorySize64/1MB,2)
         WorkingSetMiB=[Math]::Round($process.WorkingSet64/1MB,2)
         LogicalReadMiBPerSecond=[Math]::Round($readRate,3)

@@ -6,6 +6,7 @@ class PlaybackWarmup {
  public:
   static constexpr double kDelay = 3.0;
   static constexpr double kAtmosphereDelay = 1.5;
+  static constexpr double kPreviewWarmupDelay = 0.25;
   void reset() { first_frame_at_ = -1; }
   void first_frame(double now) { if (first_frame_at_ < 0) first_frame_at_ = now; }
   bool ready(double now, bool transitioning, double delay = kDelay) const {

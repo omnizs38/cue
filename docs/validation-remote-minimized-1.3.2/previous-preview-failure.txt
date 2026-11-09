@@ -1,0 +1,7 @@
+test: /tmp/cue-hidden-playback-t04xxw_s/test.cpp:338: int main(): Assertion `a.thumbs_.shots.size()==1 && a.thumbs_.shots[0]==23 && a.thumb_want_<0' failed.
+Traceback (most recent call last):
+  File "/workspace/scratch/2ed1b5380997/minimized-before/preview_regression.py", line 178, in <module>
+    subprocess.run([str(exe)],check=True)
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/subprocess.py", line 571, in run
+    raise CalledProcessError(retcode, process.args,
+subprocess.CalledProcessError: Command '['/tmp/cue-hidden-playback-t04xxw_s/test']' died with <Signals.SIGABRT: 6>.

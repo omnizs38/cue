@@ -109,6 +109,7 @@ struct State {
   std::string title, artist;     // music: the song's title and artist (as the computer shows them)
   double pos = 0, dur = 0, speed = 1, volume = 100;
   bool paused = true, muted = false, ended = false, audio_only = false;
+  uint64_t media = 0;  // changes on every open/home, even for identical basenames
   uint32_t cover = 0;  // music: changes with each song that has a cover; 0 = no cover
   bool has_subs = false, subs_on = false;
   double sub_delay = 0;
@@ -135,6 +136,10 @@ struct Command {
   double v = 0;
   bool has_v = false;
   int to=-1;
+  uint64_t media = 0;
+  bool has_media = false;
+  std::string credential;  // internal connection identity
+  bool path_validated = false;  // internal only; never accepted from JSON
   std::string path;
 };
 bool parse_command(std::string_view json, Command& out);

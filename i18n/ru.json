@@ -374,6 +374,7 @@
   "keys.play_pause": "играть / пауза",
   "keys.seek": "назад / вперёд на 5 с",
   "keys.seek_long": "назад / вперёд на 30 с",
+  "keys.seek_percent": "перейти к 0–90% видео",
   "keys.volume": "громкость",
   "keys.mute": "без звука",
   "keys.speed": "медленнее / быстрее",

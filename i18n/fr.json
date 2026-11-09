@@ -371,6 +371,7 @@
   "keys.play_pause": "lecture / pause",
   "keys.seek": "reculer / avancer de 5 s",
   "keys.seek_long": "reculer / avancer de 30 s",
+  "keys.seek_percent": "aller à 0–90% de la vidéo",
   "keys.volume": "volume",
   "keys.mute": "couper le son",
   "keys.speed": "plus lent / plus rapide",

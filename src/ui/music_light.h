@@ -32,6 +32,7 @@ class MusicLight {
   static constexpr double kMaxWave = 0.5;
 
   void reset();
+  void discard_readings() { pending_.clear(); have_ = false; fast_ = slow_ = 0; }
   // a reading made at `now` (app clock), heard `latency` seconds later; rms in dBFS (-inf ok),
   // zcr 0..1 (zero crossings per sample)
   void feed(double now, double rms_db, double zcr, double latency);

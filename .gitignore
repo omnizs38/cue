@@ -13,5 +13,4 @@ state.json.*
 !.env.example
 __pycache__/
 *.pyc
-*.orig
 /dist/

@@ -5,16 +5,19 @@
 // FILE_LOADED. It is not a failure of the new load; a stop while seeking is.
 class PreviewWait {
  public:
-  enum class Event { Other, Loaded, Restart, Stop, End, Shutdown };
+  enum class Event { Other, Loaded, Seek, Restart, Stop, End, Shutdown };
   enum class Result { Pending, Ready, Failed };
-  explicit PreviewWait(bool loading) : loading_(loading) {}
-  Result consume(Event event) const {
+  explicit PreviewWait(bool loading, bool require_seek = false) : loading_(loading), seek_seen_(!require_seek) {}
+  Result consume(Event event) {
+    if (event == Event::Seek) seek_seen_ = true;
+    if (!loading_ && event == Event::Restart && !seek_seen_) return Result::Pending;
     if (event == (loading_ ? Event::Loaded : Event::Restart)) return Result::Ready;
     if (event == Event::Shutdown || event == Event::End || (!loading_ && event == Event::Stop)) return Result::Failed;
     return Result::Pending;
   }
  private:
   bool loading_;
+  bool seek_seen_;
 };
 
 // All asynchronous preview replies belong to exactly one media load.

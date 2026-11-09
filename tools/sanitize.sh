@@ -11,7 +11,7 @@ for src in src/core/*.cpp src/ui/*.cpp installer/setup_ui.cpp; do
   g++ $F -c "$src" -o "$o" || echo "FAILED compile $src"
   objs+=("$o")
 done
-export ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=print_stacktrace=1
+export ASAN_OPTIONS=${ASAN_OPTIONS:-detect_leaks=1} UBSAN_OPTIONS=${UBSAN_OPTIONS:-print_stacktrace=1}
 bad=0
 for t in tests/*_test.cpp; do
   [[ $t == tests/*_engine_test.cpp || $t == tests/ui_language_win_test.cpp ]] && continue

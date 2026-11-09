@@ -68,15 +68,18 @@ int main(int argc, char**) {
     click.mouse_move(x, y, 1);
     click.take_actions();
     click.mouse_down(x, y, 1);
+    const double target_t = click.in.dur * 0.5;
     click.mouse_move(x + jitter, y, 1.02);
     click.mouse_move(x + jitter, y, 1.03);  // Windows repeats a move at the same place
     click.mouse_up(x + jitter, y, 1.08);
     int previews = 0, commits = 0;
+    double committed_t = -1;
     for (auto action : click.take_actions()) {
       previews += action.a == PA::SeekAbs;
-      commits += action.a == PA::SeekAbsExact;
+      if (action.a == PA::SeekAbsExact) { ++commits; committed_t = action.v; }
     }
     assert(previews == 0 && commits == 1);
+    assert(std::fabs(committed_t - target_t) < 1e-6);
   }
 
   PlayView view;

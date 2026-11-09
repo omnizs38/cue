@@ -1,7 +1,7 @@
 # Install the source-built engine from the matching Cue Windows/source package.
 param([string]$Dest = "build\Cue", [Parameter(Mandatory=$true)][string]$LocalDll)
 $ErrorActionPreference = "Stop"
-$expected = "26fa28434e30aa319a8ab39fba76dbc4a84757b89349c1fc69b5e55ea6c02bca"
+$expected = "7bf665b49e5f60473c7338e3aebb6975a5b854129b47bb8f393ca78656277418"
 $dll = (Resolve-Path -LiteralPath $LocalDll).Path
 if ((Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) {
   throw "This DLL does not match Cue engine build 1.1.4. Check the version and manifest."

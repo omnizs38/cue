@@ -22,6 +22,8 @@ The video occupies a child window. Mouse events are forwarded without blocking t
 
 `SingleInstance` holds a per-session mutex, released by `quit_now` once the state is saved (the window is hidden first, with Windows' own closing animation; the engine ends behind it). Later launches send UTF-8 paths through `WM_COPYDATA` and exit before loading the engine. Requests received during startup wait in `pending_open_`. Preview-host and registration helper modes bypass this path.
 
+Number keys 0–9 jump to 0–90% of a finite-duration video using the existing asynchronous exact-seek path, regardless of length. Mini players, music, open panels, modifiers, active drags/transitions and inactive/loading native windows reject these jumps. Win32 and mpv bindings cover both number rows; mpv uses `nonrepeatable` bindings and Win32 rejects held-key repeats. Ctrl+0 keeps its interface-size reset. The shortcut sheet documents the video-only keys.
+
 A single click sends pause/resume immediately. A recognized double-click restores the starting playback state before toggling fullscreen; a brief state change between clicks remains possible.
 
 ## Rendering and motion
@@ -38,9 +40,9 @@ Fullscreen uses shader parameters `cue_on`, `cue_dark`, `cue_px`, and `cue_gray`
 
 ## Previews and ambient lighting
 
-`Cue.exe --thumb-host` runs a separate low-priority, CPU-only engine for timeline previews and scene-color samples. Two pipes carry one request at a time; generation IDs reject stale responses. A job object ties its lifetime to Cue. Failure removes previews without stopping playback.
+`Cue.exe --thumb-host` runs a separate low-priority, CPU-only engine for timeline previews and scene-color samples. Two pipes carry one active decode and a replaceable latest destination; generation and request IDs reject stale responses. The helper reads commands independently of decoding and checks for superseding work every 10 ms while waiting for engine events. A job object ties its lifetime to Cue. Failure removes previews without stopping playback.
 
-Color sampling starts 1.5 seconds after the first frame; thumbnails wait 3 seconds. Both restart on file changes. Hover output is reduced before pipe transfer/cache storage, while color-sampling resolution stays unchanged. As of 1.1.1, timeline requests are on demand with a 12 MiB / 256-entry LRU cache; colour-only probes are transient, and there is no speculative full-timeline scan.
+Color sampling starts 1.5 seconds after the first frame. The preview helper warms up after the first frame/reveal and a 250 ms playback delay; an explicit hover can start as soon as the reveal settles. Navigation requests use a stable one-second interval and a fast keyframe seek, with the actual returned time stored alongside each image. A new hover dispatches immediately when navigation is idle; subsequent destinations are coalesced to at most 30 Hz. Active navigation finishes before the latest destination is dispatched, preventing seek starvation; colour work is preemptible. Only a result matching the current destination is displayed. File changes and close still cancel old work. The 12 MiB / 256-entry RAM cache remains bounded, without speculative lookahead or a full-timeline scan. Each hover epoch clears its display and rejects stale replies; a cache miss within a continuous hover retains the current picture and geometry until replacement, with its own timestamp. New hovers clear pixels while keeping the per-file card aspect. Known video geometry reserves the first card; the view retains small source pixels and scales into the tooltip canvas on content changes. Previews fit the mini player, remain below its window buttons and clear of its dock; music remains time-only. The helper returns below normal CPU priority after each navigation operation. Main-player clicks remain precise, and colour probes retain exact seeking. Timing fields in the helper protocol support the separate Windows CPU/GPU diagnostic. See [thumbnail policy](THUMBNAILS-2026-11-08.md).
 
 `atmosphere.cpp` chooses representative scene colors and smooths changes. Ambient lighting uses click-through layered windows below the player, cached geometry and color ramps, and approximately 30 Hz updates. Dragging reuses existing images and defers sampling/rebuilds until the gesture ends. The halo's shape is built for the whole window once per size; its layered surfaces hold only the part on the virtual screen. When a move reveals a part the surfaces lack, they are cut again from the shape at once (the whole strips while the window is held), and trimmed back a moment after it settles.
 
@@ -83,6 +85,12 @@ Asset generators: `gen_assets.py`, `gen_action_icons.py`, `build_fonts.py`, and 
 [Languages](LANGUAGES.md) · [Performance and evidence](PERFORMANCE.md) · [Release process](UPDATES.md)
 
 ## Mini player
+
+Shuffle in the compact music menu includes its state in the icon highlight and keeps a bright marker beneath it while enabled, including while hovered. Its label changes to the enabled wording. The existing stored preference and ShuffleDeck continue to control playback.
+
+Repeat carries the same persistent marker in the overflow menu as shuffle. The bar and menu
+both add a small numeral for repeat-one, including a file without a multi-item queue; repeat-list
+uses the plain loop icon. Both presentations use the existing off/list/one cycle and actions.
 
 The mini players are laid out in art px: a film's needs about 288 x 162 of them, a song's card
 `kCardMinW x kCardMinH` (250 x 130, its title above the playback). Their windows keep a mini
@@ -164,6 +172,8 @@ song's scene until its own is known (its `apply_smooth()` redraws the interface 
 list button's count is a tag (`queue_badge_*`); `layout_badge_` relays when its digits change.
 
 ## Settings
+
+The visual-hints toggle retains a 200-art-pixel base width in both states, avoiding a sideways shift when its preview appears. The whole hint block enters over 140 ms with a 3-art-pixel rise and fade at UI cadence, then releases its animation state. Its temporary canvas clips the hint picture, glow and labels to their own area, including the horizontal side column, and is released when hidden/closed. Reduced motion presents it immediately; toggling emits only the settings preference action, without native window movement.
 
 "..." holds the file (open, close) and places to go (phone remote, settings last).
 `Panel::Settings` holds the kept choices: music's looks (for music), the ambient light and its
@@ -439,9 +449,14 @@ Minimizing changes nothing in the engine: rebuilding the picture's chain (a slow
 switching a film's `video-sync` made the sound stall for a moment both ways. Only Cue's poll goes
 to 4 Hz; a film under a full-screen window keeps `video-sync=audio` as before.
 
-Portrait and square windows raise the control bar's scale (`portrait_scale`); the panels take
-`PlayView::panel_s()`, half way between the window's own scale (`set_base_scale`) and the bar's,
-in half steps and within about 72% of the width; up next in a portrait window is the bar's width.
+Narrow portrait and square windows raise the control bar's scale (`portrait_scale`). A window
+less than 15% taller than wide keeps the regular dock: Windows Snap must not force a
+desktop-width bar into a tiny column. Clear portrait proportions, up to 3:4, keep the
+compact composition regardless of DPI or art-canvas width. Between those proportions,
+a 400-art-pixel width decides whether the regular controls fit.
+The same `compact_video_dock` decision controls scale and layout. The panels take
+`PlayView::panel_s()`, matching the approved bar scale when width permits,
+in half steps and within about 80% of the width; up next in a portrait window is the bar's width.
 
 ## Windows media controls
 
@@ -456,3 +471,35 @@ reach `C = 8 px × dpi / 96 + 1` under the window and light only the wedges outs
 the arc, at full edge strength and with the corner's colour; the left and right
 strips start and end `C` px further in, so no pixel is lit twice. With square
 corners (Windows 10, maximized) those pixels stay hidden under the player.
+
+## 1.3.2 stability and performance follow-up
+
+Music lighting reads the complete `af-metadata/cuelvl` map asynchronously, at
+most one query in flight at the existing poll cadence. File/seek/pause/hidden
+transitions invalidate old inputs without resetting the visible crossfade. Music
+text rendering compares cached fields rather than allocating a concatenated key
+per frame. Two lazy cover workers, each with four waiting slots, replace per-job
+threads; obsolete queued work is discarded and still-needed requests are retried.
+A hidden card turn is settled before the UI frame loop suspends.
+
+`SeekDispatch` owns one accepted keyframe seek and one latest destination; a
+rejected enqueue never occupies the slot. Opening a file, returning home and
+exact/relative seeks clear superseded destinations. Media-card screenshots carry
+unique request IDs, so old files cannot publish a new card image. See the
+[review and evidence](PERFORMANCE-REVIEW.md) for validation limits.
+
+## Remote reconnection and bounded filesystem work (1.3.2)
+
+Phone connections have an authentication deadline and foreground ping/pong
+liveness checks. Foreground/network restoration replaces the old socket and
+requests authoritative state without replaying commands. Continuous controls
+coalesce by kind; media generations prevent delayed playback commands and
+optimistic state from crossing an open, including identical filenames.
+
+`core/async_worker.h` owns a bounded FIFO and shared thread state. Folder discovery
+uses one active read plus one replaceable destination. Remote path validation
+uses a separate lane with at most 128 outstanding jobs; only completed, current
+permission/navigation/import generations can reach the UI. Stop and queue clear
+invalidate pending work. Shutdown does not join blocked filesystem calls.
+See [remote stability review](REMOTE-STABILITY-REVIEW.md) for the findings,
+validation evidence and native test limits.

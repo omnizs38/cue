@@ -1,0 +1,1 @@
+remote async: stale queue revisions, cover cancellation/retry/release, selection debounce and settled-disc cadence passed

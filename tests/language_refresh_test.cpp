@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cstdio>
 #include <filesystem>
+#include "source_root.h"
 #include <fstream>
 #include <sstream>
 
@@ -47,7 +48,7 @@ int main(int argc, char** argv) {
   // the home's recent list is written again (its lines are built by the app)
   // Resolve the source tree from the executable's place (build/tests/…), so the
   // test also passes when launched from another directory.
-  std::filesystem::path root = std::filesystem::absolute(exe).parent_path().parent_path().parent_path();
+  std::filesystem::path root = source_root(exe.string().c_str());
   std::ifstream f(root / "src/win/app.cpp");
   std::stringstream ss; ss << f.rdbuf();
   const std::string s = ss.str();

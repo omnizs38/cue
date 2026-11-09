@@ -369,6 +369,7 @@
   "keys.play_pause": "播放 / 暂停",
   "keys.seek": "后退 / 前进 5 秒",
   "keys.seek_long": "后退 / 前进 30 秒",
+  "keys.seek_percent": "跳转至视频的 0–90%",
   "keys.volume": "音量",
   "keys.mute": "静音",
   "keys.speed": "更慢 / 更快",

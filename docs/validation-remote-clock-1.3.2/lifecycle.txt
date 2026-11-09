@@ -1,0 +1,5 @@
+1000 volume inputs => 2 messages; latest value retained
+remote lifecycle: final command ordering, bounded coalescing, no reconnect replay, socket identity, heartbeat/deadline, backpressure and media generations passed
+remote recovery: 12 simulated hours, 200 sleep/resume cycles, freeze, offline, transient pairing, event deduplication and stale deadlines passed
+remote idle: paused UI rebuilds eliminated; cover retry and delayed timeline refresh preserved
+phone clock: pause/resume anchoring, 2x playback, stale pause snapshots, media replacement, replay and disconnected gestures passed

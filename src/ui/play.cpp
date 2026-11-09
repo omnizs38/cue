@@ -31,6 +31,7 @@ constexpr double kCardListGap = 13;  // art px: the card's artist to its list's 
 constexpr int kMiniRowH = 40, kMiniSide = 10, kMiniFoot = 8;  // art px
 // Settings with its picture beside the rows (a short window): the picture's column, art px
 constexpr int kSettingsSide = 196;
+constexpr double kHintsEnter = 0.14;
 // music's bar along the window's foot (the timeline over the buttons), and the card's inset
 constexpr int kMusicDockH = 48, kCardInset = 4;  // art px
 // Up next in roomy windows (from this width, art px): this wide, kept this far below the top.
@@ -173,7 +174,8 @@ void PlayView::layout_dock() {
   // when nothing fits, the bar becomes the mini player. Every key keeps working throughout.
   struct Fold { int vol_w; bool speed, loop, queue, audio, cc, steps, mini, shuffle; };
   struct Left { int vol_w; bool speed; };
-  const Left lefts[] = {{49, true}, {30, true}, {30, false}, {0, false}};
+  const bool portrait = !music && compact_video_dock(s_, w_, h_);
+  const Left lefts[] = {{portrait ? 0 : 49, true}, {portrait ? 0 : 30, true}, {portrait ? 0 : 30, portrait}, {0, false}};
   // right side: how many of loop, queue, audio, subtitles remain (dropped in that order)
   std::vector<int> right_ids;  // the optional right buttons, in the order they leave
   // (the mini player's button, films and music alike: one click away; it is the first to step
@@ -224,6 +226,7 @@ void PlayView::layout_dock() {
     const double mx = std::max<double>(kMargin, W * 0.05);
     DW = std::max(need_full + kHyst, std::min(W - 2 * mx, 1500.0));
   }
+  if (portrait) DW = std::min(DW, std::max(need(n_left - 1, n_right - 1, true) + 40.0, 230.0));
   DW = std::min(DW, (double)avail);
   // mini player: the window cannot hold even the folded bar (or is too short for it); leaving
   // it asks for a little room to spare, so a window at the edge does not flicker between them
@@ -281,6 +284,7 @@ void PlayView::layout_dock() {
     // as its icon; the rest is in "..." (full screen too: a double click still does it)
     music_compact_ = stack_ || card_;
     if (music_compact_) { fold_left_ = n_left - 1; fold_right_ = n_right - 1; }
+    if (portrait) fold_right_ = n_right - 1;
     const Left& L = lefts[fold_left_];
     F.vol_w = L.vol_w; F.speed = L.speed; F.steps = steps;
     auto kept = [&](int id) {
@@ -694,25 +698,30 @@ void PlayView::render_dock() {
 
   bool muted = in.muted || in.volume <= 0;
   icon(B_VOL, muted ? "sound-off" : "sound-on");
-  if (Rect r = rect_of(B_VOLBAR); r.w > 6 * s && al(B_VOLBAR) > 0) {
-    const double va = al(B_VOLBAR);
-    int bx = r.x + 2 * s, bw = r.w - 4 * s, by = r.cy() / s * s - s;
-    c.fill(bx, by, bw, 2 * s, p.faint, lerp(1., .28, ink_white) * va);
-    double v = muted ? 0 : std::clamp(in.volume / kVolMax, 0.0, 1.0);
-    int fw = (int)std::lround(bw * v / s) * s;
-    int f100 = (int)std::lround(bw * 100 / kVolMax / s) * s;  // where the natural level ends
-    double h = vol_drag_ ? 1.0 : std::max(hv(B_VOLBAR), hv(B_VOL));
-    Rgb fillc = mix(mix(p.dim, acc, 0.5), acc, h);
-    c.fill(bx, by, std::min(fw, f100), 2 * s, fillc, va);
-    // the booster stretch: past 100% the line turns warm, so you always see you are pushing it
-    Rgb boost = mix(Rgb{255, 170, 90}, in.accent, 0.25 * std::clamp(in.accent_k, 0.0, 1.0));
-    if (fw > f100) c.fill(bx + f100, by, fw - f100, 2 * s, mix(mix(p.dim, boost, 0.6), boost, h), va);
-    // a small notch marks 100%, a point the handle sticks to
-    c.fill(bx + f100, by - s, s, s, fw > f100 ? boost : p.faint, (fw > f100 ? 0.9 : 0.6 + 0.4 * h) * va);
-    int handle_h = (7 + (int)std::lround(2 * h)) * s;
-    c.fill(bx + fw - s, r.cy() - handle_h / 2, 2 * s, handle_h,
-           fw > f100 ? mix(acc_px, boost, 0.7) : mix(p.dim, acc_px, 0.65 + 0.35 * h), va);
-  }
+  // Draw after the white-ink pass so the volume boost keeps its semantic colour.
+  auto volume_slider = [&] {
+    auto neutral = [&](Rgb colour) { return mix(colour, {255,255,255}, style_mix_); };
+    if (Rect r = rect_of(B_VOLBAR); r.w > 6 * s && al(B_VOLBAR) > 0) {
+      const double va = al(B_VOLBAR);
+      int bx = r.x + 2 * s, bw = r.w - 4 * s, by = r.cy() / s * s - s;
+      c.fill(bx, by, bw, 2 * s, neutral(p.faint), lerp(1., .28, ink_white) * va);
+      const bool boosted = !muted && in.volume > 100;
+      double v = muted ? 0 : std::clamp(in.volume / kVolMax, 0.0, 1.0);
+      int fw = (int)std::lround(bw * v / s) * s;
+      int f100 = (int)std::lround(bw * 100 / kVolMax / s) * s;  // where the natural level ends
+      double h = vol_drag_ ? 1.0 : std::max(hv(B_VOLBAR), hv(B_VOL));
+      Rgb fillc = mix(mix(p.dim, acc, 0.5), acc, h);
+      c.fill(bx, by, std::min(fw, f100), 2 * s, neutral(fillc), va);
+      // the booster stretch: past 100% the line turns warm, so you always see you are pushing it
+      Rgb boost = mix(Rgb{255, 170, 90}, in.accent, 0.25 * std::clamp(in.accent_k, 0.0, 1.0));
+      if (fw > f100) c.fill(bx + f100, by, fw - f100, 2 * s, mix(mix(p.dim, boost, 0.6), boost, h), va);
+      // a small notch marks 100%, a point the handle sticks to
+      c.fill(bx + f100, by - s, s, s, boosted ? boost : neutral(p.faint), (boosted ? 0.9 : 0.6 + 0.4 * h) * va);
+      int handle_h = (7 + (int)std::lround(2 * h)) * s;
+      c.fill(bx + fw - s, r.cy() - handle_h / 2, 2 * s, handle_h,
+             boosted ? mix(acc_px, boost, 0.7) : neutral(mix(p.dim, acc_px, 0.65 + 0.35 * h)), va);
+    }
+  };
   {
     // an active queue takes the film's colour, like subtitles that are on
     double k = queue_mark_.v > 0 ? ease_out(queue_mark_.v) : 0.0;
@@ -756,7 +765,7 @@ void PlayView::render_dock() {
       int dx = (int)((r.x + r.w / 2) / s) * s + (int)std::lround(magx_[B_LOOP].x);
       int dy = (int)((r.y + (r.h + 7 * s) / 2) / s) * s + 2 * s + (int)std::lround(magy_[B_LOOP].x);
       c.fill(dx, dy, s, s, acc, al(B_LOOP));
-      if (in.loop && list)
+      if (in.loop)
         if (const BitmapDef* one = bmp("loop-one"))
           c.bitmap(one, dx + 5 * s, (int)((r.y + (r.h - 7 * s) / 2) / s) * s - 2 * s + (int)std::lround(magy_[B_LOOP].x), s, acc, al(B_LOOP));
     }
@@ -855,6 +864,7 @@ void PlayView::render_dock() {
       pixel = (a << 24) | (white((pixel>>16)&255) << 16) | (white((pixel>>8)&255) << 8) | white(pixel&255);
     }
   }
+  volume_slider();
   if (style_mix_ > 0) white_control_shadow(c, style_mix_);
   if (style_mix_ < 1) {
     Canvas panel; panel.resize(dw_, dh_);
@@ -1316,9 +1326,7 @@ void PlayView::layout_rows() {
       case RK::Tools: {
         int tw = 3;
         for (int id : tool_ids_) tw += (id == B_SPEED ? text_w(speed_plain(in.speed), 1) + 12 : 17) + 3;
-        int cap = 0;
-        for (auto& sg : r.segs) cap = std::max(cap, text_w(sg, 1));
-        need = tw + 8 + cap + 8;
+        need = tw + 6;
         break;
       }
       case RK::Option: case RK::Action: case RK::Submenu: case RK::Hint: case RK::Header:
@@ -1338,6 +1346,9 @@ void PlayView::layout_rows() {
     W = std::max(W, need);
   }
   W = std::max(W, 112);
+  // The preview used to add four art pixels to Settings' width on every toggle.
+  // Reserve the same base width in both states, so its header and "i" never nudge sideways.
+  if (panel_ == Panel::Settings) W = std::max(W, 200);
   if (panel_ == Panel::About) {
     // (a page of Settings: as wide as Settings was, so the sheet stays one sheet)
     W = std::max(168, settings_sheet_w_);  // (with its picture's column, when it had one beside)
@@ -1708,6 +1719,7 @@ void PlayView::render_panel() {
   const Palette& p = P();
   double s = panel_==Panel::CC?cc_scale_:panel_==Panel::Keys?keys_s_:panel_draw_s();
   Canvas& c = panel_base_;
+  if (panel_ != Panel::Settings || !in.settings_examples || (settings_compact_ && !settings_side_)) hints_canvas_ = Canvas{};
   c.resize(pw_, ph_);
   draw_panel(c, 0, 0, pw_ / s, ph_ / s, s, kPanelProfile, p.bg, kPanelFill, p.edge, 0.95);
   int act_row = kb_ ? pfocus_ : phover_;
@@ -1827,7 +1839,8 @@ void PlayView::render_panel() {
           if (h > 0) c.cornered(cell, s, p.hover, h);
           const bool list = in.queue_active && in.queue.size() > 1;
           const bool lit = (id == B_CC && in.sid != 0 && in.sub_visible) || (id == B_LOOP && (in.loop || (in.loop_all && list))) ||
-                           (id == B_QUEUE && !in.queue.empty()) || (id == B_SPEED && std::fabs(in.speed - 1.0) > 0.01);
+                           (id == B_QUEUE && !in.queue.empty()) || (id == B_SHUFFLE && in.shuffle) ||
+                           (id == B_SPEED && std::fabs(in.speed - 1.0) > 0.01);
           Rgb ink = mix(lit ? on : p.dim, p.pixel, h);
           if (id == B_SPEED) {
             std::string num = speed_plain(in.speed);
@@ -1838,11 +1851,18 @@ void PlayView::render_panel() {
           } else {
             const char* name = id == B_QUEUE ? "queue" : id == B_LOOP ? "loop" : id == B_CC ? "cc" : id == B_MINI ? "mini" : id == B_SHUFFLE ? "shuffle" : id == B_FS ? (in.fullscreen ? "fs-exit" : "fs-enter") : "k-audio";
             if (const BitmapDef* b = bmp(name)) c.bitmap(b, cell.x + (cell.w - b->w * s) / 2 / s * s, cell.y + (cell.h - b->h * s) / 2 / s * s, s, ink);
+            if (id == B_LOOP && in.loop)
+              if (const BitmapDef* one = bmp("loop-one"))
+                c.bitmap(one, cell.cx() / s * s + 5*s, cell.y + (cell.h - 7*s) / 2 / s * s - 2*s, s, ink);
+            if ((id == B_SHUFFLE || id == B_LOOP) && lit)
+              c.fill(cell.cx()-s, cell.b()-2*s, 2*s, s, p.fg); // visible even on hover/dark artwork
           }
         }
         if (active >= 0 && active < (int)r.segs.size()) {
           const std::string& label = r.segs[active];
-          text(c, label, r.r.r() - 6 * s - text_w(label, s), ty, s, p.dim, kb_ ? 1.0 : ha);
+          int lx = r.r.r() - 6 * s - text_w(label, s);
+          if (r.parts.empty() || lx >= r.parts.back().r() + 4 * s)
+            text(c, label, lx, ty, s, p.dim, kb_ ? 1.0 : ha);
         }
         break;
       }
@@ -2123,6 +2143,10 @@ void PlayView::render_panel() {
 // style) is shown before it is taken.
 void PlayView::settings_demo_track(double now) {
   if (panel_ != Panel::Settings) return;
+  if (hints_entering_) {
+    panel_dirty_ = true;  // UI cadence during the short reveal, including its final frame
+    if (reduce_motion() || now - hints_t0_ >= kHintsEnter) hints_entering_ = false;
+  }
   int row = kb_ ? pfocus_ : phover_;
   int demo = demo_, seg = -1;
   if (row >= 0 && row < (int)rows_.size()) {
@@ -2269,13 +2293,17 @@ void demo_music(Canvas& c, const Rect& scr, double s, int look, double now, doub
 }
 }  // namespace
 
-void PlayView::render_preview(Canvas& c, const Rect& box, double s, bool tall) {
+void PlayView::render_preview(Canvas& destination, const Rect& target_box, double s, bool tall) {
   const Palette& p = P();
   const double now = last_now_;
   // (the interface's own rounding of its pixels: the picture's room grows with the scale itself,
   // so at 2.5x, 3.5x or 4.5x the art no longer fills its strip to the edge and loses its foot)
   auto px = [&](int n) { return (int)std::lround(n * s); };
-  const double in_k = reduce_motion() ? 1.0 : ease_out(clamp01((now - demo_t0_) / 0.18));  // a new picture fades in
+  const double reveal = reduce_motion() ? 1.0 : ease_out((now - hints_t0_) / kHintsEnter);
+  Canvas& c = hints_canvas_;
+  c.resize(target_box.w,target_box.h);
+  Rect box{0, (int)std::lround((1-reveal)*3*s), target_box.w, target_box.h};
+  const double in_k = reduce_motion() ? 1.0 : ease_out(clamp01((now - demo_t0_) / 0.18));
   // what it does, in a few lines under the picture (worked out first: beside the rows the picture
   // takes all the height the words leave it)
   const int room = box.w - px(12);
@@ -2419,6 +2447,7 @@ void PlayView::render_preview(Canvas& c, const Rect& box, double s, bool tall) {
   }
   for (size_t i = 0; i < lines.size(); ++i)
     text(c, lines[i], stage.x + px(2), stage.b() + px(4 + 12 * (int)i), s, mix(p.dim, p.fg, 0.25), in_k);
+  destination.blit(c,target_box.x,target_box.y,reveal);
 }
 
 void PlayView::open_panel(Panel pn, int btn, double now) {
@@ -2434,10 +2463,12 @@ void PlayView::open_panel(Panel pn, int btn, double now) {
   if (pn == Panel::CC && film_mini()) pn = Panel::SubMini;  // (the mini player, not any small window)
   if (pn == Panel::Queue && film_mini()) return;              // (no up next in a film's mini player)
   if (pn == Panel::Settings && panel_ != Panel::Settings) {
+    hints_entering_ = false; hints_t0_ = -10;
     settings_restart(); demo_seg_ = -1; demo_frame_ = -1; demo_t0_ = now;
     demo_ = in.audio_only ? D_LOOK : D_AMBIENT;  // the first row's picture
   }
   lang_from_settings_ = false;  // (set again by the caller when the language list comes from Settings)
+  if (pn != Panel::Settings) hints_entering_ = false;
   if (pn != panel_) panel_fit_ = 0;  // (a menu's own size first; layout_rows steps it down if it must)
   panel_ = pn;
   panel_btn_ = btn;
@@ -2465,6 +2496,8 @@ void PlayView::open_panel(Panel pn, int btn, double now) {
 }
 
 void PlayView::close_panel() {
+  hints_entering_ = false;
+  hints_canvas_ = Canvas{};
   if (panel_ == Panel::None) return;
   if(panel_==Panel::Queue)queue_view_.closed();
   cc_drag_=false;cc_scroll_.snap(cc_scroll_.x);
@@ -2758,8 +2791,12 @@ void PlayView::panel_click(int row, int part, int x, double now) {
         in.settings_examples = !in.settings_examples;
         act(PA::SettingsExamples, in.settings_examples ? 1 : 0);
         settings_restart();
-        demo_t0_ = now; demo_frame_ = -1;
+        hints_t0_ = in.settings_examples && !reduce_motion() ? now : now-kHintsEnter;
+        hints_entering_ = in.settings_examples && !reduce_motion();
+        demo_t0_ = now-0.18; demo_frame_ = -1;  // the reveal owns this entry; don't fade twice
         build_rows(); layout_rows(); panel_dirty_ = true;
+        if (settings_compact_ && !settings_side_) hints_entering_ = false;
+        if (!in.settings_examples) hints_canvas_ = Canvas{};
         break;
       }
       open_panel(Panel::More, panel_btn_, now); break;
@@ -3087,14 +3124,16 @@ void PlayView::compose(double now) {
   // is measured on them, and a flight out of the card framed the room on the card's words, then
   // jumped to the right size as it landed)
   if ((music_vis_.v > 0 || viewport_transition_) && cr.w > 0) {
-    std::string key = in.music_title + "\n" + in.music_artist + "\n" + std::to_string(w_) + "x" + std::to_string(h_) + "@" +
-                      std::to_string(s_) + (card_ ? "c" : (list_header_ && list_mix() >= 0.5) ? "H" : view().words_beside() ? "b" : "u") + std::to_string((int)std::lround(view().f * 1000)) + std::to_string(in.queue_active ? in.queue.size() : 0) +
-                      (link_hot_ ? "h" : "") + (panel_ == Panel::Queue ? "o" : "");
-    if (key != music_key_) {
+    // Compare cached fields; unchanged titles need no formatting, concatenation
+    // or heap allocation at animation cadence. Preserve the framing precision.
+    const char framing = card_ ? 'c' : (list_header_ && list_mix() >= 0.5) ? 'H' : view().words_beside() ? 'b' : 'u';
+    if (music_key_.update(in.music_title, in.music_artist,
+          {w_, h_, (int64_t)std::llround(s_ * 1000000), framing, (int64_t)std::lround(view().f * 1000),
+           (int64_t)(in.queue_active ? in.queue.size() : 0), (link_hot_ ? 1 : 0) | (panel_ == Panel::Queue ? 2 : 0)})) {
       std::string song = in.music_title + "\n" + in.music_artist;
       if (!music_song_.empty() && song != music_song_ && !reduce_motion()) music_vis_.v = 0;  // slides in, below
       music_song_ = song;
-      music_key_ = key; render_music(); ++music_gen_;
+      render_music(); ++music_gen_;
     }
     int mx, my;
     const MusicScene& S = in.music_scene;
@@ -3406,34 +3445,63 @@ void PlayView::compose(double now) {
     }
   }
   if (tipvis_.v > 0) {
-    // the preview: fades and rises in, glides after the cursor, frames dissolve into each other
+    // the preview: fades and rises in, glides after the cursor; each picture is one decoded frame
     double k = ease_out(tipvis_.v);
-    if (tip_want()) tip_ts_ = fmt_time(scrubbing_ ? scrub_t_ : time_at(mx_), in.dur >= 3600);
-    bool thumb = thumb_.w > 0;
+    int fw, fh;
+    tip_frame_size(fw, fh);
+    const bool frame = fw > 0;
+    const bool thumb = frame && thumb_.w > 0;
+    // A slow decode may still be showing the previous request. Its label belongs to that
+    // picture, never to the cursor's new time (which would promise a frame we do not have).
+    if (tip_want()) tip_ts_ = fmt_time(thumb ? thumb_t_ : scrubbing_ ? scrub_t_ : time_at(mx_), in.dur >= 3600);
     int W, H;
     tip_size(W, H);
-    int pad = thumb ? 2 * s : 0;
+    int pad = frame ? 2 * s : 0;
     Rect dd = dock_rect();
-    bool top = dd.y + dd.h / 2 < h_ / 2;
+    const int top_inset = (int)(kStrip*s_);
+    const bool top = h_ - dd.b() > dd.y - top_inset;
     int ny = top ? dd.b() + 3 * s : dd.y - H - 3 * s;
-    if (ny < 0) ny = dd.b() + 3 * s;
     ny += (int)std::lround((1 - k) * 3 * s) * (top ? -1 : 1);
-    int nx = (int)std::lround(tipx_.x);
-    std::string sig = tip_ts_ + "|" + std::to_string(thumb_gen_) + "|" + std::to_string((int)(k * 40)) + "|" +
-                      std::to_string((int)(thumb_xfade_ * 20));
-    if (TP.visible && sig == tip_text_ && nx == TP.x && ny == TP.y) return;
+    ny = std::clamp(ny, std::min(top_inset, std::max(0,h_-H)), std::max(0, h_ - H));
+    int nx = std::clamp((int)std::lround(tipx_.x), 0, std::max(0, w_ - W));
+    std::string sig = tip_ts_ + "|" + std::to_string(thumb_gen_) + "|" + std::to_string((int)(k * 40));
+    if (TP.visible && sig == tip_text_ && nx == TP.x && ny == TP.y && TP.c.w == W && TP.c.h == H) return;
     if (sig != tip_text_ || TP.c.w != W || TP.c.h != H) {
       tip_text_ = sig;
       TP.c.resize(W, H);
       draw_panel(TP.c, 0, 0, W / s, H / s, s, {1}, p.tip_bg, 0.96, p.edge, 1.0);
       if (thumb) {
-        double xf = ease_out(thumb_xfade_);
-        bool prev = xf < 1 && thumb_prev_.w == thumb_.w && thumb_prev_.h == thumb_.h;
-        if (prev) TP.c.blit(thumb_prev_, pad, pad);
-        TP.c.blit(thumb_, pad, pad, prev ? xf : 1.0);
+        // Scale only when the picture/geometry changes, never while it simply moves.
+        // Keep source pixels small; cached full-window pictures also fit the mini player.
+        // A narrow portrait's time label may require a wider card. Fill its image
+        // area with a small centred crop instead of adding side letterboxes.
+        const int image_x = pad, image_w = W-2*pad;
+        int crop_w=thumb_.w,crop_h=thumb_.h;
+        if (image_w>fw) {
+          const double scale=std::max((double)image_w/thumb_.w,(double)fh/thumb_.h);
+          crop_w=std::clamp((int)std::lround(image_w/scale),1,thumb_.w);
+          crop_h=std::clamp((int)std::lround(fh/scale),1,thumb_.h);
+        }
+        const int crop_x=(thumb_.w-crop_w)/2,crop_y=(thumb_.h-crop_h)/2;
+        int previous_row = -1;
+        for (int y = 0; y < fh; ++y) {
+          const int sy = crop_y+y*crop_h/fh;
+          uint32_t* dst = TP.c.px.data()+(size_t)(pad+y)*W+image_x;
+          if (sy == previous_row) std::copy_n(dst-W, image_w, dst);
+          else {
+            const uint32_t* src = thumb_.px.data()+(size_t)sy*thumb_.w+crop_x;
+            int start = 0;
+            for (int sx = 0; sx < crop_w; ++sx) {
+              const int end = ((sx+1)*image_w+crop_w-1)/crop_w;
+              std::fill(dst+start, dst+end, src[sx]);
+              start = end;
+            }
+          }
+          previous_row = sy;
+        }
       }
       int lw = text_w(tip_ts_, s);
-      text(TP.c, tip_ts_, (W - lw) / 2 / s * s, thumb ? H - 13 * s : 2 * s, s, p.fg);
+      text(TP.c, tip_ts_, (W - lw) / 2 / s * s, frame ? H - 13 * s : 2 * s, s, p.fg);
       if (k < 1) TP.c.scale_alpha(k);
     }
     TP.x = nx;
@@ -3449,15 +3517,36 @@ void PlayView::compose(double now) {
 }
 
 bool PlayView::tip_want() const {
-  return (hover_ == B_TIMELINE || scrubbing_) && vis_.v > 0.5 && in.dur > 0 && mx_ >= 0;
+  return (hover_ == B_TIMELINE || scrubbing_) && panel_ == Panel::None && !viewport_transition_ &&
+         vis_.v > 0.5 && in.dur > 0 && mx_ >= 0;
+}
+
+void PlayView::tip_frame_size(int& W, int& H) const {
+  W = H = 0;
+  if (in.audio_only) return;
+  double aspect = in.preview_aspect > 0 ? in.preview_aspect :
+      thumb_slot_h_ > 0 ? (double)thumb_slot_w_/thumb_slot_h_ : 0;
+  if (!std::isfinite(aspect) || aspect <= 0) return;
+  const Rect dd = dock_rect();
+  const int room = std::max(dd.y-(int)(kStrip*s_), h_ - dd.b());
+  const int max_w = std::min(thumb_width(), (int)(w_ - 4*s_));
+  // Leave space for padding, the time footer, dock gap and entrance motion.
+  const int max_h = room - (int)(24*s_);
+  if (max_w < s_ || max_h < s_) return;
+  const double width = std::min((double)max_w, max_h * aspect) * (aspect < 1 ? 0.95 : 1.0);
+  W = std::max(1, (int)std::floor(width/s_)) * s_;
+  H = std::max(1, (int)std::floor((width/aspect)/s_)) * s_;
 }
 
 void PlayView::tip_size(int& W, int& H) const {
   double s = s_;
-  bool thumb = thumb_.w > 0;
-  int pad = thumb ? 2 * s : 0;
-  W = thumb ? thumb_.w + 2 * pad : text_w(in.dur >= 3600 ? "0:00:00" : "00:00", s) + 10 * s;
-  H = thumb ? thumb_.h + 2 * pad + 14 * s : 16 * s;
+  int fw, fh;
+  tip_frame_size(fw, fh);
+  const bool frame = fw > 0;
+  int pad = frame ? 2 * s : 0;
+  const int time_w = text_w(in.dur >= 3600 ? "0:00:00" : "00:00", s) + 10*s;
+  W = frame ? std::max(fw + 2*pad, time_w) : time_w;
+  H = frame ? fh + 2 * pad + 14 * s : 16 * s;
   W = (int)std::ceil(std::ceil(W / s) * s);
   H = (int)std::ceil(std::ceil(H / s) * s);
 
@@ -3487,6 +3576,7 @@ void PlayView::end_viewport_transition(double now) {
 }
 
 void PlayView::reset(double now) {
+  begin_preview(); hover_ = B_NONE;
   next_notice("", now);
   close_panel();
   viewport_transition_=false; viewport_vis_.v=viewport_vis_.target=1;
@@ -3945,22 +4035,37 @@ void PlayView::flash_pause(bool paused, double now) {
 }
 
 void PlayView::set_thumb(const std::vector<uint32_t>& px, int w, int h, double t) {
-  if (w <= 0 || h <= 0) { thumb_ = Canvas{}; thumb_prev_ = Canvas{}; thumb_xfade_ = 1; ++thumb_gen_; return; }  // new file
+  if (w <= 0 || h <= 0) {
+    thumb_ = Canvas{}; thumb_slot_w_ = thumb_slot_h_ = 0; thumb_t_ = -1;
+    tip_text_.clear(); ++thumb_gen_; return;
+  }  // new file
   if (px.size() < (size_t)w * h) return;
-  if (thumb_.w > 0 && thumb_t_ != t) { std::swap(thumb_prev_, thumb_); thumb_xfade_ = 0; }
-  // nearest-neighbour enlargement to the preview size: crisp blocks, no filtering cost
-  int f = std::max(1, (int)std::lround(thumb_width() / (double)w));
-  thumb_.w = w * f;
-  thumb_.h = h * f;
-  thumb_.px.resize((size_t)thumb_.w * thumb_.h);
-  for (int y = 0; y < thumb_.h; ++y) {
-    const uint32_t* src = px.data() + (size_t)(y / f) * w;
-    uint32_t* dst = thumb_.px.data() + (size_t)y * thumb_.w;
-    for (int x = 0; x < thumb_.w; ++x) dst[x] = src[x / f];
-  }
+  // Keep the small source, not a display-sized copy tied to a previous window scale.
+  thumb_.w = w;
+  thumb_.h = h;
+  thumb_slot_w_ = thumb_.w; thumb_slot_h_ = thumb_.h;
+  thumb_.px.assign(px.begin(), px.begin() + (size_t)w*h);
   thumb_t_ = t;
   ++thumb_gen_;
   tip_text_.clear();  // forces the preview tooltip to redraw
+}
+
+void PlayView::begin_preview() {
+  ++preview_epoch_;
+  last_preview_req_ = -100;  // re-entering the same pixel must request its cached frame too
+  wait_thumb();
+}
+
+void PlayView::wait_thumb() {
+  // Retain the small display allocation for the next cache hit, but none of its old pixels.
+  thumb_.px.clear(); thumb_.w = thumb_.h = 0; thumb_t_ = -1;
+  tip_text_.clear(); ++thumb_gen_;
+}
+
+bool PlayView::show_thumb(const std::vector<uint32_t>& px, int w, int h, double t, uint64_t epoch) {
+  if (!preview_active() || epoch != preview_epoch_) return false;
+  set_thumb(px, w, h, t);
+  return true;
 }
 
 bool PlayView::dragging() const {
@@ -4228,7 +4333,10 @@ bool PlayView::tick(double now, double dt) {
       if (v != phov_[i]) { phov_[i] = v; panel_dirty_ = true; moving = true; }
     }
     if ((panel_ == Panel::CC || panel_ == Panel::More || panel_ == Panel::Context || panel_ == Panel::Settings) && sw_.step(dt)) { panel_dirty_ = true; moving = true; }
-    if (panel_ == Panel::Settings) { settings_demo_track(now); if ((demo_ == D_SMOOTH || demo_ == D_TILT || demo_ == D_LOOK) && in.settings_examples && (!settings_compact_ || settings_side_)) moving = true; }
+    if (panel_ == Panel::Settings) {
+      settings_demo_track(now);
+      if (hints_entering_ || ((demo_ == D_SMOOTH || demo_ == D_TILT || demo_ == D_LOOK) && in.settings_examples && (!settings_compact_ || settings_side_))) moving = true;
+    }
     for (auto& r : rows_)
       if (r.k == RK::Toggle && r.id < (int)tsw_.size() && tsw_[r.id].step(dt)) { panel_dirty_ = true; moving = true; }
     bool ack = now < ack_until_;
@@ -4287,7 +4395,6 @@ bool PlayView::tick(double now, double dt) {
     }
     moving |= tipvis_.step(dt);
     moving |= tipx_.step(dt);
-    if (thumb_xfade_ < 1) { thumb_xfade_ = std::min(1.0, thumb_xfade_ + dt / 0.09); moving = true; }
   }
   // the dock rises a few px with a soft spring when it appears, sinks a little when it leaves
 
@@ -4424,7 +4531,10 @@ void PlayView::cover_hover(int x, int y) {
   cov_rx_.target = 2 * fy * kMaxTilt;
 }
 
-void PlayView::pointer_left() { cov_hot_ = false; cov_rx_.target = cov_ry_.target = 0; }
+void PlayView::pointer_left() {
+  cov_hot_ = false; cov_rx_.target = cov_ry_.target = 0;
+  if (!scrubbing_) { hover_ = B_NONE; mx_ = my_ = -1; last_preview_req_ = -100; }
+}
 
 // the bar under the pointer while it is dragged; with Shift held, its centre stays on the
 // window's middle (it moves only up and down, and lands centred)
@@ -4499,8 +4609,10 @@ void PlayView::mouse_move(int x, int y, double now) {
   }
   if (scrubbing_) {
     if (!scrub_live_ && std::abs(x - scrub_x0_) > 3 * s_) scrub_live_ = true;
-    seek_scrub(x, false);
-    if (!in.audio_only && std::fabs(scrub_t_ - last_preview_req_) > std::max(0.5, in.dur / 400)) { last_preview_req_ = scrub_t_; act(PA::Preview, scrub_t_); }
+    if (scrub_live_) {
+      seek_scrub(x, false);
+      if (!in.audio_only && std::fabs(scrub_t_ - last_preview_req_) > 0.0) { last_preview_req_ = scrub_t_; act(PA::Preview, scrub_t_); }
+    }
     return;
   }
   if (vol_drag_) { set_volume_from(x); return; }
@@ -4559,12 +4671,13 @@ void PlayView::mouse_move(int x, int y, double now) {
   int pr = hit_panel(x, y, &part);
   if (pr != phover_ || part != ppart_) { phover_ = pr; ppart_ = part; panel_dirty_ = true; }
   int b = pr == -1 ? hit_dock(x, y) : B_NONE;
+  if (b == B_TIMELINE && hover_ != B_TIMELINE) begin_preview();
   if (b != hover_) { hover_ = b; dock_dirty_ = true; }
   hover_since_ = now;  // tooltips wait for the mouse to rest
   if (hover_ == B_TIMELINE && in.dur > 0) {
     dock_dirty_ = true;
     double t = time_at(x);
-    if (!in.audio_only && std::fabs(t - last_preview_req_) > std::max(0.5, in.dur / 400)) { last_preview_req_ = t; act(PA::Preview, t); }  // music has no frames to show
+    if (!in.audio_only && std::fabs(t - last_preview_req_) > 0.0) { last_preview_req_ = t; act(PA::Preview, t); }  // music has no frames to show
   }
   chrome.hot = (pr == -1 && b == B_NONE) ? chrome.hit(x, y, w_) : WindowChrome::None;
   bool sh = pr == -1 && b == B_NONE && chrome.hot == WindowChrome::None && panel_ == Panel::None && sub_draggable() &&
@@ -4659,7 +4772,12 @@ void PlayView::mouse_down(int x, int y, double now) {
                       std::abs(x - last_click_x_) < 6 * s_ && std::abs(y - last_click_y_) < 6 * s_;
       if (!second_click_ && pending_click_ != P_NONE) commit_click();
       break;
-    case B_TIMELINE: scrubbing_ = true; scrub_live_ = false; scrub_x0_ = x; scrub_sent_ = -1; seek_scrub(x, false); break;
+    case B_TIMELINE:
+      if (hover_ != B_TIMELINE) begin_preview();
+      hover_ = B_TIMELINE;
+      scrubbing_ = true; scrub_live_ = false; scrub_x0_ = x; scrub_sent_ = -1; seek_scrub(x, false);
+      if (!in.audio_only) { last_preview_req_ = scrub_t_; act(PA::Preview, scrub_t_); }
+      break;
     case B_VOLBAR: vol_drag_ = true; set_volume_from(x); break;
     case B_DOCKBG: {
       // the mini player's bar stays where it belongs, but the window moves from it like from the
@@ -4718,7 +4836,7 @@ void PlayView::mouse_up(int x, int y, double now) {
     second_click_ = false;
     press_ = P_NONE;
   }
-  if (scrubbing_) { seek_scrub(x, true); scrubbing_ = false; dock_dirty_ = true; }
+  if (scrubbing_) { seek_scrub(scrub_live_ ? x : scrub_x0_, true); scrubbing_ = false; dock_dirty_ = true; }
   if (vol_drag_) { vol_drag_ = false; dock_dirty_ = true; }
   if (slider_row_ >= 0) { slider_set(slider_row_, x, false); slider_row_ = -1; panel_dirty_ = true; }
   if (sub_drag_) {
@@ -4839,6 +4957,7 @@ const std::vector<KeyGroup>& key_groups() {
       {str::keys_playback, {{str::keys_play_pause, {"@space"}},
                             {str::keys_seek, {"\xe2\x86\x90", "\xe2\x86\x92"}},
                             {str::keys_seek_long, {"@shift", "\xe2\x86\x90", "\xe2\x86\x92"}},
+                            {str::keys_seek_percent, {"0-9"}},
                             {str::keys_volume, {"\xe2\x86\x91", "\xe2\x86\x93"}},
                             {str::keys_mute, {"m"}},
                             {str::keys_speed, {"[", "]"}},
@@ -4945,7 +5064,15 @@ void PlayView::key(const std::string& k, bool shift, bool ctrl, double now) {
   if (viewport_transition_ && k=="esc") return; // never close media during a pending fullscreen change
   pending_click_ = P_NONE;
   second_click_ = false;
-  (void)ctrl;
+  const int digit = k == "zero" ? 0 : k.size() == 1 && k[0] >= '0' && k[0] <= '9' ? k[0]-'0' : -1;
+  if (digit >= 0) {
+    // Predictable at any duration; never let a compact player, menu or drag seek by accident.
+    if (!shift && !ctrl && !in.audio_only && !in.mini_player && panel_ == Panel::None &&
+        !viewport_transition_ && !scrubbing_ && !vol_drag_ && !dragging_dock_ && !drag_pending_ &&
+        !sub_drag_ && !win_drag_ && in.dur > 0 && std::isfinite(in.dur))
+      act(PA::SeekAbsExact, in.dur * (digit / 10.0));
+    return;
+  }
   // the keyboard controls playback silently; only navigating the UI brings it up
   bool nav = k == "tab" || panel_ != Panel::None || (kb_ && (k == "enter" || k == "left" || k == "right"));
   if (nav) activity(now);

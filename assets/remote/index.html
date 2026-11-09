@@ -431,9 +431,10 @@ function holdOn(k, ms) { hold[k] = performance.now() + (ms || 1500); }
 function reconcile(m, prev, prevLive) {
   var now = performance.now();
   function keep(k, same) { if (!(hold[k] > now)) return false; if (same) { delete hold[k]; return false; } return true; }
-  if (m.view === 'play' && prev.view === 'play' && m.file === prev.file) {
-    if (keep('pos', Math.abs(m.pos - prevLive) < 2.5)) m.pos = prevLive;
-    if (keep('paused', m.paused === prev.paused)) m.paused = prev.paused;
+  if (m.view === 'play' && prev.view === 'play' && m.file === prev.file && m.media === prev.media) {
+    var pausePending = keep('paused', m.paused === prev.paused);
+    if (pausePending || keep('pos', Math.abs(m.pos - prevLive) < 2.5)) m.pos = prevLive;
+    if (pausePending) { m.paused = prev.paused; m.ended = prev.ended; }
     if (keep('vol', Math.abs(m.vol - prev.vol) < 1.5)) m.vol = prev.vol;
     if (keep('timer', m.timer.m === prev.timer.m)) m.timer = prev.timer;
     if (keep('audio', m.audio.i === prev.audio.i)) m.audio = prev.audio;
@@ -443,41 +444,86 @@ function reconcile(m, prev, prevLive) {
   } else hold = {};
 }
 function livePos() {
-  if (S.view !== 'play' || S.paused || S.ended) return S.pos;
+  if (!linkReady || S.view !== 'play' || S.paused || S.ended) return S.pos;
   return Math.min(S.dur, S.pos + (performance.now() - stamp) / 1000 * (S.speed || 1));
 }
 
 // ── link to the PC ────────────────────────────────────────────────
-var ws = null, token = null, retry = 0, offlineT = 0, retryT = 0, everConnected = false;
+var ws = null, token = null, retry = 0, offlineT = 0, retryT = 0;
+var linkReady = false, linkStopped = false, heartbeatT = 0, deadlineT = 0;
+var pendingCode = null, codeUntil = 0, linkFrozen = false, lastPacket = 0, connectAt = 0;
+// A page keeps its identity across socket replacements, without sharing it with other tabs.
+var linkInstance = Date.now().toString(36) + Math.random().toString(36).slice(2);
+function linkAvailable() { return !document.hidden && !linkFrozen; }
+function armDeadline(socket) {
+  clearTimeout(deadlineT);
+  deadlineT = setTimeout(function () { if (ws === socket) linkFailed(); }, 10000);
+}
+function stopHeartbeat() { clearTimeout(heartbeatT); clearTimeout(deadlineT); }
+function retireLink() {
+  S.pos = livePos(); stamp = performance.now();
+  var socket = ws; ws = null; linkReady = false;
+  stopHeartbeat(); clearSends(); suspendRemoteWork();
+  if (socket) {
+    socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
+    try { socket.close(); } catch (e) {}
+  }
+}
+function linkFailed() { retireLink(); if (!linkStopped) scheduleRetry(); }
+function heartbeat(socket) {
+  clearTimeout(heartbeatT);
+  if (!linkAvailable()) return;
+  heartbeatT = setTimeout(function () {
+    if (ws !== socket || !linkReady || !linkAvailable()) return;
+    armDeadline(socket);
+    try { socket.send('{"t":"ping"}'); } catch (e) { linkFailed(); }
+  }, 15000);
+}
 try { token = localStorage.getItem('cue.token.v2'); } catch (e) {}
 var codeFromLink = (location.hash.match(/(?:^#|&)c=(\d{6})(?:&|$)/) || [])[1] || null;
 if (codeFromLink) history.replaceState(null, '', location.pathname);
 function connect(code) {
+  if (code) { pendingCode = code; codeUntil = Date.now() + 120000; linkStopped = false; }
+  if (!linkAvailable() || linkStopped) return;
   if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
-  clearTimeout(retryT);
-  if (!code && !token) { showPair(''); return; }
-  try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); } catch (e) { scheduleRetry(); return; }
-  ws.onopen = function () { retry = 0; ws.send(JSON.stringify(code ? {t:'auth',c:code} : {t:'auth',k:token})); };
-  ws.onmessage = function (ev) {
+  if (pendingCode && Date.now() >= codeUntil) pendingCode = null;
+  code = pendingCode;
+  clearTimeout(retryT); retryT = 0; linkReady = false;
+  if (!code && !token) { clearTimeout(offlineT); showPair(''); return; }
+  var socket;
+  try { socket = ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'); } catch (e) { ws = null; scheduleRetry(); return; }
+  connectAt = Date.now(); armDeadline(socket);
+  socket.onopen = function () {
+    if (ws !== socket) return;
+    try { socket.send(JSON.stringify(code ? {t:'auth',c:code,i:linkInstance} : {t:'auth',k:token,i:linkInstance})); }
+    catch (e) { linkFailed(); }
+  };
+  socket.onerror = function () { if (ws === socket) linkFailed(); };
+  socket.onmessage = function (ev) {
+    if (ws !== socket) return;
     var m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (!linkAvailable()) return;
+    lastPacket = Date.now();
+    if (m.t === 'pong') { if (linkReady) { clearTimeout(deadlineT); heartbeat(socket); } return; }
     if (m.t === 'hello') {
-      everConnected = true;
+      clearTimeout(deadlineT); pendingCode = null; linkReady = true; retry = 0; hold = {}; heartbeat(socket);
       if (m.token) { token = m.token; try { localStorage.setItem('cue.token.v2', token); } catch (e) {} }
       var wasOff = !$('offline').classList.contains('hide');
-      hidePair(); setOffline(false);if(queueOpen){queueLoaded=-1;loadQueue();}
+      hidePair(); setOffline(false); resumeRemoteWork();
       if (code) linked(m.pc || '');
       else if (wasOff) { toast(t('remote.linked')); celebrate(); }
     } else if (m.t === 'state') {
+      if (!linkReady) return;
       if (relocalize(m.lang)) return;
-      var was = S.view, wasFile = S.file, prev = S, prevLive = livePos();
+      var was = S.view, wasFile = S.file, wasMedia = S.media, prev = S, prevLive = livePos();
       reconcile(m, prev, prevLive);
       S = m; stamp = performance.now();
-      if (wasFile !== S.file || was !== S.view) clearPeek();
+      if (wasFile !== S.file || was !== S.view || wasMedia !== S.media) { coverRetry = 0; clearSends(); cancelGestures(); clearPeek(); }
       if (!U.scrub) U.prev = S.pos;
       if (was !== S.view || (wasFile && wasFile !== S.file)) { U.menu = null; U.edit = null; if (wasFile !== S.file && S.view === 'play' && was === 'play') celebrate(); }
-      render(); if(queueOpen)loadQueue();
+      if (!document.hidden) { render(); if(queueOpen)loadQueue(); }
     } else if (m.t === 'peek') {
-      if (!U.scrub) return;
+      if (!U.scrub || document.hidden || !linkReady) return;
       var n = m.n, epoch = peekEpoch;
       if (peekFetch) peekFetch.abort();
       peekFetch = new AbortController();
@@ -492,24 +538,39 @@ function connect(code) {
           $('scrub').classList.add('peeking');
         }).catch(function() {});
     } else if (m.t === 'bye') {
-      ws.onclose = null; ws.close(); setOffline(true, t('remote.off_by_pc'));
+      linkStopped = true; retireLink(); clearTimeout(retryT); setOffline(true, t('remote.off_by_pc'));
     }
   };
-  ws.onclose = function (ev) {
-    ws = null;
-    if (ev.code === 4001) { token = null; try { localStorage.removeItem('cue.token.v2'); } catch (e) {} showPair(code ? t('remote.code_wrong') : ''); return; }
-    if (ev.code === 4002) { showPair(t('remote.code_closed')); return; }
-    if (ev.code === 4003) { showPair(t('remote.locked')); return; }
-    if (!everConnected && code) { showPair(t('remote.code_wrong')); return; }
+  socket.onclose = function (ev) {
+    if (ws !== socket) return;
+    retireLink();
+    if (ev.code === 4001) { pendingCode = null; linkStopped = true; token = null; try { localStorage.removeItem('cue.token.v2'); } catch (e) {} showPair(code ? t('remote.code_wrong') : ''); return; }
+    if (ev.code === 4002) { pendingCode = null; linkStopped = true; showPair(t('remote.code_closed')); return; }
+    if (ev.code === 4003) { pendingCode = null; linkStopped = true; showPair(t('remote.locked')); return; }
     scheduleRetry();
   };
 }
 function scheduleRetry() {
+  clearTimeout(retryT); retryT = 0;
+  if (linkStopped || !linkAvailable()) return;
   clearTimeout(offlineT);
+  if (navigator.onLine === false) { setOffline(true); return; }
   offlineT = setTimeout(function () { setOffline(true); }, 1500);
   var wait = Math.min(10000, 1000 * Math.pow(2, retry++));
   clearTimeout(retryT);
-  retryT = setTimeout(function () { if (!ws && !document.hidden) connect(null); }, wait);
+  retryT = setTimeout(function () { retryT = 0; if (!ws && linkAvailable() && !linkStopped) connect(null); }, wait);
+}
+// Multiple resume/focus/pageshow events describe the same return to the page.
+// Keep one healthy attempt; an OPEN socket with no recent response is replaceable.
+function wakeLink() {
+  if (!linkAvailable() || linkStopped || (!token && !pendingCode)) return;
+  var age = Date.now() - (linkReady ? lastPacket : connectAt);
+  if (ws && (ws.readyState === 0 || ws.readyState === 1) && age < (linkReady ? 20000 : 10000)) return;
+  retireLink(); retry = 0; connect(null);
+}
+function sleepLink() {
+  retireLink(); clearTimeout(retryT); retryT = 0; clearTimeout(offlineT);
+  releaseAwake();
 }
 function setOffline(on, msg) {
   if (!on) clearTimeout(offlineT);
@@ -517,16 +578,40 @@ function setOffline(on, msg) {
   $('offMsg').textContent = msg || t('remote.offline');
   $('offSub').textContent = msg ? '' : t('remote.reconnecting');
 }
-var sendT = {}, sendLast = {};
+// Absolute settings share a finite, latest-value buffer. Discrete actions are never replayed
+// across connections; a slow socket is retired before obsolete bytes accumulate.
+var sendPending = new Map(), sendTimer = 0, sendAt = -1000, peekAt = -1000;
+function clearSends() { clearTimeout(sendTimer); sendTimer = 0; sendPending.clear(); }
+function writeCommand(o) {
+  if (!ws || ws.readyState !== 1 || !linkReady || document.hidden) return false;
+  if (ws.bufferedAmount > 65536) { linkFailed(); return false; }
+  try { ws.send(JSON.stringify(o)); return true; } catch (e) { linkFailed(); return false; }
+}
+function drainSends() {
+  sendTimer = 0;
+  if (!sendPending.size) return;
+  var now = performance.now(), wait = Math.max(0, 80 - (now - sendAt));
+  var key = sendPending.keys().next().value;
+  if (key === 'peek') wait = Math.max(wait, 250 - (now - peekAt));
+  if (wait > 0) { sendTimer = setTimeout(drainSends, wait); return; }
+  var o = sendPending.get(key); sendPending.delete(key);
+  if (writeCommand(o)) { sendAt = now; if (key === 'peek') peekAt = now; }
+  if (sendPending.size) sendTimer = setTimeout(drainSends, 80);
+}
 function send(o, throttle) {
-  if (!ws || ws.readyState !== 1) return;
+  if (/^(toggle|skip|seek|what|peek|next|sub|subdelay|subsize|subpos|audio)$/.test(o.c) && S.media !== undefined) o.media = S.media;
+  if (!ws || ws.readyState !== 1 || !linkReady || document.hidden) return false;
   if (throttle) {
-    var key = o.c, now = performance.now();
-    clearTimeout(sendT[key]);
-    if (now - (sendLast[key] || 0) < 80) { sendT[key] = setTimeout(function () { send(o); }, 80); return; }
-    sendLast[key] = now;
+    sendPending.set(o.c, o);
+    if (!sendTimer) drainSends();
+    return true;
   }
-  ws.send(JSON.stringify(o));
+  // A final value supersedes its pending intermediate value. File changes invalidate
+  // all old settings; seeks also cancel preview work for the released gesture.
+  if (o.c === 'open' || o.c === 'next' || o.c === 'queue-play') clearSends();
+  sendPending.delete(o.c);
+  if (o.c === 'seek') sendPending.delete('peek');
+  return writeCommand(o);
 }
 
 // ── pairing by code ───────────────────────────────────────────────
@@ -586,7 +671,7 @@ function tick(kind) {
 // ── the character ─────────────────────────────────────────────────
 var anims = [], raf = 0, DUR = { hop: 300, dart: 420, shake: 420, celebrate: 1300 };
 function anim(type, opt) {
-  if (reduced) return;
+  if (reduced || document.hidden || !linkReady) return;
   var a = { type: type, t0: performance.now() };
   for (var k in opt) a[k] = opt[k];
   anims.push(a);
@@ -665,7 +750,8 @@ function pop(i) { U.flash = i; }
 // the wheel's preview: the PC sends the frame where it will land
 var peekShown = 0, peekURL = null, peekFetch = null, peekEpoch = 0;
 function clearPeek() {
-  ++peekEpoch;
+  ++peekEpoch; sendPending.delete('peek');
+  clearTimeout(pickT); if (pickFetch) { pickFetch.abort(); pickFetch = null; }
   if (peekFetch) { peekFetch.abort(); peekFetch = null; }
   if (peekURL) { URL.revokeObjectURL(peekURL); peekURL = null; }
   $('peekImg').removeAttribute('src');
@@ -676,8 +762,9 @@ function authHeaders() { return {Authorization: 'Bearer ' + (token || '')}; }
 function scrubStart() { clearPeek(); U.turns = 0; }
 function peek() { if (S.audioOnly) return; send({ c: 'peek', v: Math.round(U.prev * 10) / 10 }, true); }  // audio has no picture
 // Authenticated, lazy, bounded thumbnail fetches; object URLs never contain a credential.
-var thumbObserver = null, thumbQueue = [], thumbBusy = 0, thumbURLs = [], thumbRequests = new Set();
+var thumbObserver = null, thumbQueue = [], thumbBusy = 0, thumbURLs = [], thumbRequests = new Set(), thumbEpoch = 0;
 function clearThumbs() {
+  ++thumbEpoch;
   if (thumbObserver) { thumbObserver.disconnect(); thumbObserver = null; }
   thumbQueue = [];
   thumbRequests.forEach(function(controller) { controller.abort(); });
@@ -685,17 +772,18 @@ function clearThumbs() {
   thumbURLs.forEach(function(url) { URL.revokeObjectURL(url); }); thumbURLs = [];
 }
 function pumpThumbs() {
+  if (document.hidden || !linkReady) return;
   while (thumbBusy < 3 && thumbQueue.length) {
     var img = thumbQueue.shift();
     if (!img.isConnected) continue;
     thumbBusy++;
     (function(img) {
       if (!img.classList.contains('sq')) img.insertAdjacentHTML('beforebegin',pixelThumb({path:img.dataset.thumb},0));
-      var controller = new AbortController(); thumbRequests.add(controller);
+      var epoch = thumbEpoch, controller = new AbortController(); thumbRequests.add(controller);
       fetch('/thumb?p=' + encodeURIComponent(img.dataset.thumb), {headers:authHeaders(), cache:'no-store', signal:controller.signal})
         .then(function(r) { if (!r.ok) throw Error(); return r.blob(); })
         .then(function(blob) {
-          if (!img.isConnected || U.browse === null) return;
+          if (controller.signal.aborted || epoch !== thumbEpoch || !img.isConnected || U.browse === null) return;
           var url = URL.createObjectURL(blob); thumbURLs.push(url);
           img.onload = function() { img.classList.add('ok'); };
           img.src = url;
@@ -727,33 +815,49 @@ function wake() {
   if (U.sleep) { U.sleep = 0; anim('hop'); drawFace(); }
   if (pausedAt) pausedAt = Date.now();
 }
-(function blink() {
-  setTimeout(function () {
-    U.blink = true; drawFace();
-    setTimeout(function () { U.blink = false; drawFace(); }, 110);
-    if (Math.random() < .25) { setTimeout(function () { U.blink = true; drawFace(); }, 240); setTimeout(function () { U.blink = false; drawFace(); }, 350); }
-    blink();
-  }, 2200 + Math.random() * 4200);
-})();
-(function glance() {
-  setTimeout(function () {
-    if (!document.hidden && S.view === 'play' && !S.paused && !drag && !U.menu && !U.browse && !U.scrub && !anims.length) {
-      U.glance = Math.random() < .5 ? -1 : 1; drawFace();
-      setTimeout(function () { U.glance = 0; drawFace(); }, 700 + Math.random() * 600);
-    }
-    glance();
-  }, 4000 + Math.random() * 5000);
-})();
-setInterval(function () {
-  var idle = S.view === 'play' ? (S.paused || S.ended) : true;
-  if (idle && !pausedAt) pausedAt = Date.now();
-  if (!idle) { pausedAt = 0; if (U.sleep) { U.sleep = 0; drawFace(); } }
-  if (idle && pausedAt && U.sleep < 2) {
-    var lv = Date.now() - pausedAt > 180000 ? 2 : (Date.now() - pausedAt > 60000 ? 1 : 0);
-    if (lv !== U.sleep) { U.sleep = lv; drawFace(); drawGlow(); }
+var faceTimers = new Set(), idleTimer = 0;
+function faceLater(fn, ms) {
+  var id = setTimeout(function () { faceTimers.delete(id); if (!document.hidden && linkReady) fn(); }, ms);
+  faceTimers.add(id);
+}
+function startFaceTimers() {
+  if (idleTimer || document.hidden || !linkReady) return;
+  function blink() {
+    faceLater(function () {
+      U.blink = true; drawFace();
+      faceLater(function () { U.blink = false; drawFace(); }, 110);
+      if (Math.random() < .25) { faceLater(function () { U.blink = true; drawFace(); }, 240); faceLater(function () { U.blink = false; drawFace(); }, 350); }
+      blink();
+    }, 2200 + Math.random() * 4200);
   }
-  if (!document.hidden) render();
-}, 500);
+  function glance() {
+    faceLater(function () {
+      if (S.view === 'play' && !S.paused && !drag && !U.menu && U.browse === null && !U.scrub && !anims.length) {
+        U.glance = Math.random() < .5 ? -1 : 1; drawFace();
+        faceLater(function () { U.glance = 0; drawFace(); }, 700 + Math.random() * 600);
+      }
+      glance();
+    }, 4000 + Math.random() * 5000);
+  }
+  blink(); glance();
+  idleTimer = setInterval(function () {
+    var idle = S.view === 'play' ? (S.paused || S.ended) : true;
+    if (idle && !pausedAt) pausedAt = Date.now();
+    if (!idle) { pausedAt = 0; if (U.sleep) { U.sleep = 0; drawFace(); } }
+    if (idle && pausedAt && U.sleep < 2) {
+      var lv = Date.now() - pausedAt > 180000 ? 2 : (Date.now() - pausedAt > 60000 ? 1 : 0);
+      if (lv !== U.sleep) { U.sleep = lv; drawFace(); drawGlow(); }
+    }
+    // Fresh PC snapshots already render playback. Only interpolate when they lag;
+    // a paused face keeps its blink/sleep animations without rebuilding the whole UI.
+    if (!idle && performance.now() - stamp >= 750) render();
+    else syncCover();
+  }, 500);
+}
+function stopFaceTimers() {
+  faceTimers.forEach(clearTimeout); faceTimers.clear(); clearInterval(idleTimer); idleTimer = 0;
+  U.blink = false; U.glance = 0;
+}
 
 // The end-of-episode card (and the centre's check that confirms it). Not in up-next mode, where
 // the side button already goes to the next file, and not before the file's length is known.
@@ -762,6 +866,7 @@ function nextVisible() {
   return S.view === 'play' && !!S.next && !S.audioOnly && U.mode !== 'tracks' && (S.ended || (S.dur > 0 && S.dur - livePos() <= 90)) && !U.menu && !U.scrub && !U.browse;
 }
 function drawFace() {
+  if (document.hidden) return;
   var show = !U.menu && !U.scrub;
   // a song with a cover wears it as the face; the eyes come back for everything else
   var spin = !!(U.scrub && !U.menu && coverOK && S.view === 'play' && S.audioOnly);
@@ -823,6 +928,7 @@ var cells = [];
 })();
 var glowColor = '', glowDim = -1;
 function drawGlow() {
+  if (document.hidden) return;
   var c = (coverOK && S.audioOnly && coverTint) || S.color || '#a0508f', dim = U.sleep === 2 ? .5 : 1;
   if (c === glowColor && dim === glowDim) return;
   glowColor = c; glowDim = dim;
@@ -908,7 +1014,7 @@ function adjust(key, dir) {
   render();
 }
 function navBack() {
-  if (U.browse) { browseUp(); return; }
+  if (U.browse !== null) { browseUp(); return; }
   if (U.edit) U.edit = null;
   else if (U.menu === 'subs') { U.menu = 'main'; U.idx = 0; }
   else U.menu = null;
@@ -1107,11 +1213,13 @@ function releaseQueuePicture(id){
   picture.img.removeAttribute('src');picture.img.classList.remove('ok');URL.revokeObjectURL(picture.url);queuePictures.delete(id);
 }
 function clearQueueThumbs(){
+  $('queueItems').querySelectorAll('img[data-queue-thumb]').forEach(function(img){img.dataset.requested='';});
   ++queueThumbEpoch;if(queueObserver)queueObserver.disconnect();queueObserver=null;queueImages=[];queueVisible.clear();
   queueRequests.forEach(function(c){c.abort();});queueRequests.clear();
   Array.from(queuePictures.keys()).forEach(releaseQueuePicture);
 }
 function pumpQueueThumbs(){
+  if(document.hidden||!linkReady)return;
   while(queueOpen&&queueThumbBusy<2&&queueImages.length){
     var img=queueImages.shift(),id=+img.dataset.queueThumb;
     if(!img.isConnected||img.dataset.requested==='yes')continue;
@@ -1248,11 +1356,11 @@ function showQueue(){
   loadQueue();$('queueClose').focus({preventScroll:true});
 }
 function loadQueue(){
-  if(!queueOpen||queueFetch||queueLoaded===S.queueRevision)return;
+  if(document.hidden||!linkReady||!queueOpen||queueFetch||queueLoaded===S.queueRevision)return;
   var epoch=++queueEpoch,revision=S.queueRevision;queueFetch=new AbortController();
   fetch('/queue',{headers:authHeaders(),cache:'no-store',signal:queueFetch.signal})
     .then(function(r){if(!r.ok)throw Error();return r.json();})
-    .then(function(j){if(!queueOpen||epoch!==queueEpoch)return;queueLoaded=revision;reconcileQueue(j.items.slice(0,512));})
+    .then(function(j){if(!queueOpen||epoch!==queueEpoch||revision!==S.queueRevision)return;queueLoaded=revision;reconcileQueue(j.items.slice(0,512));})
     .catch(function(e){if(queueOpen&&epoch===queueEpoch&&e.name!=='AbortError'){$('queueStatus').textContent=t('remote.offline');$('queueStatus').classList.remove('hide');}})
     .finally(function(){if(epoch===queueEpoch){queueFetch=null;if(queueOpen&&revision!==S.queueRevision)loadQueue();}});
 }
@@ -1325,6 +1433,7 @@ if(window.matchMedia){var qMotion=matchMedia('(prefers-reduced-motion: reduce)')
 
 // ── render ────────────────────────────────────────────────────────
 function render() {
+  if (document.hidden) return;
   $('bQueueLabel').textContent=t('queue.title');
   $('bQueue').setAttribute('aria-label',t('queue.title'));
   queueHeader();syncSheets();
@@ -1592,25 +1701,24 @@ $('rows').addEventListener('click', function (e) {
 $('subMinus').addEventListener('click', function () { tick(); adjust(U.edit, -1); });
 $('subPlus').addEventListener('click', function () { tick(); adjust(U.edit, 1); });
 function togglePlay() {
-  if (S.view !== 'play') return;
+  if (S.view !== 'play' || !send({ c: 'toggle' })) return;
+  var pos = S.ended ? 0 : livePos();
   if (S.paused || S.ended) { S.paused = false; S.ended = false; anim('hop'); } else S.paused = true;
-  S.pos = livePos(); stamp = performance.now();
+  S.pos = pos; stamp = performance.now();
   holdOn('paused'); holdOn('pos', 900);
-  send({ c: 'toggle' });
   render();
 }
 function skip(n) {
-  if (S.view !== 'play') return;
+  if (S.view !== 'play' || !send({ c: 'skip', v: n })) return;
   S.pos = Math.max(0, Math.min(S.dur, livePos() + n)); stamp = performance.now(); U.prev = S.pos;
   holdOn('pos');
-  send({ c: 'skip', v: n });
   toast(n < 0 ? '-15 s' : '+15 s');
   anim('dart', { dir: n < 0 ? -1 : 1 });
 }
 function what() {
+  if (S.view !== 'play' || !send({ c: 'what' })) return;
   S.pos = Math.max(0, livePos() - 10); stamp = performance.now();
   holdOn('pos');
-  send({ c: 'what' });
   toast(t('remote.what'));
   U.react = true; anim('hop');
   setTimeout(function () { U.react = false; drawFace(); }, 700);
@@ -1633,19 +1741,19 @@ function center() {
 var trackItems = [], trackRev = -1, trackFetch = null, pickT = 0, pickFetch = null;
 function wheelModes() { return S.queueActive ? ['tempo', 'volume', 'tracks'] : ['tempo', 'volume']; }
 function loadTracks(then) {
-  if (trackFetch) return;
-  var rev = S.queueRevision; trackFetch = new AbortController();
+  if (trackFetch || document.hidden || !linkReady) return;
+  var rev = S.queueRevision, controller = trackFetch = new AbortController();
   fetch('/queue', {headers:authHeaders(), cache:'no-store', signal:trackFetch.signal})
     .then(function (r) { if (!r.ok) throw Error(); return r.json(); })
-    .then(function (j) { trackItems = j.items.slice(0, 512); trackRev = rev; if (U.pick >= trackItems.length) U.pick = trackItems.length - 1; if (then) then(); render(); })
+    .then(function (j) { if (controller.signal.aborted || rev !== S.queueRevision) return; trackItems = j.items.slice(0, 512); trackRev = rev; if (U.pick >= trackItems.length) U.pick = trackItems.length - 1; if (then) then(); render(); })
     .catch(function () {})
-    .finally(function () { trackFetch = null; });
+    .finally(function () { if (trackFetch === controller) trackFetch = null; });
 }
 function musicSteps() { return S.audioOnly && S.queueActive; }
 // ── the song's cover as the face ──────────────────────────────────
 // The computer serves the playing song's cover at 72 px; it is shown at twice that, pixel for
 // pixel, and its average colour becomes the glow. A song without one keeps the eyes.
-var coverRev = 0, coverURL = '', coverOK = false, coverTint = '', coverFetch = null;
+var coverRetry = 0, coverRev = 0, coverURL = '', coverOK = false, coverTint = '', coverFetch = null;
 // Scrubbing a song: its cover becomes a record, in the cover's own pixels. The square folds into a
 // disc in four steps, grooves and a spindle hole appear, and the picture turns with the thumb,
 // sampled pixel by pixel so it stays pixel art at every angle. Letting go turns it back upright.
@@ -1688,6 +1796,7 @@ function discTo(on, ang) {
   if (on && !disc.on && !discSource()) return;  // no picture to turn yet
   if (on) disc.on = true;
   if (!disc.on) return;
+  if (disc.k === disc.want && (on || disc.ang === 0)) { if (on) discDraw(); return; }
   if (reduced) { disc.k = disc.want; if (!on) disc.ang = 0; }
   if (!disc.raf) disc.raf = requestAnimationFrame(discStep);
 }
@@ -1702,20 +1811,24 @@ function discStep(now) {
   $('coverFace').classList.toggle('disc', !!shown);
   if (shown) discDraw();
   if (!shown) { disc.on = false; disc.t = 0; return; }
-  disc.raf = requestAnimationFrame(discStep);
+  // A held wheel has no moving pixels once folding settles. The next detent
+  // calls discTo again; the full unfold animation still runs on release.
+  if (disc.k !== disc.want || (!disc.want && disc.ang !== 0)) disc.raf = requestAnimationFrame(discStep);
 }
 
 function syncCover() {
   var want = S.view === 'play' && S.audioOnly && S.cover ? S.cover : 0;
-  if (want === coverRev) return;
+  if (document.hidden || !linkReady || want === coverRev || performance.now() < coverRetry) return;
   coverRev = want; coverOK = false; coverTint = '';
   if (coverFetch) { coverFetch.abort(); coverFetch = null; }
+  if (coverURL) { URL.revokeObjectURL(coverURL); coverURL = ''; }
+  $('coverImg').onload = null; $('coverImg').removeAttribute('src'); disc.src = null; disc.key = '';
   if (!want) return;
-  coverFetch = new AbortController();
+  var controller = coverFetch = new AbortController();
   fetch('/cover?r=' + want, {headers:authHeaders(), cache:'no-store', signal:coverFetch.signal})
     .then(function (r) { if (!r.ok) throw Error(); return r.blob(); })
     .then(function (b) {
-      if (coverRev !== want) return;
+      if (controller.signal.aborted || coverRev !== want) return;
       if (coverURL) URL.revokeObjectURL(coverURL);
       coverURL = URL.createObjectURL(b);
       var im = $('coverImg');
@@ -1726,8 +1839,8 @@ function syncCover() {
       };
       im.src = coverURL;
     })
-    .catch(function () {})
-    .finally(function () { coverFetch = null; });
+    .catch(function () { if (!controller.signal.aborted && coverRev === want) { coverRev = 0; coverRetry = performance.now() + 3000; } })
+    .finally(function () { if (coverFetch === controller) coverFetch = null; });
 }
 function averageColor(im) {
   try {
@@ -1747,8 +1860,9 @@ function pickPreview() {
   // the picked item's picture, once the ring rests on it for a moment
   clearTimeout(pickT); if (pickFetch) { pickFetch.abort(); pickFetch = null; }
   var it = trackItems[U.pick]; if (!it || !it.preview) { clearPeek(); return; }  // a song: its cover
+  var epoch = ++peekEpoch;
   pickT = setTimeout(function () {
-    var epoch = ++peekEpoch; pickFetch = new AbortController();
+    pickFetch = new AbortController();
     fetch('/queue-thumb?id=' + it.id, {headers:authHeaders(), cache:'no-store', signal:pickFetch.signal})
       .then(function (r) { if (!r.ok) throw Error(); return r.blob(); })
       .then(function (b) { if (epoch !== peekEpoch || U.pick < 0) return; if (peekURL) URL.revokeObjectURL(peekURL); peekURL = URL.createObjectURL(b); $('peekImg').src = peekURL; $('scrub').classList.add('peeking'); render(); })
@@ -1796,6 +1910,7 @@ $('bar').addEventListener('pointermove', barMove);
 function barUp() {
   if (!barDrag) return;
   barDrag = false;
+  if (U.mode === 'volume') send({c:'vol',v:S.vol});
   if (U.scrub) { U.scrub = false; clearPeek(); S.pos = U.prev; stamp = performance.now(); holdOn('pos'); send({ c: 'seek', v: U.prev }); }
   render();
 }
@@ -1816,7 +1931,7 @@ function frameMove(e) {
   if (v !== S.sub.pos) { tick(); S.sub.pos = v; holdOn('sub.pos'); send({ c: 'subpos', v: v }, true); render(); }
 }
 $('frame').addEventListener('pointermove', frameMove);
-['pointerup', 'pointercancel'].forEach(function (ev) { $('frame').addEventListener(ev, function () { frameDrag = false; }); });
+['pointerup', 'pointercancel'].forEach(function (ev) { $('frame').addEventListener(ev, function () { if (frameDrag) send({c:'subpos',v:S.sub.pos}); frameDrag = false; }); });
 
 // ── input: the wheel ──────────────────────────────────────────────
 var drag = null;
@@ -1907,6 +2022,7 @@ function detent(dir) {
 }
 function wheelUp() {
   if (!drag) return;
+  if (U.mode === 'volume' && !U.menu && U.browse === null) send({c:'vol',v:S.vol});
   drag = null; U.ang = null;
   if (U.pick >= 0) {
     var it = trackItems[U.pick]; U.pick = -1; clearTimeout(pickT); clearPeek();
@@ -1920,19 +2036,61 @@ $('wheel').addEventListener('pointerup', wheelUp);
 $('wheel').addEventListener('pointercancel', wheelUp);
 
 // ── keep the screen on while it is a remote (where the browser allows it) ──
-var lock = null;
-function keepAwake() {
-  if (lock || !navigator.wakeLock || document.hidden) return;
-  navigator.wakeLock.request('screen').then(function (l) { lock = l; l.addEventListener('release', function () { lock = null; }); }).catch(function () {});
+var lock = null, lockPending = false;
+function releaseAwake() {
+  if (lock) { var old = lock; lock = null; old.release().catch(function () {}); }
 }
-document.addEventListener('pointerdown', keepAwake);
+function keepAwake() {
+  if (lock || lockPending || !navigator.wakeLock || !linkAvailable() || !linkReady) return;
+  lockPending = true;
+  navigator.wakeLock.request('screen').then(function (l) {
+    if (!linkAvailable() || !linkReady) { l.release().catch(function () {}); return; }
+    lock = l;
+    l.addEventListener('release', function () { if (lock === l) lock = null; });
+  }).catch(function () {}).finally(function () { lockPending = false; });
+}
+document.addEventListener('pointerdown', function () { wakeLink(); keepAwake(); });
 
 // ── go ────────────────────────────────────────────────────────────
 render();
 if (codeFromLink) connect(codeFromLink);
 else if (token) connect(null);
 else showPair('');
-document.addEventListener('visibilitychange', function () { if (!document.hidden && !ws && token) { retry = 0; connect(null); } });
+function cancelGestures() {
+  drag = null; barDrag = false; frameDrag = false; U.scrub = false; U.pick = -1;
+  clearTimeout(holdT); cancelQueueDrag(); discTo(false);
+}
+function suspendRemoteWork() {
+  stopFaceTimers();
+  cancelGestures(); clearPeek();
+  if (browseFetch) { ++browseRequest; browseFetch.abort(); browseFetch = null; }
+  clearThumbs(); clearQueueThumbs();
+  if (queueFetch) { ++queueEpoch; queueFetch.abort(); queueFetch = null; }
+  if (trackFetch) { trackFetch.abort(); trackFetch = null; } trackRev = -1;
+  if (coverFetch) { coverFetch.abort(); coverFetch = null; coverRev = 0; }
+  cancelQueueAnimations(); clearQueueGhosts();
+  if (raf) cancelAnimationFrame(raf); raf = 0; anims = []; U.fx = {dx:0,dy:0,sy:1,happy:false};
+  if (disc.raf) cancelAnimationFrame(disc.raf); disc.raf = 0; disc.t = 0;
+}
+function resumeRemoteWork() {
+  if (document.hidden || !linkReady) return;
+  startFaceTimers();
+  if (U.browse !== null) openBrowse(U.browse);
+  if (queueOpen) { queueLoaded = -1; loadQueue(); }
+  discTo(false); render();
+}
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) sleepLink();
+  else { wakeLink(); keepAwake(); }
+});
+document.addEventListener('freeze', function () { linkFrozen = true; sleepLink(); });
+document.addEventListener('resume', function () { linkFrozen = false; wakeLink(); });
+window.addEventListener('focus', wakeLink);
+// The online flag is a retry hint: a local LAN can work without internet.
+window.addEventListener('offline', function () { sleepLink(); if (!linkStopped) setOffline(true); });
+window.addEventListener('online', wakeLink);
+window.addEventListener('pagehide', sleepLink);
+window.addEventListener('pageshow', function () { linkFrozen = false; wakeLink(); });
 })();
 </script>
 </body>

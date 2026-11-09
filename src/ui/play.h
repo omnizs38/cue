@@ -24,6 +24,7 @@ struct PlayInput {
   bool paused = false;
   bool audio_only = false;
   double time = 0, dur = 0, volume = 100;
+  double preview_aspect = 0;  // current file's display aspect, known before its first thumbnail
   bool muted = false;
   std::vector<Track> subs, audios;
   uint64_t tracks_revision=0;  // metadata/track list changes, not playback ticks
@@ -133,17 +134,15 @@ class PlayView {
   WindowChrome chrome;
 
   void resize(int w, int h, double s);
-  // the window's own scale, before a portrait or square window raises the bar's: menus, subtitles
-  // and up next stay at a size that suits the window's width instead of following the bar
+  // the window's own scale, before a portrait or square window raises the bar's: menus follow
+  // the approved bar scale as far as the window width and each panel's height allow
   void set_base_scale(double b) { base_s_ = b; }
   double panel_s() const {
     if (base_s_ <= 0 || base_s_ >= s_) return s_;
-    // half way between the window's own scale and the raised bar's, in half steps: a menu comes
-    // out about as wide as the bar it opens from (one silhouette), and never wider than about
-    // 72% of the window (a menu is ~230 art px)
-    double mid = std::floor((base_s_ + s_) / 2 * 2) / 2;
-    double by_width = std::floor(w_ * 0.72 / 230.0 * 2) / 2;
-    return std::max(1.0, std::min(s_, std::max(base_s_, std::min(mid, by_width))));
+    // Portrait controls already have the approved size. Keep their menus at that size too;
+    // averaging with the landscape scale made the More sheet one half-step too small.
+    const double fit = std::floor(w_ * 0.80 / 230.0 * 2) / 2;
+    return std::max(1.0, std::min(s_, std::max(base_s_, fit)));
   }
   void changed(double now);   // App updated `in`
   void reset(double now);     // new file
@@ -191,8 +190,11 @@ class PlayView {
   // timeline preview: a small frame near the hovered time (BGRA, opaque)
   void set_thumb(const std::vector<uint32_t>& px, int w, int h, double t);
   int thumb_width() const { return 80 * s_; }
-  // previews are decoded at half size and shown doubled, pixel for pixel (lighter, and in the
-  // same pixel language as the rest of the UI)
+  bool preview_active() const { return tip_want(); }
+  bool preview_hovering() const { return (hover_ == B_TIMELINE || scrubbing_) && panel_ == Panel::None && !viewport_transition_; }
+  uint64_t preview_epoch() const { return preview_epoch_; }
+  bool show_thumb(const std::vector<uint32_t>& px, int w, int h, double t, uint64_t epoch);
+  // Cache/source resolution is independent of the current window and tooltip geometry.
   // Hover images use one quarter of their display width (versus half for colours).
   int thumb_hover_width() const { return std::max(16, (int)std::lround(20 * s_)); }
   int thumb_decode_width() const { return std::max(32, (int)(40 * s_ / 2) * 2); }
@@ -210,6 +212,11 @@ class PlayView {
   static constexpr double kIrisCloseFrom = 0.9;  // where the closing ellipse starts (just inside the corners)
   // how far the iris is open: -1 none, 0 covered (waiting for the picture), up to 1 (eased)
   double iris_open(double now) const;
+  // Music's whole composition and the sound leave together; no cropped cover fragment.
+  double close_opacity(double now) const {
+    const double k = iris_closing() ? std::clamp(iris_open(now) / kIrisCloseFrom, 0.0, 1.0) : 1.0;
+    return k * k;
+  }
   void prepare(double now) { compose(now); }  // compose the layers right away (before the first tick)
 
   bool pinned() const;
@@ -434,9 +441,12 @@ class PlayView {
   bool close_on_release_ = false;
   static constexpr int kStrip = 26;  // top strip (art px) that drags the window
   bool sub_draggable() const;
-  Canvas thumb_, thumb_prev_;
-  double thumb_xfade_ = 1;  // 0..1: the new frame dissolves over the previous one
+  Canvas thumb_;
+  int thumb_slot_w_ = 0, thumb_slot_h_ = 0;
   double thumb_t_ = -1, last_preview_req_ = -100;
+  uint64_t preview_epoch_ = 1;
+  void begin_preview();
+  void wait_thumb();  // only a new hover clears pixels; an ordinary cache miss keeps the card
   uint64_t thumb_gen_ = 0;
   struct Hot { int id; Rect r; };
   std::vector<Hot> hots_;
@@ -506,7 +516,17 @@ class PlayView {
   std::string next_key_;
   Canvas music_base_;
   uint64_t music_gen_ = 0;
-  std::string music_key_;
+  struct MusicKey {
+    std::string title, artist;
+    std::array<int64_t, 7> state{};
+    bool valid = false;
+    void clear() { valid = false; }
+    bool update(const std::string& t, const std::string& a, const std::array<int64_t, 7>& v) {
+      if (valid && title == t && artist == a && state == v) return false;
+      title = t; artist = a; state = v; valid = true;
+      return true;
+    }
+  } music_key_;
   uint32_t lang_rev_ = 0;  // the interface language the cached words were drawn in
   std::string music_song_;  // title and artist last drawn: a new song's words come in afresh
   void render_music();
@@ -596,6 +616,7 @@ class PlayView {
   Fade tipvis_{0, 0, 0.08, 0.09};
   std::string tip_ts_;           // last time shown, kept while it fades out
   bool tip_want() const;
+  void tip_frame_size(int& W, int& H) const;
   void tip_size(int& W, int& H) const;
 
   // "legenda" switch in the CC panel
@@ -627,6 +648,9 @@ class PlayView {
   int demo_ = D_AMBIENT;       // what the picture shows (the last setting pointed at)
   int demo_seg_ = -1;          // a segment under the pointer (size, background): shown before it is taken
   double demo_t0_ = 0;         // when the picture changed (it fades in)
+  double hints_t0_ = -10;
+  bool hints_entering_ = false;  // finite entry of the whole visual-hints block
+  Canvas hints_canvas_;  // clipped to the hint column; released when hidden/closed
   int demo_frame_ = -1;        // the moving pictures are drawn at 30 frames a second
   bool settings_compact_ = false;  // a short window: no picture, only the settings
   bool settings_side_ = false;     // a short, wide window: the picture beside the rows, on the left

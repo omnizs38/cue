@@ -1,0 +1,26 @@
+1000 volume inputs => 2 messages; latest value retained
+remote lifecycle: final command ordering, bounded coalescing, no reconnect replay, socket identity, heartbeat/deadline, backpressure and media generations passed
+remote recovery: 12 simulated hours, 200 sleep/resume cycles, freeze, offline, transient pairing, event deduplication and stale deadlines passed
+remote idle: paused UI rebuilds eliminated; cover retry and delayed timeline refresh preserved
+node:internal/assert/utils:77
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: pause must freeze the displayed live position, not the preceding snapshot
+    at Object.<anonymous> (/workspace/scratch/2ed1b5380997/package/Cue-1.3.2/01-REPOSITORIO/tests/remote_lifecycle_test.cjs:168:2)
+    at Module._compile (node:internal/modules/cjs/loader:1929:14)
+    at Object..js (node:internal/modules/cjs/loader:2060:10)
+    at Module.load (node:internal/modules/cjs/loader:1651:32)
+    at Module._load (node:internal/modules/cjs/loader:1443:12)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5)
+    at node:internal/main/run_main_module:33:47 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v24.22.1

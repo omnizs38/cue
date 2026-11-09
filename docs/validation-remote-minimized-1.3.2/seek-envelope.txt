@@ -1,0 +1,1 @@
+Seek audio envelope: timer-only dispatch, one seek, gain recovery, restart, timeout and idle at 8/10/16/250 ms passed

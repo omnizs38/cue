@@ -283,7 +283,7 @@ struct Client {
   SOCKET s = INVALID_SOCKET;
   std::string in, out;
   bool ws = false, authenticated = false, closing = false;
-  std::string token;
+  std::string token, instance;
   remote::RateLimit messages;
   double accepted = 0;
   std::string device;
@@ -548,7 +548,11 @@ void RemoteServer::Impl::authenticate(Client& c, const std::string& payload) {
   std::string fresh;
   if (payload.size() <= 256 && json_parse(payload, j) && j.t == JVal::Obj && j["t"].str() == "auth") {
     std::lock_guard<std::mutex> l(mu);
-    std::string token = j["k"].str(), attempt = j["c"].str();
+    std::string token = j["k"].str(), attempt = j["c"].str(), instance = j["i"].str();
+    if (instance.size() >= 8 && instance.size() <= 64 &&
+        std::all_of(instance.begin(), instance.end(), [](unsigned char ch) {
+          return (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+        })) c.instance = std::move(instance);
     double now = clock_s();
     if (!remote::auth_event_room(events.size())) refuse = 4003;
     else if (remote::valid_token(token) && tokens.count(token)) { c.token = token; refuse = 0; }
@@ -572,6 +576,13 @@ void RemoteServer::Impl::authenticate(Client& c, const std::string& payload) {
     queue(c, remote::ws_encode(remote::WS_CLOSE, close));
     c.closing = true;
     return;
+  }
+  // A reconnect from this page supersedes its old half-open TCP connection.
+  // Other tabs and phones keep their own sessions; legacy clients omit the ID.
+  if (!c.instance.empty()) for (auto& old : clients) {
+    if (&old == &c || !old.authenticated || old.token != c.token || old.instance != c.instance) continue;
+    old.closing = true; old.in.clear(); old.out.clear();
+    shutdown(old.s, SD_BOTH);
   }
   c.authenticated = true;
   ++nclients;
@@ -614,8 +625,11 @@ void RemoteServer::Impl::handle_frames(Client& c) {
     if (f.opcode == remote::WS_PING) queue(c, remote::ws_encode(remote::WS_PONG, f.payload));
     else if (f.opcode == remote::WS_CLOSE) { queue(c, remote::ws_encode(remote::WS_CLOSE, "")); c.closing = true; return; }
     else if (f.opcode == remote::WS_TEXT) {
+      if (f.payload == "{\"t\":\"ping\"}") {
+        queue(c, remote::ws_encode(remote::WS_TEXT, "{\"t\":\"pong\"}")); continue;
+      }
       Event e;
-      if (remote::parse_command(f.payload, e.cmd)) { e.kind = Event::Command; e.device = c.device; post(e); }
+      if (remote::parse_command(f.payload, e.cmd)) { e.cmd.credential = c.token; e.kind = Event::Command; e.device = c.device; post(e); }
     }
   }
 }
@@ -661,6 +675,7 @@ void RemoteServer::Impl::loop() {
       if (FD_ISSET(c.s, &wr)) flush(c);
       if (!FD_ISSET(c.s, &rd)) continue;
       int got = recv(c.s, buf, sizeof buf, 0);
+      if (got < 0 && WSAGetLastError() == WSAEWOULDBLOCK) continue;
       if (got <= 0) { c.closing = true; c.out.clear(); continue; }
       if (c.closing) continue;
       if (c.in.size() + (size_t)got > remote::kMaxRequest + sizeof buf) {
@@ -681,19 +696,23 @@ void RemoteServer::Impl::loop() {
     double pat = 0;
     {
       std::lock_guard<std::mutex> l(mu);
-      st = state;
       rev = state_rev;
+      // Do not copy or encode a snapshot at every poll when no receiver needs it.
+      if (std::any_of(clients.begin(), clients.end(), [&](const Client& c) {
+            return c.authenticated && !c.closing && c.out.empty() && c.sent_rev != rev;
+          })) st = state;
       prev = peek_rev;
       pat = peek_at;
     }
+    const std::string state_frame = st.empty() ? std::string() : remote::ws_encode(remote::WS_TEXT, st);
     for (auto& c : clients) {
       if (!c.authenticated || c.closing || c.s == INVALID_SOCKET) continue;
       {
         std::lock_guard<std::mutex> l(mu);
         if (!tokens.count(c.token)) { c.closing = true; continue; }
       }
-      if (c.sent_rev != rev && !st.empty() && c.out.size() < 256 * 1024) { queue(c, remote::ws_encode(remote::WS_TEXT, st)); c.sent_rev = rev; }
-      if (c.peek_sent != prev && c.out.size() < 256 * 1024) {
+      if (c.sent_rev != rev && !state_frame.empty() && c.out.empty()) { queue(c, state_frame); c.sent_rev = rev; }
+      if (c.peek_sent != prev && c.out.empty()) {
         char b[96];
         std::snprintf(b, sizeof b, "{\"t\":\"peek\",\"n\":%llu,\"at\":%.2f}", (unsigned long long)prev, pat);
         queue(c, remote::ws_encode(remote::WS_TEXT, b));
@@ -890,7 +909,7 @@ void RemoteServer::set_pairing(bool open, const std::string& code) {
 std::vector<RemoteServer::Event> RemoteServer::take_events() {
   std::lock_guard<std::mutex> l(d_->mu);
   d_->posted = false;
-  return std::move(d_->events);
+  std::vector<Event> events; events.swap(d_->events); return events;
 }
 
 std::string lan_address() {

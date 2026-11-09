@@ -1,7 +1,7 @@
-// Previews and the film's colour come from a helper process: Cue.exe --thumb-host.
-// It runs its own engine at background priority (CPU, disk and memory), decodes on the CPU
-// only (it never competes with the playback for the GPU), and if it ever fails, the player
-// does not notice. The player talks to it through two pipes; at most one request in flight.
+// Previews and film colours use a separate helper: Cue.exe --thumb-host.
+// Warmup/colour work runs below normal CPU priority; interactive navigation uses normal priority.
+// Production previews decode on the CPU, leaving GPU decoding to playback. The helper is optional:
+// failure removes previews without stopping the player. One active decode, one replaceable destination.
 #pragma once
 #include <windows.h>
 
@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-int thumb_host_main();  // the helper's whole life (when started with --thumb-host)
+int thumb_host_main(bool hardware_test = false);  // hardware_test is only used by the diagnostic
 
 // One message from the helper, posted to the UI thread (lParam owns it).
 struct ThumbMsg {
@@ -19,6 +19,8 @@ struct ThumbMsg {
   uint32_t id = 0;
   uint32_t session = 0, process = 0;
   double t = 0;
+  double decode_ms = 0, prepare_ms = 0;
+  bool hardware = false;
   int w = 0, h = 0;
   std::vector<uint32_t> px;
 };
@@ -33,7 +35,7 @@ class ThumbClient {
   bool running() const;
   uint32_t epoch() const { return epoch_; }
   void open(const std::string& utf8_path, int width, uint32_t session);
-  void shot(uint32_t id, double t, int output_width = 0);
+  void shot(uint32_t id, double t, int output_width = 0, bool precise = false);
   void close_file();
   void shutdown();
   void kill();  // ends the helper at once, waits for nothing (the app is leaving)

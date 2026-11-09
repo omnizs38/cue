@@ -15,6 +15,7 @@ class FrameCache {
   struct Image {
     std::vector<uint32_t> px;
     int w = 0, h = 0;
+    double sample_time = -1;  // keyframe time can differ from the requested navigation bucket
     uint64_t used = 0;
     size_t bytes() const { return px.capacity() * sizeof(uint32_t); }
   };

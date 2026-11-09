@@ -1,0 +1,2 @@
+1000 volume inputs => 2 messages; latest value retained
+remote lifecycle: final command ordering, bounded coalescing, no reconnect replay, socket identity, heartbeat/deadline, backpressure and media generations passed

@@ -8,6 +8,7 @@
 #include "../src/ui/play.h"
 #undef private
 #include "../src/core/audio_mode.h"
+#include "../src/core/ui_scale.h"
 #include <cassert>
 #include <cstdio>
 
@@ -19,6 +20,39 @@ static Rect hot(const PlayView& p, int id) {
 }
 
 int main() {
+  // Wider portrait recordings must stay compact even if a small UI size or a
+  // large screen gives them enough art pixels for the regular desktop dock.
+  for(unsigned dpi:{96u,144u,192u}) for(int choice:{-1,2,0,3})
+    for(bool free:{false,true})
+      for(auto size:{std::pair{1114,1740},std::pair{981,1744},std::pair{540,960},
+                     std::pair{1080,1728},std::pair{1200,1800},std::pair{1440,1920}}){
+        auto [width,height]=size;int w=width*dpi/96,h=height*dpi/96;
+        double scale=portrait_scale(ui_scale(dpi,w,h,choice),w,h,choice);
+        PlayView p;p.in.dur=360;p.in.controls_free=free;p.resize(w,h,scale);
+        double t=1;p.reset(t);
+        for(int i=0;i<40;++i){t+=1./60;p.activity(t);p.tick(t,1./60);}
+        assert(!p.mini_ && p.vol_folded_ && !p.in_bar(B::B_VOLBAR));
+        for(int id:{B::B_QUEUE,B::B_LOOP,B::B_CC,B::B_MINI})
+          assert(!p.in_bar(id) && p.overflowed(id));
+        for(int id:{B::B_PLAY,B::B_VOL,B::B_MORE,B::B_TIMELINE}) assert(p.in_bar(id));
+        assert(p.dw_<=231*scale && p.dw_<=w);
+      }
+  // Windows Snap: a tall desktop window still has room for a full-width free bar.
+  // Check both sides of square and the widths in the reported screenshots at each DPI/size.
+  for (unsigned dpi : {96u,144u,192u}) for(int choice : {-1,2,0,3}) {
+    for(int width : {1000,1024,1080,1105,1120,1200}) {
+      int w=width*dpi/96, h=1105*dpi/96;
+      double base=ui_scale(dpi,w,h,choice), scale=portrait_scale(base,w,h,choice);
+      PlayView p; p.in.dur=300;p.in.controls_free=true;
+      p.resize(w,h,scale);double t=1;p.reset(t);
+      for(int i=0;i<40;++i){t+=1./60;p.activity(t);p.tick(t,1./60);}
+      assert(!p.mini_ && !p.vol_folded_ && p.in_bar(B::B_LOOP) && p.in_bar(B::B_CC));
+      assert(p.dw_>=std::min(w*.80,800*scale) && p.dw_<=w);
+      for(auto& a:p.hots_)for(auto& b:p.hots_)
+        if(&a!=&b && a.r.h==(int)(16*scale) && b.r.h==(int)(16*scale))
+          assert(a.r.r()<=b.r.x || b.r.r()<=a.r.x || a.r.b()<=b.r.y || b.r.b()<=a.r.y);
+    }
+  }
   int layouts = 0;
   for (bool music : {false, true})
     for (bool queue : {false, true})
@@ -66,7 +100,9 @@ int main() {
             if (p.in_bar(B::B_LOOP)) assert(p.in_bar(B::B_QUEUE));
             if (p.in_bar(B::B_QUEUE)) assert(p.in_bar(B::B_AUDIO));
             if (!music && p.in_bar(B::B_AUDIO)) assert(p.in_bar(B::B_CC));
-            if (p.in_bar(B::B_SPEED)) assert(p.in_bar(B::B_VOLBAR));
+            const bool portrait = !music && compact_video_dock(scale, p.w_, p.h_);
+            if (p.in_bar(B::B_SPEED) && !portrait) assert(p.in_bar(B::B_VOLBAR));
+            if (portrait) assert(p.vol_folded_ && !p.in_bar(B::B_VOLBAR) && !p.in_bar(B::B_CC) && !p.in_bar(B::B_QUEUE) && !p.in_bar(B::B_LOOP) && !p.in_bar(B::B_MINI));
             // the steps go only with a playlist, and only after everything else
             if (p.fold_steps_) assert(!music && queue && p.vol_folded_ && !p.in_bar(B::B_CC) && hot(p, B::B_PREV).w > 0 && hot(p, B::B_NEXT).w > 0);
             // what "..." holds: its first row is those very buttons, and the menu fits the window
@@ -100,14 +136,14 @@ int main() {
   // a window held right at a threshold does not flicker: narrowing folds at once, widening
   // unfolds only with room to spare
   {
-    PlayView p; p.in.dur = 100; p.resize(400, 600, 1); double t = 1; p.reset(t);
+    PlayView p; p.in.dur = 100; p.resize(400, 240, 1); double t = 1; p.reset(t);
     const int start = p.dock_step_;
     int w = 400;
-    while (p.dock_step_ == start && w > 200) { w -= 1; p.resize(w, 600, 1); }
+    while (p.dock_step_ == start && w > 200) { w -= 1; p.resize(w, 240, 1); }
     const int folded = p.dock_step_;
     assert(folded > start);
-    p.resize(w + 1, 600, 1); assert(p.dock_step_ == folded);  // one pixel back: still folded
-    p.resize(w + 20, 600, 1); assert(p.dock_step_ < folded);   // clearly past it: unfolds
+    p.resize(w + 1, 240, 1); assert(p.dock_step_ == folded);  // one pixel back: still folded
+    p.resize(w + 20, 240, 1); assert(p.dock_step_ < folded);   // clearly past it: unfolds
   }
   // a menu whose button leaves the bar re-anchors on "..."
   {
@@ -124,7 +160,7 @@ int main() {
     bool asked = false; for (auto& a : p.take_actions()) asked |= a.a == PA::MiniPlayer && a.v == 1;
     assert(asked);
     int w = 1200;
-    while (w > 200 && p.in_bar(B::B_MINI)) { w -= 10; p.resize(w, 600, 1); }
+    while (w > 200 && p.in_bar(B::B_MINI)) { w -= 10; p.resize(w, 240, 1); }
     assert(!p.in_bar(B::B_MINI) && p.in_bar(B::B_LOOP) && p.in_bar(B::B_CC));  // (the first to go)
     p.activate(B::B_MORE, t);
     bool there = false; for (int id : p.tool_ids_) there |= id == B::B_MINI;
@@ -223,6 +259,44 @@ int main() {
     assert(!p.in_bar(B::B_LOOP) && p.slot_alpha(B::B_LOOP) > 0);  // still fading where it was
     for (int i = 0; i < 40; ++i) { t += 1.0 / 60; p.activity(t); p.tick(t, 1.0 / 60); }
     assert(p.slot_alpha(B::B_LOOP) == 0 && !p.step_slots(1.0 / 60));  // settled: nothing left moving
+  }
+  // vertical video (portrait): compact bar with volume icon + speed on the left, playback in the
+  // middle, fullscreen + "..." on the right; volume opens upward like the mini player; everything
+  // that left the bar lives in "..." without widening the menu; resizing narrower/wider adapts cleanly
+  {
+    PlayView p;
+    p.in.dur = 20; p.in.volume = 80;
+    p.in.open_shortcut = "ctrl+o"; p.in.remote_available = true;
+    p.in.audios = {{1, "por"}, {2, "eng"}};
+    Track sub{1, "sub", "por", "", "subrip"}; p.in.subs = {sub};
+    p.set_base_scale(2.5);
+    p.resize(973, 1727, 3.0);
+    double t = 1; p.reset(t);
+    assert(!p.mini_ && p.vol_folded_ && !p.in_bar(B::B_VOLBAR));
+    assert(p.in_bar(B::B_VOL) && p.in_bar(B::B_SPEED) && p.in_bar(B::B_REW) && p.in_bar(B::B_PLAY) && p.in_bar(B::B_FWD));
+    assert(p.in_bar(B::B_FS) && p.in_bar(B::B_MORE));
+    for (int id : {B::B_QUEUE, B::B_LOOP, B::B_CC, B::B_AUDIO, B::B_MINI}) {
+      assert(!p.in_bar(id) && p.overflowed(id));
+    }
+    // clicking volume opens the vertical slider above the icon
+    p.activate(B::B_VOL, t);
+    assert(p.panel_ == B::Panel::Volume);
+    Rect vr = p.panel_rect(), dr = p.dock_rect();
+    assert(vr.b() <= dr.y);
+    p.activate(B::B_VOL, t);
+    assert(p.panel_ == B::Panel::None);
+    // opening "..." includes all 5 overflowed items in RK::Tools while keeping the menu compact
+    p.activate(B::B_MORE, t);
+    assert(p.panel_ == B::Panel::More && !p.rows_.empty() && p.rows_.front().k == B::RK::Tools);
+    assert(p.tool_ids_.size() == 5);
+    assert(p.pw_ <= (int)std::lround(130 * p.panel_s()));
+    p.activate(B::B_MORE, t);
+    // narrowing the portrait window folds speed into "..." before entering mini player
+    p.resize(194 * 3, 1727, 3.0);
+    assert(!p.mini_ && !p.in_bar(B::B_SPEED) && p.overflowed(B::B_SPEED));
+    // widening to landscape brings back the volume line and right-side buttons
+    p.resize(1920, 1080, 2.0);
+    assert(!p.vol_folded_ && p.in_bar(B::B_VOLBAR) && p.in_bar(B::B_CC) && p.in_bar(B::B_AUDIO) && p.in_bar(B::B_QUEUE) && p.in_bar(B::B_LOOP) && p.in_bar(B::B_MINI));
   }
   std::printf("Adaptive bar: %d layouts (video/music, playlist, both styles, four scales) with play centred, \"...\" at the end, no overlaps, priority order, everything reachable, folded volume, no flicker at thresholds, menus re-anchored, the mini player and settled motion passed\n", layouts);
 }

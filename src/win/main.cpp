@@ -4,6 +4,7 @@
 #include <timeapi.h>
 
 #include <string>
+#include <algorithm>
 #include <vector>
 
 #include "app.h"
@@ -77,7 +78,7 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show) {
       // the preview helper: silent, no window; if it fails it just ends
       SetUnhandledExceptionFilter([](EXCEPTION_POINTERS*) -> LONG { ExitProcess(3); });
       SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
-      return thumb_host_main();
+      return thumb_host_main(std::find(args.begin(), args.end(), "--thumb-hwdec=auto-copy") != args.end());
     }
   }
   // the interface language, once per start: the saved choice, else Windows' display languages

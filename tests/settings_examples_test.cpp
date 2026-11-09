@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <sstream>
 #include "../src/core/store.h"
+#include "../src/core/i18n.h"
 #define private public
 #include "../src/ui/play.h"
 
@@ -109,6 +110,51 @@ int main() {
     assert(p.panel_ == PlayView::Panel::Settings && !p.settings_fold_ && row_of(p, PlayView::R_UISCALE) >= 0);
   }
   assert(folds == 2);
+  // The portrait recording: toggling the real header button must not change the
+  // panel's horizontal placement or emit a native window-drag action.
+  i18n::set_language(i18n::Lang::PtBR);
+  for (double scale : {2., 2.5, 3.}) {
+    PlayView p; p.in.dur=300; p.in.controls_free=true;
+    p.resize(828,1374,scale); double t=1; p.reset(t); settle(p,t);
+    p.open_panel_for_preview(11,t); settle(p,t);
+    const Rect initial=p.panel_rect();
+    auto click_info = [&] {
+      const Rect panel=p.panel_rect(), button=p.rows_[0].parts[0];
+      p.take_actions();
+      p.mouse_move(panel.x+button.cx(),panel.y+button.cy(),t);
+      p.mouse_down(panel.x+button.cx(),panel.y+button.cy(),t);
+      p.mouse_up(panel.x+button.cx(),panel.y+button.cy(),t+.001);
+      const auto actions=p.take_actions();
+      assert(actions.size()==1 && actions[0].a==PA::SettingsExamples);
+      assert(p.panel_rect().x==initial.x && p.panel_rect().w==initial.w);
+      assert(p.in.w==828 && p.in.h==1374);
+    };
+    click_info(); assert(!p.in.settings_examples && !p.hints_entering_);
+    click_info(); assert(p.in.settings_examples && p.hints_entering_);
+    auto chroma = [&] {
+      Canvas c; c.resize(400,188); c.clear({20,20,20});
+      p.render_preview(c,{0,0,400,188},2);
+      uint64_t value=0;
+      for (uint32_t px:c.px) {
+        int r=(px>>16)&255,g=(px>>8)&255,b=px&255;
+        value+=std::max({r,g,b})-std::min({r,g,b});
+      }
+      return value;
+    };
+    const auto first=chroma();
+    for (int i=0;i<6;++i) {t+=1/120.;p.tick(t,1/120.);}
+    assert(p.hints_entering_);
+    const auto middle=chroma();
+    for (int i=0;i<13;++i) {t+=1/120.;p.tick(t,1/120.);}
+    assert(!p.hints_entering_ && chroma()>middle && middle>first);
+    // A quick reversal cancels the finite reveal; reduced motion presents it at once.
+    click_info(); click_info(); assert(p.hints_entering_);
+    click_info(); assert(!p.hints_entering_);
+    reduce_motion()=true;
+    click_info(); assert(p.in.settings_examples && !p.hints_entering_);
+    reduce_motion()=false;
+    p.close_panel(); assert(!p.hints_entering_);
+  }
   // saved: on by default, and the choice kept (under its own name, so an older "off" from when
   // the examples were off by default does not carry over)
   {
@@ -121,5 +167,18 @@ int main() {
     Store c; c.load(file.string()); assert(c.settings_examples);
     std::filesystem::remove(file); std::filesystem::remove(file.string() + ".bak");
   }
+  // The horizontal layout's glow/labels never paint into the settings column,
+  // including mid-reveal and at maximum ambient strength.
+  for (bool tall : {false,true}) for (int demo=PlayView::D_AMBIENT;demo<=PlayView::D_ABOUT;++demo)
+    for (double phase : {0.,.05,.14}) {
+      PlayView p;p.resize(1280,720,2);p.demo_=demo;p.in.ambient_strength=1;
+      p.hints_t0_=1;p.demo_t0_=.8;p.last_now_=1+phase;
+      Canvas c;c.resize(700,450);c.clear({47,47,47});
+      Rect box{20,20,tall?210:400,tall?400:188};
+      p.render_preview(c,box,2,tall);
+      for(int y=0;y<c.h;++y)for(int x=0;x<c.w;++x)
+        if(!box.contains(x,y))assert(c.px[(size_t)y*c.w+x]==0xFF2F2F2Fu);
+      p.close_panel();assert(p.hints_canvas_.px.empty());
+    }
   std::puts("Settings examples: on by default, the header's button, saved, on top or beside the rows at every scale, a new interface size decided afresh, the interface's page back to Settings when it fits passed");
 }

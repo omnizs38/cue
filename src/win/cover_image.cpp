@@ -1,5 +1,6 @@
 #include "cover_image.h"
 #include "../core/image_trim.h"
+#include "../core/bounded_worker.h"
 
 #include <wincodec.h>
 
@@ -128,6 +129,13 @@ struct ArtRequest {
   int side;
 };
 std::deque<ArtRequest> g_art_requests;
+// Independent lanes: a large card decode cannot hold up the current file's
+// small colour/crop read. Both sleep when idle; no thread per skip or resize.
+BoundedWorker& cover_reads() { static BoundedWorker worker(4); return worker; }
+BoundedWorker& art_decodes() { static BoundedWorker worker(4); return worker; }
+template<class Job> auto cancelled(std::weak_ptr<Job> weak) {
+  return [weak] { if (auto job = weak.lock()) { job->cancelled = true; job->done.store(true); } };
+}
 
 }  // namespace
 
@@ -140,7 +148,7 @@ std::shared_ptr<CoverJob> request_cover(const std::string& path) {
     std::unique_lock<std::mutex> lock(g_cover_mu);
     if (!key.empty()) {
       for (size_t i = 0; i < g_covers.size(); ++i)
-        if (g_covers[i].first == key) {
+        if (g_covers[i].first == key && !(g_covers[i].second->done.load() && g_covers[i].second->cancelled)) {
           auto job = g_covers[i].second;
           g_covers.erase(g_covers.begin() + (ptrdiff_t)i);
           g_covers.emplace_front(key, job);
@@ -153,7 +161,11 @@ std::shared_ptr<CoverJob> request_cover(const std::string& path) {
       while (g_covers.size() > kCoversKept) g_covers.pop_back();
     }
     lock.unlock();
-    std::thread([job, path] {
+    const std::weak_ptr<CoverJob> weak = job;
+    try { cover_reads().submit({[weak, path] {
+      auto job = weak.lock();
+      if (!job) return;
+      SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
       HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
       try {
         std::vector<uint32_t> px;
@@ -177,7 +189,8 @@ std::shared_ptr<CoverJob> request_cover(const std::string& path) {
       } catch (...) {}
       if (SUCCEEDED(co)) CoUninitialize();
       job->done.store(true);
-    }).detach();
+    }, cancelled(weak)}); }
+    catch (...) { job->cancelled = true; job->done.store(true); return {}; }
     return job;
   } catch (...) { return {}; }
 }
@@ -190,7 +203,7 @@ std::shared_ptr<CoverArtJob> request_cover_art(std::shared_ptr<CoverJob> cover, 
       auto owner = it->cover.lock();
       auto existing = it->job.lock();
       if (!owner || !existing) { it = g_art_requests.erase(it); continue; }
-      if (owner == cover && it->side == side) return existing;
+      if (owner == cover && it->side == side && !(existing->done.load() && existing->cancelled)) return existing;
       ++it;
     }
     auto job = std::make_shared<CoverArtJob>();
@@ -200,13 +213,20 @@ std::shared_ptr<CoverArtJob> request_cover_art(std::shared_ptr<CoverJob> cover, 
       while (g_art_requests.size() > kCoversKept) g_art_requests.pop_back();
     }
     lock.unlock();
-    std::thread([job, cover, side] {
+    const std::weak_ptr<CoverArtJob> weak = job;
+    try { art_decodes().submit({[weak, cover, side] {
+      auto job = weak.lock();
+      if (!job) return;
+      SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
       HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
       try {
         std::shared_ptr<const CoverArt> art;
         if (cover) {
           // (the song's own read, usually done by now: a little patience, never forever)
           for (int i = 0; i < 1500 && !cover->done.load(); ++i) Sleep(2);
+          if (cover->done.load() && cover->cancelled) {
+            job->cancelled = true;
+          }
           if (cover->done.load() && cover->found && !cover->bytes.empty()) {
             std::vector<uint32_t> px;
             int w = 0, h = 0;
@@ -220,12 +240,15 @@ std::shared_ptr<CoverArtJob> request_cover_art(std::shared_ptr<CoverJob> cover, 
             }
           }
         }
-        if (!art) art = std::make_shared<CoverArt>(cover_art_tile(side));
-        job->art = std::move(art);
+        if (!job->cancelled) {
+          if (!art) art = std::make_shared<CoverArt>(cover_art_tile(side));
+          job->art = std::move(art);
+        }
       } catch (...) {}
       if (SUCCEEDED(co)) CoUninitialize();
       job->done.store(true);
-    }).detach();
+    }, cancelled(weak)}); }
+    catch (...) { job->cancelled = true; job->done.store(true); return {}; }
     return job;
   } catch (...) { return {}; }
 }

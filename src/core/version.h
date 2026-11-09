@@ -3,9 +3,9 @@
 #include "build_identity.h"
 #define CUE_VERSION_MAJOR 1
 #define CUE_VERSION_MINOR 3
-#define CUE_VERSION_PATCH 1
-#define CUE_VERSION "1.3.1"
-#define CUE_VERSION_SHORT "1.3.1"
+#define CUE_VERSION_PATCH 2
+#define CUE_VERSION "1.3.2"
+#define CUE_VERSION_SHORT "1.3.2"
 // The version whose news the home shows: a fix release (1.2.1, 1.2.3) does not bring them back;
 // 1.3 has its own (the mini player, controls that fit any window).
 #define CUE_NEWS_VERSION "1.3"

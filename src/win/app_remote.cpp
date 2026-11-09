@@ -43,6 +43,12 @@ bool App::remote_start() {
 }
 
 void App::remote_stop(bool tell_phones) {
+  ++remote_path_epoch_; ++remote_open_epoch_;
+  for (auto& job : remote_path_jobs_) job->cancelled = true;
+  if (remote_path_worker_) remote_path_worker_->clear_pending();
+  remote_path_jobs_.clear(); KillTimer(hwnd_, T_REMOTE_PATH);
+  remote_verified_path_.clear();
+  if (folder_scan_ && folder_scan_->remote) folder_scan_->cancelled = true;
   remote_.stop(tell_phones);
   if (tell_phones) { store_.remote_tokens.clear(); remote_.set_tokens({}); save_state(); }
   remote_devices_.clear();
@@ -78,9 +84,13 @@ void App::remote_default_folders() {
 }
 
 void App::remote_roots() {
+  remote_verified_path_.clear();
+  ++remote_path_epoch_;
+  for (auto& job : remote_path_jobs_) job->cancelled = true;
+  if (remote_path_worker_) remote_path_worker_->clear_pending();
   std::vector<RemoteServer::Root> roots;
   for (auto& f : store_.remote_folders)
-    if (f.on && GetFileAttributesW(widen(f.path).c_str()) != INVALID_FILE_ATTRIBUTES)
+    if (f.on)
       roots.push_back({folder_display_name(f.path), f.path});
   remote_.set_roots(std::move(roots));remote_queue_revision_=~uint64_t(0);
 }
@@ -104,19 +114,9 @@ void App::remote_progress() {
   remote_.set_progress(std::move(items));
 }
 
-bool App::remote_path_ok(const std::string& path,bool directory) const {
-  if (path.empty() || (!directory&&!remote::is_playable_name(path))) return false;
-  bool inside = false;
-  for (auto& f : store_.remote_folders)
-    if (f.on && remote_path_allowed(f.path, path)) inside = true;
-  if (!inside) return false;  // never touch an untrusted UNC/device path, even to ask for attributes
-  DWORD a = GetFileAttributesW(widen(path).c_str());
-  return inside && a != INVALID_FILE_ATTRIBUTES && (directory?!!(a & FILE_ATTRIBUTE_DIRECTORY):!(a & FILE_ATTRIBUTE_DIRECTORY));
-}
-
 void App::remote_publish() {
   if (!remote_.running()) return;
-  remote::State st;
+  remote::State st; st.media = remote_media_epoch_;
   const PlayInput& in = play_.in;
   st.playing_view = mode_ == Mode::Play && loaded_;
   st.queue_revision=queue_.revision();st.queue_active=queue_.active();
@@ -235,21 +235,91 @@ void App::remote_events() {
   }
 }
 
+// One bounded lane resolves remote paths. Jobs own their data; an unplugged drive
+// cannot retain App or block playback/remote shutdown. Completion runs on the UI.
+void App::remote_validate(remote::Command cmd) {
+  auto job = std::make_shared<RemotePathJob>();
+  job->source = path_; job->epoch = remote_path_epoch_;
+  if (cmd.c == "queue-add" || cmd.c == "queue-folder") job->add_epoch = remote_add_epoch_ + 1;
+  if (cmd.c == "queue-play") {
+    const auto* item = queue_.get((uint32_t)cmd.v); if (!item) return;
+    cmd.path = item->path;
+  } else if (cmd.c == "next") {
+    if (queue_.active()) {
+      const auto* item = queue_following(); if (!item) return;
+      cmd.c = "queue-play"; cmd.v = item->id; cmd.path = item->path;
+    } else cmd.path = next_ep_;
+  }
+  if (cmd.path.empty()) return;
+  if (cmd.c == "open" || cmd.c == "next" || cmd.c == "queue-play") {
+    for (auto& old : remote_path_jobs_) if (old->open_epoch) old->cancelled = true;
+    job->open_epoch = ++remote_open_epoch_;
+  }
+  remote_path_jobs_.erase(std::remove_if(remote_path_jobs_.begin(), remote_path_jobs_.end(),
+      [](const auto& old) { return old->cancelled.load(); }), remote_path_jobs_.end());
+  if (remote_path_jobs_.size() >= 128) { queue_notice(tr(str::queue_limit), 3); return; }
+  job->cmd = std::move(cmd);
+  auto roots = store_.remote_folders;
+  try {
+    if (!remote_path_worker_) remote_path_worker_ = std::make_unique<AsyncWorker>(128);
+    bool accepted = remote_path_worker_->submit({[job, roots = std::move(roots)] {
+      if (job->cancelled) { job->done.store(true, std::memory_order_release); return; }
+      SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+      try {
+        const auto& c = job->cmd;
+        bool directory = c.c == "queue-folder";
+        if (directory || remote::is_playable_name(c.path)) {
+          for (const auto& root : roots) if (root.on && remote_path_allowed(root.path, c.path)) {
+            DWORD attr = GetFileAttributesW(widen(c.path).c_str());
+            job->allowed = attr != INVALID_FILE_ATTRIBUTES && (directory == !!(attr & FILE_ATTRIBUTE_DIRECTORY));
+            break;
+          }
+        }
+      } catch (...) { job->allowed = false; }
+      job->done.store(true, std::memory_order_release);
+    }, [job] { job->done.store(true, std::memory_order_release); }, [job] { return job->cancelled.load(); }});
+    if (!accepted) { queue_notice(tr(str::queue_limit), 3); return; }
+    remote_path_jobs_.push_back(job);
+    SetTimer(hwnd_, T_REMOTE_PATH, 30, nullptr);
+  } catch (...) { queue_notice(tr(str::notice_open_failed), 3); }
+}
+
+void App::remote_paths_ready() {
+  while (!remote_path_jobs_.empty()) {
+    auto job = remote_path_jobs_.front();
+    if (!job->done.load(std::memory_order_acquire)) break;
+    remote_path_jobs_.pop_front();
+    if (!remote_.running() || job->cancelled || job->epoch != remote_path_epoch_ ||
+        (job->add_epoch && job->add_epoch != remote_add_epoch_ + 1) ||
+        (job->open_epoch && job->open_epoch != remote_open_epoch_)) continue;
+    if (job->cmd.c == "next" && job->source != path_) continue;
+    if (!job->allowed) { queue_notice(tr(str::notice_open_failed), 3); continue; }
+    job->cmd.path_validated = true;
+    remote_command(job->cmd);
+  }
+  if (remote_path_jobs_.empty()) KillTimer(hwnd_, T_REMOTE_PATH);
+}
+
 void App::remote_command(const remote::Command& c) {
   double t = now();
   PlayInput& in = play_.in;
   const std::string& k = c.c;
-  if(k=="queue-add") {if(remote_path_ok(c.path)) {size_t added=queue_add({c.path});queue_notice(tr(added?str::queue_added:str::queue_limit),added?1:3);}else queue_notice(tr(str::notice_open_failed),3);return;}
-  if(k=="queue-folder") {if(remote_path_ok(c.path,true))queue_folder(c.path,false,true);else queue_notice(tr(str::notice_open_failed),3);return;}
+  if ((!c.credential.empty() && std::find(store_.remote_tokens.begin(), store_.remote_tokens.end(), c.credential) == store_.remote_tokens.end()) ||
+      (c.has_media && c.media != remote_media_epoch_)) { remote_publish(); return; }
+  if (!c.path_validated && (k == "open" || k == "next" || k == "queue-play" || k == "queue-add" || k == "queue-folder")) {
+    remote_validate(c); return;
+  }
+  if(k=="queue-add") {if(c.path_validated) {size_t added=queue_add({c.path});queue_notice(tr(added?str::queue_added:str::queue_limit),added?1:3);}else queue_notice(tr(str::notice_open_failed),3);return;}
+  if(k=="queue-folder") {if(c.path_validated)queue_folder(c.path,false,true);else queue_notice(tr(str::notice_open_failed),3);return;}
   if(k=="queue-clear") {queue_clear();return;}
   if(k=="queue-play"||k=="queue-remove"||k=="queue-up"||k=="queue-down"||k=="queue-move") {
     auto id=(uint32_t)c.v;
-    if(k=="queue-play") {auto* i=queue_.get(id);if(i&&remote_path_ok(i->path)) {if(id==queue_.current()) {play_.remote_toggle_pause(t);run_actions();}else queue_play(id);}else queue_notice(tr(str::notice_open_failed),3);}
+    if(k=="queue-play") {auto* i=queue_.get(id);if(i&&c.path_validated&&i->path==c.path) {if(id==queue_.current()&&loaded_) {play_.remote_toggle_pause(t);run_actions();}else {remote_verified_path_=c.path;queue_play(id);}}else queue_notice(tr(str::notice_open_failed),3);}
     else {bool changed=k=="queue-remove"?queue_.remove(id):k=="queue-move"?queue_.move_to(id,c.to):queue_.move(id,k=="queue-up"?-1:1);if(changed)queue_refresh();}
     return;
   }
   if (k == "open") {
-    if (remote_path_ok(c.path)) open(c.path);
+    if (c.path_validated) open(c.path);
     return;
   }
   if (k == "timer") {
@@ -314,8 +384,7 @@ void App::remote_command(const remote::Command& c) {
     if (i == -1 && in.audios.size() >= 2) play_.remote_act(PA::AudioMix, 1, 0);  // all of them
     else if (i >= 0 && i < (int)in.audios.size()) play_.remote_act(PA::SelectAudio, 0, in.audios[i].id);
   } else if (k == "next") {
-    if(queue_.active()) {if(auto* i=queue_following();i&&remote_path_ok(i->path))queue_play(i->id);}
-    else if (!next_ep_.empty()&&remote_path_ok(next_ep_)) open(next_ep_);
+    if (c.path_validated && c.path == next_ep_) open(c.path);
     return;
   } else {
     return;
@@ -408,24 +477,28 @@ bool App::queue_next_episode() {
 }
 
 // The phone's timeline preview: the same frames as the PC's hover, from the same helper.
+bool App::remote_preview_pending() const {
+  return remote_peek_want_ >= 0 && remote_.running() && remote_.clients() > 0 &&
+      mode_ == Mode::Play && loaded_ && first_frame_ && !audio_only_;
+}
+
 void App::remote_peek(double t) {
   if (play_.in.dur <= 0) return;
   remote_peek_want_ = std::clamp(t, 0.0, play_.in.dur);
-  int shown = thumb_shown_;
-  thumb_request(remote_peek_want_);
-  thumb_shown_ = shown;  // the PC's own hover keeps its own picture
+  remote_peek_sent_ = INT_MIN;  // a new gesture may request the same cached frame again
+  thumb_request(remote_peek_want_, false);
   remote_peek_send();
 }
 
 void App::remote_peek_send() {
   if (remote_peek_want_ < 0 || thumb_cache_.empty()) return;
   int k = thumb_key(remote_peek_want_);
-  auto it = thumb_cache_.lower_bound(k);
-  if (it == thumb_cache_.end() || (it != thumb_cache_.begin() && it->first != k && k - std::prev(it)->first < it->first - k)) --it;
+  auto it = thumb_cache_.find(k);
+  if (it == thumb_cache_.end()) return;
   thumb_cache_.touch(it->first);
   if (it->first != remote_peek_sent_) {
     remote_peek_sent_ = it->first;
-    remote_.set_peek(it->first * thumb_step(), it->second.px, it->second.w, it->second.h);
+    remote_.set_peek(it->second.sample_time, it->second.px, it->second.w, it->second.h);
   }
   if (it->first == k) remote_peek_want_ = -1;
 }
