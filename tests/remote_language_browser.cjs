@@ -24,11 +24,11 @@ const server = http.createServer((req,res) => {
     const context = await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
     const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.addInitScript(() => {
-      localStorage.setItem('cue.token.v2','a'.repeat(64));
+      localStorage.setItem('cue.key.v2','a'.repeat(64));
       window.WebSocket = class {
-        constructor(){ this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 5); }
+        constructor(){ this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); this.onmessage?.({data:'{"t":"chal","n":"'+'0'.repeat(32)+'"}'}); }, 5); }
         send(data){ const m = JSON.parse(data); if (m.t === 'auth') setTimeout(() => {
-          this.onmessage?.({data:JSON.stringify({t:'hello',pc:'Cue PC'})});
+          this.onmessage?.({data:JSON.stringify({t:'hello',pc:'Cue PC',sid:'01'.repeat(8),sk:'b'.repeat(64)})});
           this.onmessage?.({data:JSON.stringify({t:'state',view:'home',file:'',pos:0,dur:0,speed:1,vol:100,paused:true,ended:false,audioOnly:false,
             sub:{has:false,on:false,delay:0,size:44,sizeMin:28,sizeMax:72,pos:93,posDefault:93,posMin:12,posMax:97},audio:{n:0,i:0},timer:{m:0,left:0},
             next:'',lang:'en',color:'#a0508f'})});

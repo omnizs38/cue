@@ -30,6 +30,16 @@ int main() {
   assert(!valid_ws_key("\r\nInjected: yes") && !valid_ws_key("dGhlIHNhbXBsZSBub25jZR=="));
   Request req; size_t n = 0;
   for (auto text : {"GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n", "GET / HTTP/1.1\r\nHost: a\r\nContent-Length: 10\r\n\r\n", "GET / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n", "GET /%00 HTTP/1.1\r\nHost: a\r\n\r\n", "GET /?p=a&p=b HTTP/1.1\r\nHost: a\r\n\r\n", "GET / HTTP/1.1\r\nBad Header: yes\r\n\r\n"}) assert(parse_request(text,req,n) == -1);
+  // The page signs the request target exactly as it puts it in the URL. The
+  // server must keep and verify those same bytes: the decoded path alone has no
+  // query, so every signed listing or thumbnail would be refused.
+  {
+    Request signed_req; size_t signed_len = 0;
+    assert(parse_request("GET /thumb?p=C%3A%5CVideos%5Ca.mp4 HTTP/1.1\r\nHost: a\r\n\r\n", signed_req, signed_len) == 1);
+    assert(signed_req.path == "/thumb" && signed_req.target == "/thumb?p=C%3A%5CVideos%5Ca.mp4");
+    assert(parse_request("GET /queue HTTP/1.1\r\nHost: a\r\n\r\n", signed_req, signed_len) == 1);
+    assert(signed_req.target == "/queue" && signed_req.target == signed_req.path);
+  }
   auto response = http_response(200, "text/html", "", false, std::string(32,'a'), "127.0.0.1:7878");
   assert(response.find("script-src 'nonce-" + std::string(32,'a') + "'") != std::string::npos);
   assert(response.find("connect-src 'self' ws://127.0.0.1:7878") != std::string::npos);
@@ -76,5 +86,5 @@ int main() {
     Canvas canvas; view.render(canvas,3);
     assert(canvas.w==dims.first && canvas.h==dims.second);
   }
-  std::puts("Remote security: strict HTTP/WS/JSON, hashed credentials, credential migration, path attacks, command ranges, rate limits, 12000 malformed inputs and portrait/landscape pointer routes passed");
+  std::puts("Remote security: strict HTTP/WS/JSON, encrypted credentials, credential migration, path attacks, command ranges, rate limits, 12000 malformed inputs and portrait/landscape pointer routes passed");
 }

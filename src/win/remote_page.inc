@@ -483,7 +483,7 @@ function hexToBytes(hex) { var b = []; for (var i = 0; i < hex.length; i += 2) b
 function hmacSha256(key, message) {
 var block = new Array(64);
 var kb = stringToBytes(key);
-if (kb.length > 64) kb = stringToBytes(sha256(kb));
+if (kb.length > 64) kb = hexToBytes(sha256(kb));  // the raw hash, not its hex text
 for (var i = 0; i < 64; ++i) block[i] = i < kb.length ? kb[i] : 0;
 var inner = block.slice(), outer = block.slice();
 for (var i = 0; i < 64; ++i) { inner[i] ^= 0x36; outer[i] ^= 0x5c; }

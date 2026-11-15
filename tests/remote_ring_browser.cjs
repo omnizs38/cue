@@ -21,10 +21,10 @@ const server = http.createServer((req, res) => {
   const ctx = await browser.newContext({viewport: {width: 390, height: 750}, isMobile: true, hasTouch: true});
   const page = await ctx.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
   await page.addInitScript(() => {
-    localStorage.setItem('cue.token.v2', 'a'.repeat(64));
+    localStorage.setItem('cue.key.v2', 'a'.repeat(64));
     window.WebSocket = class {
-      constructor() { window.__ws = this; this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 5); }
-      send(d) { const m = JSON.parse(d); if (m.t === 'auth') setTimeout(() => this.onmessage?.({data: JSON.stringify({t: 'hello', pc: 'PC'})}), 5); }
+      constructor() { window.__ws = this; this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); this.onmessage?.({data: '{"t":"chal","n":"' + '0'.repeat(32) + '"}'}); }, 5); }
+      send(d) { const m = JSON.parse(d); if (m.t === 'auth') setTimeout(() => this.onmessage?.({data: JSON.stringify({t: 'hello', pc: 'PC', sid: '01'.repeat(8), sk: 'b'.repeat(64)})}), 5); }
       close() {}
     };
     window.__state = (file, pos, dur, rev) => window.__ws.onmessage({data: JSON.stringify({t: 'state', view: 'play', file, pos, dur, speed: 1, vol: 100,

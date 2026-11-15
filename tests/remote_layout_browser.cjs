@@ -31,11 +31,11 @@ const server = http.createServer((req, res) => {
     const ctx = await browser.newContext({viewport: {width: W, height: H}, isMobile: true, hasTouch: true});
     const page = await ctx.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.addInitScript(audio => {
-      localStorage.setItem('cue.token.v2', 'a'.repeat(64));
+      localStorage.setItem('cue.key.v2', 'a'.repeat(64));
       window.WebSocket = class {
-        constructor() { this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 5); }
+        constructor() { this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); this.onmessage?.({data: '{"t":"chal","n":"'+'0'.repeat(32)+'"}'}); }, 5); }
         send(d) { const m = JSON.parse(d); if (m.t === 'auth') setTimeout(() => {
-          this.onmessage?.({data: JSON.stringify({t: 'hello', pc: 'PC'})});
+          this.onmessage?.({data: JSON.stringify({t: 'hello', pc: 'PC', sid: '01'.repeat(8), sk: 'b'.repeat(64)})});
           this.onmessage?.({data: JSON.stringify({t: 'state', view: 'play', file: audio ? 'Jane Remover - Beauty Sleep.flac' : "RuPaul's Drag Race - S18E15.mkv", pos: 206, dur: audio ? 223 : 3900,
             speed: 1, vol: 100, paused: false, ended: false, audioOnly: audio, sub: {has: false, on: false, delay: 0, size: 44, sizeMin: 28, sizeMax: 72, pos: 93, posDefault: 93, posMin: 12, posMax: 97},
             audio: {n: 1, i: 0}, timer: {m: 0, left: 0}, next: '', queueActive: true, color: '#a0508f', cover: audio ? 7 : 0,

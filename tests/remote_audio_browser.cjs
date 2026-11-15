@@ -31,11 +31,11 @@ const server = http.createServer((req,res) => {
     const context = await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
     const page = await context.newPage(); const errors = []; page.on('pageerror', e => errors.push(e.message));
     await page.addInitScript(audio => {
-      localStorage.setItem('cue.token.v2','a'.repeat(64));
+      localStorage.setItem('cue.key.v2','a'.repeat(64));
       window.WebSocket = class {
-        constructor(){ this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 5); }
+        constructor(){ this.readyState = 0; setTimeout(() => { this.readyState = 1; this.onopen?.(); this.onmessage?.({data:'{"t":"chal","n":"'+'0'.repeat(32)+'"}'}); }, 5); }
         send(data){ const m = JSON.parse(data); setTimeout(() => { if (m.t === 'auth') {
-          this.onmessage?.({data:JSON.stringify({t:'hello',pc:'Cue PC'})});
+          this.onmessage?.({data:JSON.stringify({t:'hello',pc:'Cue PC',sid:'01'.repeat(8),sk:'b'.repeat(64)})});
           this.onmessage?.({data:JSON.stringify({t:'state',view:'play',file:audio?'song.flac':'Show S01E01.mkv',pos:150,dur:200,speed:1,vol:100,paused:false,ended:false,audioOnly:audio,
             sub:{has:false,on:false,delay:0,size:44,sizeMin:28,sizeMax:72,pos:93,posDefault:93,posMin:12,posMax:97},audio:{n:1,i:0},timer:{m:0,left:0},
             next:audio?'other song.flac':'Show S01E02.mkv',nextAuto:true,queueActive:true,color:'#a0508f',cover:audio?77:0,title:audio?'Night Swim':undefined,artist:audio?'tinypeep \u00b7 demo days':undefined})});

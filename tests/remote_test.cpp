@@ -88,6 +88,13 @@ static void pairing_checks() {
   assert(g.allowed(5));
   g.failed(5);
   assert(!g.allowed(6) && !g.allowed(64) && g.allowed(66));
+  // the wider budget: guessing from many addresses at once is stopped later
+  // than one address's own six tries
+  CodeGuard wide{30};
+  for (int i = 0; i < 29; ++i) { assert(wide.allowed(i)); wide.failed(i); }
+  assert(wide.allowed(29));
+  wide.failed(29);
+  assert(!wide.allowed(30));
 }
 
 static void file_checks() {
@@ -215,13 +222,14 @@ static void store_checks() {
   // would share everything, and a folder without "on" is not shared at all
   {
     std::ofstream f(file, std::ios::binary | std::ios::trunc);
-    f << "{\"schema\":2,\"prefs\":{\"remote\":{\"folders\":[{\"path\":\"C:\\\\\"},{\"path\":\"D:\\\\Filmes\"}]}}}";
+    f << "{\"schema\":2,\"prefs\":{\"remote\":{\"folders\":[{\"path\":\"C:\\\\\"},{\"path\":\"D:\\\\Filmes\"},{\"path\":\"c:\\\\videos\"}]}}}";
     f.close();
     Store untrusted;
     assert(untrusted.load(file));
-    assert(untrusted.remote_folders.size() == 1);
+    assert(untrusted.remote_folders.size() == 2);
     assert(untrusted.remote_folders[0].path == "D:\\Filmes");
     assert(!untrusted.remote_folders[0].on);  // sharing is a choice, not a default
+    assert(untrusted.remote_folders[1].path == "c:\\videos");  // a lower-case drive is a folder too
     std::filesystem::remove(file);
     std::filesystem::remove(file.string() + ".bak");
   }

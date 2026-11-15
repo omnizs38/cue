@@ -26,6 +26,11 @@ inline bool auth_event_room(size_t queued) { return queued < kAuthEventLimit; }
 // ── HTTP ────────────────────────────────────────────────────────────
 struct Request {
   std::string method, path;          // path without the query, percent-decoded
+  // The request target exactly as the browser sent it ("/thumb?p=..."), still
+  // percent-encoded. The page signs this string, so the server must verify the
+  // same bytes: the decoded path alone would not bind the query, and a query
+  // would never match a signature made over it.
+  std::string target;
   std::map<std::string, std::string> query, headers;  // header names in lower case
 };
 // 1 complete (header_len set), 0 needs more bytes, -1 malformed or too large
@@ -33,9 +38,9 @@ int parse_request(std::string_view buf, Request& out, size_t& header_len);
 bool valid_authority(std::string_view host);
 bool valid_ws_key(std::string_view key);
 bool valid_token(std::string_view token);
-// The hash of a token, as the server keeps it: the phone sends the token, the
-// server compares hashes. A state file that someone reads must not hand over
-// the phones.
+// The hex SHA-256 of a token. The server names a credential by the first bytes
+// of this hash (credential_kid) and proves the credential itself by challenge;
+// the full hash remains for the tests that check the primitive.
 std::string token_hash(std::string_view token);
 bool valid_token_hash(std::string_view hash);
 // Compares without an early exit: a secret must not leak through the time the

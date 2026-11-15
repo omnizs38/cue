@@ -97,7 +97,7 @@ bool http_get(const std::wstring& url, const wchar_t* accept, Sink sink, std::st
         // https address, and one we know.
         wchar_t location[2048] = {};
         DWORD loc_len = sizeof location;
-        if (WinHttpQueryHeaders(req, WINHTTP_QUERY_LOCATION | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX,
+        if (WinHttpQueryHeaders(req, WINHTTP_QUERY_LOCATION, WINHTTP_HEADER_NAME_BY_INDEX,
                                  location, &loc_len, WINHTTP_NO_HEADER_INDEX) && loc_len > 1) {
           std::wstring next(location);
           Url check;
@@ -123,6 +123,9 @@ bool http_get(const std::wstring& url, const wchar_t* accept, Sink sink, std::st
     } else err = "send " + std::to_string(GetLastError());
     WinHttpCloseHandle(req);
     WinHttpCloseHandle(con);
+    // A redirect leaves `err` empty so the next hop runs; any other failure is
+    // final. Repeating it would send the same request six times.
+    if (!err.empty()) break;
   }
   if (err.empty() && !ok) err = "no response";
   WinHttpCloseHandle(ses);
@@ -178,7 +181,7 @@ int publisher_signature(const std::wstring& file, std::string& who) {
   int result = -1;
   if (status != 0) {
     // no signature at all is not a failure, it is the state of an unsigned build
-    if (GetLastError() == (DWORD)TRUST_E_NOSIGNATURE) result = 0;
+    if (status == (LONG)TRUST_E_NOSIGNATURE || GetLastError() == (DWORD)TRUST_E_NOSIGNATURE) result = 0;
   } else {
     // The signer's certificate: its thumbprint is what we compare, its name
     // goes to the log. The state is still open here, which is when the helpers
@@ -200,7 +203,7 @@ int publisher_signature(const std::wstring& file, std::string& who) {
       DWORD hash_size = sizeof hash;
       if (CertGetCertificateContextProperty(cert->pCert, CERT_SHA1_HASH_PROP_ID, hash, &hash_size) && hash_size <= sizeof hash) {
         std::string thumb;
-        for (DWORD i = 0; i + 1 < hash_size; ++i) {
+        for (DWORD i = 0; i < hash_size; ++i) {
           char b[4];
           std::snprintf(b, sizeof b, "%02x", (unsigned char)hash[i]);
           thumb += b;

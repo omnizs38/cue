@@ -8,7 +8,7 @@ const items=[{id:41,name:'First.mkv',current:true},{id:73,name:'<script>second</
 const server=http.createServer((req,res)=>{
  if(req.url==='/font.ttf'){res.end(fs.readFileSync('assets/fonts/CueOmni.ttf'));return;}
  if(req.url==='/queue'){
-  assert.equal(req.headers.authorization,'Bearer '+'a'.repeat(64));
+  assert.equal(/^Cue [0-9a-f]{16}:\d+:[0-9a-f]{64}$/.test(req.headers.authorization||''),true);
   return setTimeout(()=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify({items}));},delay);
  }
  if(req.url.startsWith('/list')){const p=new URL(req.url,'http://local').searchParams.get('p')||'';res.setHeader('Content-Type','application/json');res.end(JSON.stringify(p?{path:p,parent:'',title:'Videos',items:[{name:'Added.mp4',path:'C:\\Videos\\Added.mp4'}]}:{path:'',parent:'',title:'',items:[{name:'Videos',path:'C:\\Videos',dir:true}]}));return;}
@@ -25,9 +25,9 @@ const server=http.createServer((req,res)=>{
   const page=await browser.newPage({viewport:{width,height}});
   page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{
-   localStorage.setItem('cue.token.v2','a'.repeat(64));window.sent=[];
-   window.WebSocket=class {constructor(){window.ws=this;this.readyState=1;setTimeout(()=>this.onopen(),0);}
-    send(text){const m=JSON.parse(text);if(m.t==='auth'){setTimeout(()=>{this.onmessage({data:JSON.stringify({t:'hello'})});window.publish();},0);}else window.sent.push(m);}
+   localStorage.setItem('cue.key.v2','a'.repeat(64));window.sent=[];
+   window.WebSocket=class {constructor(){window.ws=this;this.readyState=1;setTimeout(()=>{this.onopen();this.onmessage({data:'{"t":"chal","n":"'+'0'.repeat(32)+'"}'});},0);}
+    send(text){const m=JSON.parse(text);if(m.t==='auth'){setTimeout(()=>{this.onmessage({data:JSON.stringify({t:'hello',sid:'01'.repeat(8),sk:'b'.repeat(64)})});window.publish();},0);}else window.sent.push(m);}
     close(){}
    };
    let rev=1;window.publish=()=>window.ws.onmessage({data:JSON.stringify({t:'state',view:'play',file:'First.mkv',pos:2,dur:100,speed:1,vol:100,paused:false,ended:false,audioOnly:false,sub:{has:false,on:false},audio:{n:1,i:0},timer:{m:0,left:0},next:'second.mp3',nextAuto:true,color:'#123456',queueRevision:rev++})});

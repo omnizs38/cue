@@ -17,10 +17,10 @@ const server=http.createServer((req,res)=>{
  try{for(const [width,height]of [[320,568],[390,844],[844,390]]){
   const page=await browser.newPage({viewport:{width,height},isMobile:true,hasTouch:true});const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{
-   localStorage.setItem('cue.token.v2','a'.repeat(64));window.__sockets=[];
+   localStorage.setItem('cue.key.v2','a'.repeat(64));window.__sockets=[];
    window.WebSocket=class{
-    constructor(){this.readyState=0;this.bufferedAmount=0;window.__sockets.push(this);setTimeout(()=>{this.readyState=1;this.onopen?.();},5);}
-    send(s){const m=JSON.parse(s);if(m.t==='auth')setTimeout(()=>this.onmessage?.({data:'{"t":"hello","pc":"test"}'}),5);if(m.t==='ping')this.onmessage?.({data:'{"t":"pong"}'});}
+    constructor(){this.readyState=0;this.bufferedAmount=0;window.__sockets.push(this);setTimeout(()=>{this.readyState=1;this.onopen?.();this.onmessage?.({data:'{"t":"chal","n":"'+'0'.repeat(32)+'"}'});},5);}
+    send(s){const m=JSON.parse(s);if(m.t==='auth')setTimeout(()=>this.onmessage?.({data:'{"t":"hello","pc":"test","sid":"0101010101010101","sk":"'+'b'.repeat(64)+'"}'}),5);if(m.t==='ping')this.onmessage?.({data:'{"t":"pong"}'});}
     close(){this.readyState=3;}
    };
   });

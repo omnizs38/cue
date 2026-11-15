@@ -165,6 +165,7 @@ int parse_request(std::string_view buf, Request& out, size_t& header_len) {
   if (target.empty() || target[0] != '/' || target.find('#') != std::string_view::npos) return -1;
   size_t q = target.find('?');
   out.path = url_decode(target.substr(0, q));
+  out.target = std::string(target);  // the signed bytes: path and query, as sent
   if (out.path.find_first_of(std::string("\0\r\n", 3)) != std::string::npos) return -1;
   if (q != std::string_view::npos) {
     std::string_view qs = target.substr(q + 1);

@@ -22,11 +22,24 @@
 // widen.
 static bool shared_folder_ok(const std::string& path) {
   if (path.size() < 4 || path.size() > 400) return false;
-  if (path[0] < 'A' || path[0] > 'Z' || path[1] != ':') return false;  // a drive, not a UNC or a device
-  if (path.find(':') != 1) return false;                              // no second colon: no stream
-  if (path.find("..") != std::string::npos) return false;            // no way up
-  if (path.find('\\') == std::string::npos) return false;             // a real folder, not a drive root
-  if (path.back() == '\\') return false;                               // a drive root shares everything
+  // A drive letter, upper or lower case (the rest of the app stores paths in
+  // either case; a lower-case drive must not silently drop the share).
+  const char drive = path[0];
+  const bool letter = (drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z');
+  if (!letter || path[1] != ':') return false;  // a drive, not a UNC or a device
+  if (path.find(':') != 1) return false;        // no second colon: no stream
+  // No "..": a later traversal must not climb out of the share. Only a whole
+  // path component named ".." is traversal; a folder whose name merely has two
+  // dots in it ("Making..of") is a real folder and stays.
+  for (size_t i = 2; i < path.size();) {
+    const size_t end = path.find_first_of("\\/", i);
+    const size_t stop = end == std::string::npos ? path.size() : end;
+    if (path.compare(i, stop - i, "..") == 0 && stop - i == 2) return false;
+    i = stop + 1;
+  }
+  if (path.find('\\') == std::string::npos && path.find('/') == std::string::npos)
+    return false;                               // a real folder, not a drive root
+  if (path.back() == '\\' || path.back() == '/') return false;  // a drive root shares everything
   for (char c : path) if ((unsigned char)c < 32) return false;
   return true;
 }
@@ -131,13 +144,21 @@ bool SettingsStore::parse(const std::string& text) {
     if (shared_folder_ok(path) && remote_folders.size() < 16) remote_folders.push_back({path, f["on"].boolean(false)});
   }
   remote_credentials.clear();
+  remote_credential_blobs.clear();
   // The credentials of the phones that may pair. On disk they are encrypted
   // (DPAPI on Windows), in memory they are the plain credential: a state file
-  // that someone reads is not a set of keys. A file from an older Cue held
-  // hashes of tokens; those phones must pair again.
+  // that someone reads is not a set of keys. A file from an older Cue held its
+  // tokens themselves; they are not the credential this protocol proves, so
+  // those phones pair again.
   for (auto& t : rm["credentials"].a) {
-    const std::string plain = unprotect_blob(t.str());
-    if (remote::valid_token(plain) && remote_credentials.size() < 8) remote_credentials.push_back(plain);
+    const std::string blob = t.str();
+    const std::string plain = unprotect_blob(blob);
+    if (remote::valid_token(plain) && remote_credentials.size() < 8) {
+      remote_credentials.push_back(plain);
+      // Keep the exact protected bytes: a save reuses them, so an unchanged
+      // state still compares equal (DPAPI would never produce them again).
+      remote_credential_blobs.emplace_back(plain, blob);
+    }
   }
   const JVal& up = ss["update"];
   update_checked = up["checked"].integer<int64_t>(0);
@@ -194,6 +215,24 @@ bool SettingsStore::load(const std::filesystem::path& path) {
   return false;
 }
 
+void SettingsStore::prepare_credential_blobs() {
+  // Credentials that are no longer remembered keep no encrypted form.
+  remote_credential_blobs.erase(
+      std::remove_if(remote_credential_blobs.begin(), remote_credential_blobs.end(),
+                     [&](const auto& entry) {
+                       return std::find(remote_credentials.begin(), remote_credentials.end(), entry.first) ==
+                              remote_credentials.end();
+                     }),
+      remote_credential_blobs.end());
+  for (const auto& plain : remote_credentials) {
+    const bool cached = std::any_of(remote_credential_blobs.begin(), remote_credential_blobs.end(),
+                                    [&](const auto& entry) { return entry.first == plain; });
+    if (cached) continue;
+    const std::string blob = protect_blob(plain);
+    if (!blob.empty()) remote_credential_blobs.emplace_back(plain, blob);
+  }
+}
+
 bool SettingsStore::save(const std::filesystem::path& path) const {
   char b[320];
   std::string o = "{\n  \"schema\": " + std::to_string(kSchema) + ",\n";
@@ -228,8 +267,30 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
     o += "]";
   }
   o += ", \"credentials\": [";
-  for (size_t i = 0; i < remote_credentials.size(); ++i) o += (i ? ", " : "") + json_quote(protect_blob(remote_credentials[i]));
+  for (size_t i = 0; i < remote_credentials.size(); ++i) {
+    const std::string& plain = remote_credentials[i];
+    std::string blob;
+    for (const auto& cached : remote_credential_blobs)
+      if (cached.first == plain) { blob = cached.second; break; }
+    if (blob.empty()) {
+      blob = protect_blob(plain);
+      // A credential that cannot be encrypted must not be written as an empty
+      // entry: the next load would drop it and the phone would be unpaired.
+      // Fail the save instead, so the previous good state stays in place.
+      if (blob.empty()) return false;
+      remote_credential_blobs.emplace_back(plain, blob);
+    }
+    o += (i ? ", " : "") + json_quote(blob);
+  }
   o += "]},\n";
+  // The encrypted forms of credentials no longer remembered are not kept.
+  remote_credential_blobs.erase(
+      std::remove_if(remote_credential_blobs.begin(), remote_credential_blobs.end(),
+                     [&](const auto& cached) {
+                       return std::find(remote_credentials.begin(), remote_credentials.end(), cached.first) ==
+                              remote_credentials.end();
+                     }),
+      remote_credential_blobs.end());
   o += "    \"slang\": " + json_quote(slang) + ", \"alang\": " + json_quote(alang) + "\n  },\n";
   // session
   o += "  \"session\": {\n";
@@ -267,7 +328,11 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
     if (!file_contents_equal(bak,o)) {
       std::error_code backup_error;
       std::filesystem::copy_file(path,bak,std::filesystem::copy_options::overwrite_existing,backup_error);
-      if (!backup_error) flush_directory(path.parent_path());  // best effort: the copy is on the disk
+      if (!backup_error) {
+        // The recovery copy is only useful if its bytes reached the device too.
+        flush_file_to_disk(bak);          // best effort: the good file is untouched
+        flush_directory(path.parent_path());
+      }
       return !backup_error;
     }
     return true;

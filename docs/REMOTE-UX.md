@@ -82,7 +82,7 @@ thumbnail), and the page shows that square.
 
 The page's words come from Cue's interface language. Every state message carries
 its tag (`lang`); when it differs from the language the page was served in, the page
-reloads once to receive the new words. Pairing survives (the token lives in local
+reloads once to receive the new words. Pairing survives (the credential lives in local
 storage), and a session flag prevents a second reload for the same language.
 
 Sheets crossfade with the remote: the wheel, face and timeline fade out over

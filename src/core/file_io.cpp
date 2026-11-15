@@ -97,8 +97,8 @@ std::string protect_blob(const std::string& plain) {
   LocalFree(out.pbData);
   return encoded;
 #else
-  // no DPAPI here: base64, so the state file still does not hold the
-  // credential in the clear
+  // no DPAPI here: base64, which keeps the credential out of sight but is not
+  // encryption
   return base64_encode(plain);
 #endif
 }

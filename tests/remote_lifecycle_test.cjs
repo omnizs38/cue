@@ -37,6 +37,26 @@ function fixture(){
  return {ctx,sockets,tasks,advance,auth,link,node,fire,jump:ms=>{now+=ms;}};
 }
 {
+ // The page's SHA-256 and HMAC-SHA256 must agree with a reference (RFC 4231):
+ // the challenge and the request signatures are checked byte for byte by the
+ // server, which uses its own implementation.
+ const f=fixture();
+ assert.strictEqual(f.ctx.sha256('abc'),'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad','SHA-256 of abc');
+ for(const [key,message] of [['Jefe','what do ya want for nothing?'],['k'.repeat(64),'a block-size key'],['k'.repeat(131),'a key longer than the block']]){
+  const want=crypto.createHmac('sha256',Buffer.from(key,'utf8')).update(message).digest('hex');
+  assert.strictEqual(f.ctx.hmacSha256(key,message),want,'HMAC-SHA256 must match node for a '+key.length+'-byte key');
+ }
+ // a request signs its target exactly as sent (the query included): the server
+ // verifies the same bytes
+ vm.runInContext(html.slice(html.indexOf('function authHeaders('), html.indexOf('function scrubStart(')), f.ctx);
+ f.auth();
+ const sid='01'.repeat(8),target='/thumb?p=a%5Cb.mp4';
+ const header=f.ctx.authHeaders(target).Authorization;
+ const signed=crypto.createHmac('sha256',Buffer.from('b'.repeat(64),'utf8'))
+   .update(sid+'\nGET\n'+target+'\n1').digest('hex');
+ assert.strictEqual(header,'Cue '+sid+':1:'+signed,'the request signature must cover the path and query');
+}
+{
  const f=fixture(),s=f.auth();
  f.ctx.send({c:'vol',v:10},true);f.ctx.send({c:'vol',v:20},true);f.ctx.send({c:'vol',v:30});f.advance(200);
  assert.deepStrictEqual(s.sent.filter(x=>x.c==='vol').map(x=>x.v),[10,30],'a delayed intermediate value must not overwrite the final value');

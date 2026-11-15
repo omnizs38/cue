@@ -288,7 +288,6 @@ struct Client {
   std::string nonce;                // the challenge this connection must answer
   std::string sid;                  // the session its HTTP requests sign with
   remote::RateLimit messages;       // the phone's own messages (WebSocket frames)
-  remote::RateLimit requests;       // the phone's own requests (HTTP)
   double accepted = 0;
   std::string device;
   double last_rx = 0, last_ping = 0;
@@ -325,12 +324,17 @@ struct RemoteServer::Impl {
   std::string code;
   double pair_until = 0;
   std::shared_ptr<std::atomic<uint64_t>> generation = std::make_shared<std::atomic<uint64_t>>(0);
-  remote::CodeGuard guard;                       // everyone together: guessing from many addresses
+  remote::CodeGuard guard{30};                   // everyone together: a wider budget, to stop guessing from many addresses
   std::map<uint32_t, remote::CodeGuard> guards;  // per address: a wrong guess locks that address only
+  // The phones' HTTP budget, per address: the page opens a new connection for
+  // each request (and closes it with the reply), so a budget kept on the
+  // connection would never accumulate.
+  std::map<uint32_t, remote::RateLimit> request_rates;
   // The sessions the open connections hold. Every HTTP request is signed with
   // the session of the connection that opened it; the session dies with it.
   struct Session { std::string key; uint64_t last_counter = 0; std::set<uint64_t> used; };
   std::unordered_map<std::string, Session> sessions;
+  std::string bound_address;  // the LAN address the socket is bound to ("" = every adapter)
   std::vector<Event> events;
   bool posted = false;
   std::shared_ptr<ThumbCache> thumbs = std::make_shared<ThumbCache>();
@@ -400,7 +404,10 @@ struct RemoteServer::Impl {
     if (!remote::same_secret(remote::hex(remote::hmac_sha256(s.key, payload)), proof)) return false;
     s.used.insert(n);
     if (n > s.last_counter) s.last_counter = n;
-    while (s.used.size() > 64) s.used.erase(s.used.begin());  // the oldest, first
+    // The window accepts 128 counters around the newest one (63 behind, 64
+    // ahead). The used set must span the whole window: evicting a counter that
+    // is still acceptable would let it be replayed.
+    while (s.used.size() > 128) s.used.erase(s.used.begin());  // the oldest, first
     return true;
   }
   void handle_frames(Client& c);
@@ -441,7 +448,9 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
   if ((!origin.empty() && origin != "http://" + hdr("host")) || hdr("sec-fetch-site") == "cross-site")
     return reply(403, "text/plain", "forbidden");
   // The page signs every request with the session of the connection that opened
-  // it: Authorization: Cue <sid>:<counter>:<hmac(sid|method|path|counter)>.
+  // it: Authorization: Cue <sid>:<counter>:<hmac(sid|method|target|counter)>.
+  // The target is signed as sent (path and query): the page signs exactly what
+  // it puts in the URL, so the query is covered too.
   auto signed_ok = [&] {
     std::string a = hdr("authorization");
     if (a.rfind("Cue ", 0) != 0) return false;
@@ -458,12 +467,29 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
       n = n * 10 + (uint64_t)(c - '0');
     }
     std::lock_guard<std::mutex> l(mu);
-    return session_ok(sid, n, proof, sid + "\n" + r.method + "\n" + r.path + "\n" + nstr);
+    return session_ok(sid, n, proof, sid + "\n" + r.method + "\n" + r.target + "\n" + nstr);
   };
   if (r.method != "GET") return reply(405, "text/plain", "");
   // Every phone has a budget for its requests: one that keeps asking for
-  // listings and thumbnails must not keep the workers and the disk busy.
-  if (!c.requests.take(clock_s(), 40, 120)) return reply(429, "text/plain", "");
+  // listings and thumbnails must not keep the workers and the disk busy. The
+  // page opens a connection per request, so the budget is kept per address.
+  {
+    const double now = clock_s();
+    bool allowed = false;
+    {
+      std::lock_guard<std::mutex> l(mu);
+      if (request_rates.size() >= 64) {
+        // Forget addresses that have been quiet for a minute, then make room.
+        for (auto it = request_rates.begin(); it != request_rates.end();) {
+          if (now - it->second.last > 60) it = request_rates.erase(it);
+          else ++it;
+        }
+        if (request_rates.size() >= 64) request_rates.erase(request_rates.begin());
+      }
+      allowed = request_rates[c.peer].take(now, 40, 120);
+    }
+    if (!allowed) return reply(429, "text/plain", "");
+  }
   auto q = [&](const char* k) { auto it = r.query.find(k); return it == r.query.end() ? std::string() : it->second; };
 
   if (r.path == "/" || r.path == "/index.html") {
@@ -646,8 +672,10 @@ void RemoteServer::Impl::authenticate(Client& c, const std::string& payload) {
       } else {
         guard.failed(now);
         // The per-address budgets are kept small: a network with many
-        // addresses must not make a list of every one of them.
-        if (guards.size() >= 32) guards.clear();
+        // addresses must not make a list of every one of them. Evict one old
+        // entry rather than clearing the map: clearing would also erase this
+        // address's own failure count (and every other lockout).
+        if (guards.size() >= 32) guards.erase(guards.begin());
         guards[c.peer].failed(now);
         refuse = (guard.allowed(now) && guards[c.peer].allowed(now)) ? 4001 : 4003;
       }
@@ -916,6 +944,7 @@ bool RemoteServer::start(HWND notify, UINT msg, const std::wstring& font_path, s
   ioctlsocket(s, FIONBIO, &nb);
   d_->lsock = s;
   d_->port = port;
+  d_->bound_address = bind_addr == htonl(INADDR_ANY) ? std::string() : lan;
   d_->quit = false;
   d_->tell = false;
   d_->running = true;
@@ -950,11 +979,16 @@ void RemoteServer::stop(bool tell_phones) {
   d_->thumbs->clear();
   d_->events.clear();
   d_->posted = false;
+  d_->request_rates.clear();  // a fresh start begins with fresh budgets
+  d_->bound_address.clear();
 }
 
 bool RemoteServer::running() const { return d_->running; }
 int RemoteServer::port() const { return d_->port; }
 int RemoteServer::clients() const { return d_->nclients; }
+std::string RemoteServer::address() const {
+  return d_->bound_address.empty() ? lan_address() : d_->bound_address;
+}
 
 void RemoteServer::set_queue(const std::string& json,std::vector<QueueFile> files) {
   std::lock_guard<std::mutex> l(d_->mu);

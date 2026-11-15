@@ -521,7 +521,7 @@ void App::open_remote_scene() {
   v.address.clear();
   v.code.clear();
   remote_pair_deadline_ = 0;
-  std::string ip = on ? lan_address() : "";
+  std::string ip = on ? remote_.address() : "";
   if (!on) {
     v.problem = tr(str::remote_failed);
     v.set_link("");

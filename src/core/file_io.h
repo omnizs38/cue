@@ -51,9 +51,10 @@ inline bool read_state_file(const std::filesystem::path& path, std::string& out)
 bool flush_file_to_disk(const std::filesystem::path& path);
 
 // Encrypts a credential for the state file. On Windows it is DPAPI, so only
-// this user on this machine can read it back; elsewhere, base64, so the state
-// file still does not hold the credential in the clear. The memory copy is
-// always the plain credential, and the server never sees the encrypted form.
+// this user on this machine can read it back; elsewhere, base64, which keeps
+// the credential out of sight but is not encryption (there is no DPAPI off
+// Windows). The memory copy is always the plain credential, and the server
+// never sees the encrypted form.
 std::string protect_blob(const std::string& plain);
 std::string unprotect_blob(const std::string& blob);
 

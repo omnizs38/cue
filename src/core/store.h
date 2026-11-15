@@ -8,6 +8,7 @@
 #pragma once
 #include <filesystem>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "model.h"
@@ -55,6 +56,11 @@ struct SettingsStore {
   bool remote_on = false, remote_sound = true, remote_folders_set = false;
   std::vector<RemoteFolder> remote_folders;
   std::vector<std::string> remote_credentials;
+  // The protected form of each credential, keyed by the plain one. DPAPI
+  // randomizes its output, so encrypting again on every save would change the
+  // state file and defeat the "unchanged state needs no write" path (and rotate
+  // the backup every time). A credential is encrypted once, when it is new.
+  mutable std::vector<std::pair<std::string, std::string>> remote_credential_blobs;
 
   // ── session ────────────────────────────────────────────────────
   DockPlace dock;
@@ -71,6 +77,11 @@ struct SettingsStore {
 
   bool load(const std::filesystem::path& path);
   bool save(const std::filesystem::path& path) const;
+  // Encrypts any credential that does not have a protected form yet. A save
+  // runs on a copy of the store, so without this the new credential would be
+  // encrypted again on every save (DPAPI output is random, and the state file
+  // would look changed every time).
+  void prepare_credential_blobs();
 
   RecentItem* find(const std::string& media_path);
   RecentItem& touch(const std::string& media_path, double dur, int64_t now);

@@ -3260,6 +3260,7 @@ void App::save_now(bool synchronous) {
     if (result) log("could not save previous state");
   }
   if (!synchronous) {
+    store_.prepare_credential_blobs();  // the worker gets the protected forms too
     auto* job = new SaveJob{store_, state_path_}; // worker owns an immutable snapshot
     save_thread_ = CreateThread(nullptr, 0, save_worker, job, 0, nullptr);
     if (save_thread_) return;

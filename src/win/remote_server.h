@@ -38,6 +38,11 @@ class RemoteServer {
   bool running() const;
   int port() const;
   int clients() const;  // phones connected right now
+  // The address the socket is actually listening on. The pairing screen must
+  // show this one, not a freshly computed LAN address: after a DHCP change (or
+  // with several adapters) they can differ, and the phone would be sent to an
+  // address nothing listens on.
+  std::string address() const;
 
   // From the UI thread; each is copied under a lock and used by the server thread.
   struct QueueFile { uint32_t id; std::string path; };

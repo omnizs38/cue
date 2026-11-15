@@ -5,11 +5,11 @@ process.chdir(path.join(__dirname,'..'));fs.mkdirSync('build/remote-browser',{re
 const source=fs.readFileSync('assets/remote/index.html','utf8');
 const bmp=Buffer.alloc(54+84*48*3);bmp.write('BM');bmp.writeUInt32LE(bmp.length,2);bmp.writeUInt32LE(54,10);bmp.writeUInt32LE(40,14);bmp.writeInt32LE(84,18);bmp.writeInt32LE(48,22);bmp.writeUInt16LE(1,26);bmp.writeUInt16LE(24,28);bmp.fill(112,54);
 let lang='en',items=[],thumbActive=0,thumbMax=0,queueRequests=0,thumbIDs=[],failQueue=false;
-const token='a'.repeat(64),root='C:\\Videos',season=root+'\\Season1';
+const root='C:\\Videos',season=root+'\\Season1';
 const server=http.createServer((req,res)=>{
  const url=new URL(req.url,'http://local');
  if(url.pathname==='/font.ttf'){res.end(fs.readFileSync('assets/fonts/CueOmni.ttf'));return;}
- if(['/queue','/queue-thumb','/list'].includes(url.pathname))assert.equal(req.headers.authorization,'Bearer '+token);
+ if(['/queue','/queue-thumb','/list'].includes(url.pathname))assert.equal(/^Cue [0-9a-f]{16}:\d+:[0-9a-f]{64}$/.test(req.headers.authorization||''),true);
  if(url.pathname==='/queue'){queueRequests++;res.setHeader('Content-Type','application/json');if(failQueue){res.statusCode=503;res.end('{}');}else res.end(JSON.stringify({items}));return;}
  if(url.pathname==='/queue-thumb'){
   assert.deepEqual([...url.searchParams.keys()],['id']);const id=+url.searchParams.get('id');thumbIDs.push(id);if(!items.some(i=>i.id===id&&i.preview&&!i.audio)){res.statusCode=404;res.end();return;}
@@ -34,12 +34,12 @@ function initial(n=16){return Array.from({length:n},(_,i)=>({id:i+1,name:i===2?'
   lang=language;items=initial();queueRequests=0;thumbMax=0;thumbIDs=[];failQueue=false;
   const page=await browser.newPage({viewport:{width,height},isMobile:true,hasTouch:true});page.on('pageerror',e=>errors.push(e.message));
   await page.addInitScript(()=>{
-   localStorage.setItem('cue.token.v2','a'.repeat(64));window.sent=[];window.liveURLs=new Set();
+   localStorage.setItem('cue.key.v2','a'.repeat(64));window.sent=[];window.liveURLs=new Set();
    const create=URL.createObjectURL.bind(URL),revoke=URL.revokeObjectURL.bind(URL);
    URL.createObjectURL=b=>{const u=create(b);window.liveURLs.add(u);return u;};URL.revokeObjectURL=u=>{window.liveURLs.delete(u);revoke(u);};
    window.state={t:'state',view:'play',file:'First.mkv',pos:2,dur:100,speed:1,vol:100,paused:false,ended:false,audioOnly:false,sub:{has:false,on:false},audio:{n:1,i:0},timer:{m:0,left:0},next:'Second.mkv',nextAuto:true,color:'#345678',queueActive:true,queueRevision:1,queueBusy:false,queueNoticeId:0,queueNotice:'',queueResult:0};
    window.publish=extra=>{Object.assign(window.state,extra||{});window.ws.onmessage({data:JSON.stringify(window.state)});};
-   window.WebSocket=class{constructor(){window.ws=this;this.readyState=1;setTimeout(()=>this.onopen(),0);}send(text){const m=JSON.parse(text);if(m.t==='auth')setTimeout(()=>{this.onmessage({data:JSON.stringify({t:'hello'})});window.publish();},0);else window.sent.push(m);}close(){}};
+   window.WebSocket=class{constructor(){window.ws=this;this.readyState=1;setTimeout(()=>{this.onopen();this.onmessage({data:'{"t":"chal","n":"'+'0'.repeat(32)+'"}'});},0);}send(text){const m=JSON.parse(text);if(m.t==='auth')setTimeout(()=>{this.onmessage({data:JSON.stringify({t:'hello',sid:'01'.repeat(8),sk:'b'.repeat(64)})});window.publish();},0);else window.sent.push(m);}close(){}};
   });
   await page.goto('http://127.0.0.1:'+server.address().port);await page.waitForTimeout(60);assert.deepEqual(errors,[]);
   // Wheel modes: tempo (+15 s), volume, and up next while a queue exists (next file).
