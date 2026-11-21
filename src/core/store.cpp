@@ -202,10 +202,25 @@ bool SettingsStore::parse(const std::string& text) {
 }
 
 bool SettingsStore::load(const std::filesystem::path& path) {
+  save_blocked = false;
   std::string text;
   std::filesystem::path bak = path;
   bak += ".bak";
   if (!read_state_file(path, text)) {
+    // A file too large to be one of ours is corrupt: recover from the backup as before. One that
+    // exists and is small but cannot be read (a lock, a disconnected profile) is protected: the
+    // backup/defaults may be shown, but they must never be written over the real file.
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(path, ec);
+    if (ec || exists) {
+      std::error_code size_ec;
+      const uintmax_t size = exists ? std::filesystem::file_size(path, size_ec) : 0;
+      if (ec || size_ec || size <= kMaxStateBytes) {
+        load_status = "unreadable";
+        save_blocked = true;
+        return false;
+      }
+    }
     // no file yet (first run), or only the backup survived an interrupted write
     if (read_state_file(bak, text) && parse(text)) { load_status = "recovered"; return true; }
     load_status = "missing";
@@ -230,6 +245,7 @@ bool SettingsStore::load(const std::filesystem::path& path) {
 }
 
 bool SettingsStore::save(const std::filesystem::path& path) const {
+  if (save_blocked) return false;
   char b[320];
   std::string o = "{\n  \"schema\": " + std::to_string(kSchema) + ",\n";
   // prefs
@@ -397,7 +413,7 @@ RecentItem& SettingsStore::touch(const std::string& p, double dur, int64_t now) 
   RecentItem item;
   if (it != recents.end()) { item = *it; recents.erase(it); }
   item.path = p;
-  if (dur > 0 && std::isfinite(dur)) item.dur = dur;  // (a broken length never reaches the file)
+  if (dur > 0 && std::isfinite(dur)) item.dur = std::min(dur, 1e9);  // (a broken length never reaches the file)
   item.last = now;
   recents.insert(recents.begin(), item);
   if (recents.size() > kMaxRecents) recents.resize(kMaxRecents);
@@ -408,7 +424,7 @@ bool SettingsStore::set_position(const std::string& p, double pos, double dur) {
   if (!std::isfinite(pos)) return false;  // a broken engine sample must not reach state.json
   RecentItem* r = find(p);
   if (!r) return false;
-  double next_duration = dur > 0 && std::isfinite(dur) ? dur : r->dur;
+  double next_duration = dur > 0 && std::isfinite(dur) ? std::min(dur, 1e9) : r->dur;
   if (r->pos == pos && r->dur == next_duration) return false;
   r->dur = next_duration;
   r->pos = pos;

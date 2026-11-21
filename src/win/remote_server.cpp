@@ -576,7 +576,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
             struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
             if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
               img = make_cover(path, kCoverPx);
-              if (*generation_ref == epoch) thumbs_ref->put(k, img);
+              if (*generation_ref == epoch && !img.empty()) thumbs_ref->put(k, img);
             }
           } else if (*generation_ref == epoch) gate_busy = true;
         }
@@ -591,7 +591,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
             struct Leave { Gate* gate; ~Leave() { gate->leave(); } } leave{gate_ref.get()};
             if (*generation_ref == epoch && !thumbs_ref->get(k, img)) {
               img = make_thumb(path, remote::is_audio_name(path));  // a song: its square cover, centred
-              if (*generation_ref == epoch) thumbs_ref->put(k, img);
+              if (*generation_ref == epoch && !img.empty()) thumbs_ref->put(k, img);
             }
           } else if (*generation_ref == epoch) gate_busy = true;
         }

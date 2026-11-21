@@ -118,9 +118,17 @@ void App::queue_folder(const std::string& path,bool replace,bool from_remote) {
   SetTimer(hwnd_,T_FOLDER,50,nullptr); say(tr(str::queue_reading));queue_notice(tr(str::queue_reading));
 }
 
+void App::start_folder_drop() {
+  while(!folder_scan_&&!folder_drops_.empty()) {
+    auto drop=std::move(folder_drops_.front());folder_drops_.pop_front();
+    queue_folder(drop.path,drop.replace,false);  // starts it, or says why it could not
+  }
+}
+
 void App::finish_folder() {
   if(!folder_scan_||!folder_scan_->done.load(std::memory_order_acquire))return;
   auto job=std::move(folder_scan_);KillTimer(hwnd_,T_FOLDER);
+  struct NextDrop { App* app; ~NextDrop() { app->start_folder_drop(); } } next{this};
   if(job->cancelled) {queue_notice("");return;}
   // Children were resolved on the worker. A changed share epoch invalidates the
   // complete scan; the UI only checks the current lexical permission snapshot.
@@ -160,6 +168,7 @@ void App::queue_notice(const std::string& text,int result) {
 }
 void App::queue_clear() {
   ++remote_add_epoch_;
+  folder_drops_.clear();
   for(auto& job:remote_path_jobs_)if(job->add_epoch)job->cancelled=true;
   if(folder_scan_)folder_scan_->cancelled=true;
   if(queue_.active())queue_.clear();

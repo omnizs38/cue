@@ -20,10 +20,24 @@ for source in tests/*_test.cpp; do
   [[ "$source" == tests/*_engine_test.cpp ]] && continue    # Windows only (real DLL)
   [[ "$source" == tests/ui_language_win_test.cpp ]] && continue  # Windows only (real language API)
   [[ "$source" == tests/recent_thumbs_win_test.cpp ]] && continue  # Windows only (WIC, the home's pictures on disk)
+  [[ "$source" == tests/remote_path_win_test.cpp ]] && continue  # Windows only (reparse points, resolved handles)
   executable="build/tests/$(basename "${source%.cpp}")"
   g++ -std=c++20 -O2 "$source" "${objects[@]}" ${libs[@]+"${libs[@]}"} -o "$executable"
   "$executable"
 done
+
+# Windows-native filesystem boundary: junctions and resolved handles (the portable path tests
+# cover only the lexical half).
+case "$(uname -s)" in
+  MINGW*|MSYS*|CYGWIN*)
+    g++ -std=c++20 -O2 -Wall -Wextra -Wno-missing-field-initializers -DUNICODE -D_UNICODE \
+      -D_WIN32_WINNT=0x0A00 -DNOMINMAX -c src/win/platform.cpp -o build/tests/obj/platform.o
+    g++ -std=c++20 -O2 tests/remote_path_win_test.cpp build/tests/obj/platform.o "${objects[@]}" \
+      ${libs[@]+"${libs[@]}"} -lole32 -lshell32 -luuid -lwindowscodecs -ldwmapi -lshcore \
+      -lcomdlg32 -lwinmm -ladvapi32 -luser32 -lgdi32 -o build/tests/remote_path_win_test.exe
+    build/tests/remote_path_win_test.exe
+    ;;
+esac
 
 # Headless transport methods with a fake engine/timer; no Win32 or renderer required.
 if command -v python3 >/dev/null; then python3 tests/hidden_playback_test.py; fi

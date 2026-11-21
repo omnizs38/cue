@@ -38,7 +38,6 @@
 #include "../core/recents_view.h"
 #include "../core/media_header.h"
 #include "../core/ogg_kind.h"
-#include "../core/window_policy.h"
 #include "../core/resize_hit.h"
 #include "../core/blur_geometry.h"
 #include "../core/video_window.h"
@@ -347,7 +346,7 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   if (store_.load_status != "ok") log("settings " + store_.load_status); else trace("settings ok");
   reduce_motion() = system_reduce_motion();
   set_high_contrast(system_high_contrast());
-  for (auto& a : args) if (!a.empty() && a[0] != '-') pending_open_ = a;
+  for (auto& a : args) if (!a.empty() && a.rfind("--", 0) != 0) pending_open_ = a;
   pending_from_args_ = !pending_open_.empty();
   // the welcome comes on a plain first start; opened straight into a file, it waits for next time
   onboarding_ = !store_.onboarded && pending_open_.empty();
@@ -423,24 +422,6 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   if (wh > ah * 0.84) { wh = (int)(ah * 0.84); ww = wh * 16 / 9; }
   int fw = ww, fh = wh;  // frameless: the client is the window
   int x = mi.rcWork.left + (aw - fw) / 2, y = mi.rcWork.top + (ah - fh) / 2;
-  bool start_max = false;
-  // afterwards: where it was left, if that place is still on a screen
-  if (store_.win.has && restore_saved_window(!pending_open_.empty(), store_.win.w, store_.win.h)) {
-    RECT wr{store_.win.x, store_.win.y, store_.win.x + store_.win.w, store_.win.y + store_.win.h};
-    if (HMONITOR wm = MonitorFromRect(&wr, MONITOR_DEFAULTTONULL)) {
-      MONITORINFO wmi{sizeof(wmi)};
-      GetMonitorInfoW(wm, &wmi);
-      RECT in;
-      if (IntersectRect(&in, &wr, &wmi.rcWork) && in.right - in.left > 160 && in.bottom - in.top > 90) {
-        // saved at another scaling? keep the same size on screen
-        double rk = monitor_dpi(wm) / (double)store_.win.dpi;
-        x = store_.win.x; y = store_.win.y;
-        fw = std::min<int>((int)std::lround(store_.win.w * rk), wmi.rcWork.right - wmi.rcWork.left);
-        fh = std::min<int>((int)std::lround(store_.win.h * rk), wmi.rcWork.bottom - wmi.rcWork.top);
-        start_max = false; // home always opens as a normal horizontal window
-      }
-    }
-  }
 
   hwnd_ = CreateWindowExW(0, wc.lpszClassName, L"Cue", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, fw, fh,
                           nullptr, nullptr, inst, this);
@@ -463,7 +444,7 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   // is first shown, from the file's header (a few small reads), instead of opening in the home's
   // 16:9 and gliding to the film's a moment later. The engine's measure confirms it (the same
   // place: nothing moves) or corrects it.
-  if (!pending_open_.empty() && !start_max) {
+  if (!pending_open_.empty()) {
     // (17/11, varredura) read on a worker, waited for 0.3 s at most: a sleeping external disk kept
     // the window from appearing at all until it woke (2-10 s, no sign Cue had started); after the
     // wait, the engine's measure decides, as for a file the header does not tell
@@ -569,7 +550,7 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   if (shape_wait_ && (show == SW_SHOWMINIMIZED || show == SW_MINIMIZE || show == SW_SHOWMAXIMIZED || show == SW_HIDE)) shape_wait_ = false;
   if (shape_wait_) { set_cloak(true); SetTimer(hwnd_, T_SHAPE_WAIT, 1500, nullptr); }
   if (!pending_open_.empty()) { shell_batch_t_ = now(); shell_batch_cold_ = true; }  // (opened with a file: the rest of a selection may follow)
-  ShowWindow(hwnd_, start_max && show != SW_SHOWMINIMIZED && show != SW_MINIMIZE ? SW_SHOWMAXIMIZED : show);
+  ShowWindow(hwnd_, show);
   UpdateWindow(hwnd_);
   lan_refresh();  // (the network address, for the remote control, found off the window's thread)
   trace("first paint");
@@ -1884,7 +1865,7 @@ void App::on_property(uint64_t id, const mpv_event_property* p) {
       }
       break;
     case O_DUR:
-      in.dur = dbl(0);
+      { const double d = dbl(0); in.dur = std::isfinite(d) ? std::clamp(d, 0.0, 1e9) : 0.0; }
       refresh_skip_parts();  // (a chapter running to the end waits for the film's length)
       if (loaded_ && in.dur > 0) store_.set_position(path_, last_time_, in.dur);
       break;
@@ -4186,7 +4167,9 @@ void App::open_kinds(const std::vector<std::string>& files, const std::vector<ch
   if (!folders.empty()) {
     const bool into_list = !shell && mode_ == Mode::Play && play_.queue_open();
     if (!media.empty()) { if (into_list) queue_add(media); else { queue_add(media, true); } }
-    queue_folder(folders.front(), !into_list && media.empty());
+    const bool replace = !into_list && media.empty();
+    for (size_t i = 0; i < folders.size(); ++i) folder_drops_.push_back({folders[i], replace && i == 0});
+    start_folder_drop();
     return;
   }
   if (!media.empty()) {
@@ -8433,19 +8416,6 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
     case WM_CLOSE:
       if (closing_app_) return 0;
       closing_app_ = true;
-      {
-        // remember the window for next time (the normal rect, even if maximized or fullscreen)
-        WINDOWPLACEMENT pl{sizeof(pl)};
-        if (fullscreen_) pl = wp_; else if (mini_player_) pl = mini_restore_; else GetWindowPlacement(hwnd_, &pl);  // the mini player's window is never the one remembered
-        RECT r = pl.rcNormalPosition;  // workspace coordinates: shift to screen coordinates
-        MONITORINFO pmi{sizeof(pmi)};
-        GetMonitorInfoW(MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST), &pmi);
-        OffsetRect(&r, pmi.rcWork.left - pmi.rcMonitor.left, pmi.rcWork.top - pmi.rcMonitor.top);
-        if (r.right - r.left > 200 && r.bottom - r.top > 120) {
-          bool mx = (fullscreen_ || mini_player_) ? pl.showCmd == SW_SHOWMAXIMIZED : IsZoomed(hwnd_) != 0;
-          store_.win = {true, (int)r.left, (int)r.top, (int)(r.right - r.left), (int)(r.bottom - r.top), (int)dpi_, mx};
-        }
-      }
       quit_now();  // does not return
       return 0;
     case WM_ENDSESSION:

@@ -17,6 +17,8 @@ int main() {
   assert(!points.set_position("clip.mp4",20,100));
   assert(points.set_position("clip.mp4",20,101));
   assert(!points.set_position("missing.mp4",20,100));
+  { Store huge; huge.touch("huge.mp4",1e300,1); assert(huge.find("huge.mp4")->dur<=1e9);
+    assert(huge.set_position("huge.mp4",1,1e300)); assert(huge.find("huge.mp4")->dur<=1e9); }
   {
     // what the home says beyond a name: a song's artist, a book's chapters (and old files without them)
     auto p2=dir/"home.json";Store a;auto& it=a.touch("C:\\b\\Hobbit.m4b",20000,5);it.artist="J. R. R. Tolkien";it.chapters=19;it.chapter=3;

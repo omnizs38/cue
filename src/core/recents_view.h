@@ -3,6 +3,7 @@
 #pragma once
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <ctime>
@@ -292,6 +293,7 @@ inline bool recent_seen(double resume_point, double pos, double dur) {
 
 // "24 min", "1 h 05 min" pieces: whole minutes, at least one
 inline void split_minutes(double seconds, int& h, int& m) {
+  seconds = std::isfinite(seconds) ? std::clamp(seconds, 0.0, 1e9) : 0.0;  // (a broken length must not overflow the cast)
   int total = std::max(1, (int)((seconds + 59) / 60));
   h = total / 60;
   m = total % 60;
