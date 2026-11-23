@@ -90,8 +90,10 @@ struct SettingsStore {
   std::vector<RecentItem> recents;  // newest first
   static constexpr size_t kMaxRecents = 24;  // kept on disk; home shows 6
 
-  // what load() found: "ok", "missing", "migrated", "recovered" (from backup), "reset" (corrupt)
+  // what load() found: "ok", "missing", "migrated", "recovered" (from backup), "reset" (corrupt),
+  // "unreadable" (the file is there but could not be read: never overwrite it)
   std::string load_status;
+  bool save_blocked = false;
 
   bool load(const std::filesystem::path& path);
   bool save(const std::filesystem::path& path) const;

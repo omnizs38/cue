@@ -367,8 +367,11 @@ class App {
     std::vector<std::string> files;
   };
   std::shared_ptr<FolderScan> folder_scan_;
+  struct FolderDrop { std::string path; bool replace = false; };
+  std::deque<FolderDrop> folder_drops_;  // dropped folders waiting for the one scan slot
   static DWORD WINAPI scan_folder(void*);
   void queue_folder(const std::string& path, bool replace, bool remote = false);
+  void start_folder_drop();
   void finish_folder();
   void go_home();
   void home_restore_place();

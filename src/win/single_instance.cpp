@@ -33,7 +33,7 @@ SingleInstance::Result SingleInstance::route(const std::vector<std::string>& arg
 
   std::vector<std::string> files;
   for (const auto& arg : args) {
-    if (arg.empty() || arg[0] == '-') continue;
+    if (arg.empty() || arg.rfind("--", 0) == 0) continue;
     std::wstring path = widen(arg);
     // The existing process may have a different working directory. Preserve
     // URLs and resolve relative local filenames before crossing the boundary.

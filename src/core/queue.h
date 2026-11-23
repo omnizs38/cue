@@ -49,8 +49,8 @@ class MediaQueue {
   }
   bool select_path(const std::string& path) {
     // A manual reopen of the current file retains its exact queue occurrence.
-    if (auto* i=get(current_); i && i->path==path) return true;
-    for (const auto& i:items_) if(i.path==path) return select(i.id);
+    if (auto* i=get(current_); i && same_path(i->path,path)) return true;
+    for (const auto& i:items_) if(same_path(i.path,path)) return select(i.id);
     return false;
   }
   const Item* get(uint32_t id) const { int i=index(id); return i<0?nullptr:&items_[i]; }

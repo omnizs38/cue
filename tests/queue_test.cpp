@@ -21,6 +21,8 @@ int main() {
   auto a=q.items()[0].id,b=q.items()[1].id;
   assert(a!=b&&q.select(a)&&q.next()->id==b);
   assert(q.select(b)&&q.select_path("same.mkv")&&q.current()==b);
+  { MediaQueue r; r.append({"C:\\Music\\Song.mp3"}); auto id=r.items()[0].id;
+    assert(r.select_path("c:\\music\\song.mp3")&&r.current()==id); }
   std::vector<std::string> many(2000,"a.mp4");
   q.clear();assert(q.append(many)==MediaQueue::kLimit);
   for(int i=0;i<10000;++i) {

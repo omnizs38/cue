@@ -25,6 +25,7 @@ for t in tests/*_test.cpp; do
   name=$(basename "${t%.cpp}")
   extra=(); [[ $name == ui_language_win_test ]] && extra=(src/win/ui_language.cpp -municode)
   [[ $name == recent_thumbs_win_test ]] && extra=(src/win/recent_thumbs.cpp src/win/cover_image.cpp src/win/platform.cpp -lwindowscodecs -ldwmapi -lshcore -lcomdlg32 -lwinmm)
+  [[ $name == remote_path_win_test ]] && extra=(src/win/platform.cpp -lwindowscodecs -ldwmapi -lshcore -lcomdlg32 -lwinmm -ladvapi32 -luser32 -lgdi32)
   $CXX $F "$t" "${extra[@]}" "${objs[@]}" -static -lbcrypt -lcrypt32 -lole32 -lshell32 -luuid -o "$out/bin/$name.exe" 2>"$out/$name.build.log" ||
     { echo "FAILED compile $name: $(grep -m1 error "$out/$name.build.log")"; bad=1; continue; }
   if timeout 600 "$WINE" "$out/bin/$name.exe" > "$out/$name.log" 2>&1; then n=$((n + 1)); else echo "FAILED $name: $(tail -2 "$out/$name.log" | tr '\n' ' ')"; bad=1; fi

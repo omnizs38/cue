@@ -26,6 +26,12 @@ int main() {
   { std::ofstream f(path); f << std::string(kMaxStateBytes+1,' '); }
   std::string text; assert(!read_state_file(path,text) && text.empty());
   Store recovered; assert(recovered.load(path) && recovered.volume==73 && recovered.load_status=="recovered");
+  // A main file that exists but cannot be read is not overwritten by the backup/defaults.
+  {
+    auto unreadable=dir/"unreadable.json"; std::filesystem::create_directories(unreadable);
+    Store blocked; assert(!blocked.load(unreadable)); assert(blocked.load_status=="unreadable" && blocked.save_blocked);
+    assert(!blocked.save(unreadable)); assert(std::filesystem::is_directory(unreadable));
+  }
   std::filesystem::remove_all(dir);
   std::cout << "state bounds: extreme integers, geometry, JSON node budget, oversized-file backup recovery passed\n";
 }
