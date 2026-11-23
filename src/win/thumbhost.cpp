@@ -1,4 +1,5 @@
 #include "thumbhost.h"
+#include "../core/detached_thread.h"
 
 #include <algorithm>
 #include <cstring>
@@ -481,8 +482,8 @@ bool ThumbClient::start(HWND notify, UINT msg) {
   }
   state_ = s;
   try {
-    std::thread([s] { read_loop(s); }).detach();
-    std::thread([s] {
+    start_detached([s] { read_loop(s); });
+    start_detached([s] {
       try {
         std::string line;
         while (s->commands.take(line)) {
@@ -491,7 +492,7 @@ bool ThumbClient::start(HWND notify, UINT msg) {
         }
       } catch (...) { /* fail this optional helper, not the player */ }
       s->stop(true);
-    }).detach();
+    });
   } catch (...) {
     s->stop(false); CloseHandle(pi.hThread); shutdown(); return false;
   }

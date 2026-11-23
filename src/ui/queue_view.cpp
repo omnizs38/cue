@@ -1,5 +1,6 @@
 #include "queue_view.h"
 #include "../core/i18n.h"
+#include "../core/remote_proto.h"
 #include <algorithm>
 #include <cctype>
 
@@ -23,6 +24,10 @@ std::string QueueView::display_name(const std::string& name) {
   if(dot==std::string::npos||dot==0||name.size()-dot<2||name.size()-dot>6)return name;
   for(size_t i=dot+1;i<name.size();++i)if(!std::isalnum((unsigned char)name[i]))return name;
   return name.substr(0,dot);
+}
+void QueueView::film_words(const std::string& name,std::string& title,std::string& sub) {
+  remote::card_words(name,title,sub);
+  if(title.empty()) {title=display_name(name);sub.clear();}
 }
 void QueueView::split_artist_title(const std::string& name,std::string& title,std::string& artist) {
   title=name;artist.clear();
@@ -369,6 +374,9 @@ bool QueueView::tick(double dt) {
     bool unsettled=!item.y.settled();item.y.step(dt);changed|=unsettled;
     bool on=!drag_id_&&(keyboard_?(!control_&&item.entry.id==focus_):(hot>=0&&items_[hot].entry.id==item.entry.id));
     double hover=hover_step(item.hover,on,dt);changed|=hover!=item.hover;item.hover=hover;
+    // (the keyboard's focus too: a name read by arrowing down the list)
+    if(on&&!held()) {if(item.dwell<.5) {item.dwell=std::min(.5,item.dwell+dt);changed=true;}} else item.dwell=0;
+    double expand=hover_step(item.expand,on&&item.dwell>=.5,dt);changed|=expand!=item.expand;item.expand=expand;
   }
   for(auto& pic:pictures_)if(pic.fade<1) {pic.fade=reduce_motion()?1:std::min(1.,pic.fade+dt/.12);changed=true;}
   return changed;
@@ -397,6 +405,9 @@ Rect QueueView::cover_box(const QueueEntry& entry,int y) const {
   const int s=(int)s_;(void)s;
   const double k=s_;
   if(compact_)return {(int)std::lround(9*k),y+(int)std::lround(3*k),(int)std::lround(18*k),(int)std::lround(18*k)};
+  // (1.4.1) a narrow list (a portrait window's, as wide as its bar): a film's picture a step smaller,
+  // so its name keeps the room (a Mac's music list does the same as its window narrows)
+  if(!entry.audio&&narrow())return Rect{(int)(20*k),y+(int)(10*k),(int)(44*k),(int)(25*k)};
   return entry.audio?Rect{(int)((album_?20:33)*k),y+(int)(5*k),(int)(34*k),(int)(34*k)}:Rect{(int)(20*k),y+(int)(5*k),(int)(60*k),(int)(34*k)};
 }
 void QueueView::draw_picture(Canvas& c,const QueueEntry& entry,const Rect& image,bool played) {
@@ -499,14 +510,39 @@ void QueueView::draw_item(Canvas& c,Item& item,int y,bool floating,bool paused,i
   // Music shows its cover square, like an album's track list; in a list of only music the
   // titles move in next to it, otherwise they keep the column the films use.
   draw_picture(c,entry,cover_box(entry,y),played);
-  int tx=(album_?62:88)*s,available=c.w-tx-34*s;
+  // the remove button's room only on the row that shows it: at rest a name runs to the edge
+  const bool shows_remove=!floating&&(item.hover>0||keyboard_);
+  int tx=(album_?62:!entry.audio&&narrow()?72:88)*s,available=std::max(0,(int)(c.w-tx-(shows_remove?34:12)*s));
   Rgb name_ink=played&&!entry.current&&!floating?p.dim:p.fg;  // names white (the ones already played, grey)
-  text(c,fit_middle(display_name(entry.name),std::max(0,available),s),tx,y+8*s,s,name_ink);
+  std::string name,sub;
+  if(entry.audio)name=display_name(entry.name);
+  else {
+    film_words(entry.name,name,sub);
+    // a music video, "Artist - Title": the title above, who on the grey line (as a song's row reads)
+    if(sub.empty()) {std::string t,a;split_artist_title(name,t,a);if(!a.empty()) {name=t;sub=a;}}
+  }
   std::string caption=entry.current?tr(str::queue_playing):next?tr(str::queue_up_next)
                      :items_.size()>1&&position>=0?std::to_string(position+1)+" / "+std::to_string(items_.size()):"";
-  text(c,fit_end(caption,std::max(0,available-12*(int)s),s),tx,y+25*s,s,p.dim);  // what it is: grey
-  (void)next;
-  if(entry.current)action_icon(c,paused?"pause":"play",{tx+text_w(caption,s)+5*s,y+27*s,7*s,7*s},s,p.dim);
+  if(!sub.empty())caption=caption.empty()?sub:sub+" \xc2\xb7 "+caption;  // "S01E03 · playing", as the home says it
+  // a cut name, rested on: whole, over both lines (the grey line steps aside meanwhile)
+  const bool cut=text_w(name,s)>available;
+  const double k=cut&&!floating?ease_out(item.expand):0;
+  if(k<1) {
+    // a title is cut at its end (a file name was cut in the middle, for its episode number: that is
+    // on the grey line now)
+    const std::string shown=fit_end(caption,std::max(0,available-12*(int)s),s);
+    text(c,fit_end(name,available,s),tx,y+8*s,s,name_ink,1-k);
+    text(c,shown,tx,y+25*s,s,p.dim,1-k);  // what it is: grey
+    if(entry.current)action_icon(c,paused?"pause":"play",{tx+text_w(shown,s)+5*s,y+27*s,7*s,7*s},s,p.dim,1-k);
+  }
+  if(k>0) {
+    auto lines=wrap_lines(name,available,s);
+    if(lines.size()>2) {
+      std::string rest=lines[1];for(size_t i=2;i<lines.size();++i)rest+=" "+lines[i];
+      lines.resize(2);lines[1]=fit_end(rest,available,s);
+    }
+    for(size_t i=0;i<lines.size();++i)text(c,fit_end(lines[i],available,s),tx,y+(i?25:8)*s,s,name_ink,k);
+  }
   Rect remove{c.w-29*s,y+10*s,20*s,24*s};
   if(!floating&&(item.hover>0||keyboard_))c.bitmap(bmp("x-small"),remove.cx()-2*s,remove.cy()-2*s,s,p.dim,ease_out(item.hover));
 }

@@ -23,6 +23,10 @@ class QueueView {
   int height() const { return h_; }
   static std::string count_suffix(size_t count) { return count>1?" · "+std::to_string(count):""; }
   static std::string display_name(const std::string& name);
+  // (1.4.1) a film's row: what it is, not its file name. "Twin.Peaks.S01E03.1080p.WEB-DL.mkv" ->
+  // "Twin Peaks" with "S01E03" for the grey line; "Blade.Runner.2049.2017.2160p.mkv" ->
+  // "Blade Runner 2049" with "2017"; anything else, the name without its extension (core's card_words)
+  static void film_words(const std::string& name,std::string& title,std::string& sub);
   void cancel();
   bool tick(double dt);
   void draw(Canvas& c,bool paused);
@@ -60,7 +64,9 @@ class QueueView {
   bool dropping() const { return dropping_; }
  private:
   // y: list position. enter: arrival fade. fresh: a short highlight on rows that were just added.
-  struct Item { QueueEntry entry; Spring y{38,1,.05}; double hover=0, enter=1, delay=0, fresh=0; };
+  // dwell/expand (1.4.1): the pointer resting on a row for half a second shows a cut name whole,
+  // over the row's two lines (a Mac list's expansion, kept inside the row)
+  struct Item { QueueEntry entry; Spring y{38,1,.05}; double hover=0, enter=1, delay=0, fresh=0, dwell=0, expand=0; };
   // `image` is the 84x48 source; `scaled` is it at the row's size, kept only while the row is
   // on screen, so scrolling copies whole rows instead of resampling every pixel each frame.
   struct Picture { uint32_t id; Canvas image, scaled; double fade=0; uint64_t used=0; bool drawn=false; };
@@ -103,6 +109,7 @@ class QueueView {
   double grab_=0,scroll_grab_=0;
   bool keyboard_=false;
   int control_=0;
+  bool narrow() const { return !compact_&&w_<260*s_; }  // (1.4.1) a portrait window's list: films' pictures a step smaller
   int row_h() const { return std::max(1,(int)std::lround((compact_?kRowCompact:kRow)*s_)); }
   int grip_w() const { return compact_?8:22; }  // art px from the row's left where a press only drags
   double max_scroll() const;

@@ -1,10 +1,13 @@
-// First run: three short screens before the home, on one grid (the picture, the heading, its
+// First run: four short screens before the home, on one grid (the picture, the heading, its
 // line, the control and the footer stand at the same height on every screen).
 //   0  "oi, sou o Cue"         the eyes, lit from both sides, standing on a line with their reflection
 //   1  dynamic lighting     a little scene; with the switch on, the window itself glows in its
 //                           colours (the real halo, App::step_welcome_light; drawn around the scene
 //                           instead when the window is maximized and the halo has nowhere to go)
-//   2  interface size       the same scene with the player's controls over it, at each size
+//   2  controls background  the same scene with the player's controls over it, with their
+//                           background or without (1.4.1)
+//   3  interface size       the same scene with the player's controls over it, at each size, in
+//                           the background chosen
 // Drawn by the same pixel renderer as the home, into the same canvas.
 #pragma once
 #include <string>
@@ -15,11 +18,12 @@
 #include "face.h"
 #include "gfx.h"
 
-enum class ObAct { None, Ambient, UiScale, Finish, WinMin, WinMax, WinClose, WinPin };
+enum class ObAct { None, Ambient, ControlsBg, UiScale, Finish, WinMin, WinMax, WinClose, WinPin };
 struct ObAction { ObAct a = ObAct::None; int v = 0; };
 
 struct OnboardingView {
-  static constexpr int kPages = 3;
+  static constexpr int kPages = 4;
+  static constexpr int kPageLight = 1, kPageBg = 2, kPageSize = 3;
   static constexpr int kZones = 26;  // FrameColors::kZones: the halo's stretches, clockwise from the top-left
   int w = 0, h = 0;
   double s = 2;        // the welcome's own pixel scale (fixed by the window, not by the size chosen)
@@ -29,6 +33,7 @@ struct OnboardingView {
   double size_s[4] = {0, 0, 0, 0};
   bool ambient = true;  // what the toggle shows (the App owns the preference)
   int ui_scale = 2;     // persisted id: -1 pequena, 2 média (default), 0 grande, 1 maior
+  bool controls_free = false;  // the bar without its background (the App owns the preference)
   bool light_inside = false;  // the window is maximized: the scene's light is drawn around it, inside
   Face face;
   WindowChrome chrome;
@@ -59,6 +64,7 @@ struct OnboardingView {
   void go(int p, double now);
   void set_ambient(bool on, double now);     // the App confirms (or a preview sets it)
   void set_scale_choice(int id, double now);
+  void set_controls_free(bool free, double now);
 
   // The real halo around the window (second screen): how much of it (0 = none) and its colours,
   // the scene's own. The App sends them to Ambient; nothing is asked of it while this is 0.
@@ -70,7 +76,7 @@ struct OnboardingView {
 
  private:
   static constexpr double kDarkDur = 0.22;
-  enum Hit { kNone = -1, kNext = 1, kBack, kSkip, kToggle, kSeg0, kSeg1, kSeg2, kSeg3, kSeg4, kDot0, kDot1, kDot2 };
+  enum Hit { kNone = -1, kNext = 1, kBack, kSkip, kToggle, kSeg0, kSeg1, kSeg2, kSeg3, kSeg4, kDot0, kDot1, kDot2, kDot3, kBg0, kBg1 };
   int page_ = 0;
   double t0_ = -1;
   Spring pos_ = Spring::rd(0.42, 1.0, 0.002);         // page position (0..2): the words slide a little, no overshoot
@@ -78,11 +84,13 @@ struct OnboardingView {
   Spring glow_ = Spring::rd(0.55, 1.0, 0.004);        // the scene's light (inside only)
   Spring seg_x_ = Spring::rd(0.36, 0.82, 0.05), seg_w_ = Spring::rd(0.36, 0.82, 0.05);  // size selector
   Spring dot_ = Spring::rd(0.38, 0.9, 0.004);         // page indicator
+  Spring bg_ = Spring::rd(0.36, 0.82, 0.004);         // the background chosen: 0 with, 1 without (its highlight slides, the bars crossfade)
   Spring fx_ = Spring::rd(0.5, 0.82, 0.3), fy_ = Spring::rd(0.5, 0.82, 0.3), fs_ = Spring::rd(0.5, 0.9, 0.003);
   bool face_placed_ = false;
   bool face_handoff_ = false;
   double finish_t0_ = -1, finish_fx_ = 0, finish_fy_ = 0, finish_fs_ = 1;
   double page_s_w_ = 0, page_s_h_ = 0;  // the window the page scale was made for
+  double page_s_base_ = 0;  // and the interface scale it stood on (1.4.1: a new DPI is a new page)
 
   int hover_ = kNone, focus_ = kNone;
   bool kb_ = false;
@@ -135,7 +143,8 @@ struct OnboardingView {
   void draw_eyes(Canvas& c, double a, double now);
   void draw_toggle(Canvas& c, const Rect& r, double a, Rgb on) const;
   Rgb scene_ink(double now) const;
-  void draw_controls(Canvas& c, const Rect& scene, double a, int size_index) const;
+  void draw_controls(Canvas& c, const Rect& scene, double a, int size_index, bool free, double menu_a) const;
+  void soften_under(Canvas& c, const Rect& scene, const Rect& bar, double a) const;
   void draw_button(Canvas& c, const Rect& r, const std::string& label, bool primary, double hv, double a, bool chevron,
                    bool label_only = false) const;
   void draw_words(Canvas& c, int pg, double ox, double a, double now);

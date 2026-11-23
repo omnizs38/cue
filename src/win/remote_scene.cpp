@@ -1,4 +1,5 @@
 #include "remote_scene.h"
+#include "../core/detached_thread.h"
 
 #include <mmsystem.h>
 
@@ -21,7 +22,7 @@ void play(remote_sound::Kind k, bool loop) {
 
 bool RemoteScene::create(HINSTANCE inst) {
   // the sounds are synthesized once, in the background, so opening the scene never waits for them
-  std::thread([] { sound(remote_sound::Kind::Opening); sound(remote_sound::Kind::Waiting); sound(remote_sound::Kind::Connected); }).detach();
+  start_detached([] { sound(remote_sound::Kind::Opening); sound(remote_sound::Kind::Waiting); sound(remote_sound::Kind::Connected); });
   host_.on_action = [this](SceneAct a) { if (on_action) on_action({(RemoteAct)a.a, a.index}); };
   host_.on_closed = [this] { stop_sound(); if (on_closed) on_closed(); };
   host_.on_frame = [this](double t) { frame(t); };

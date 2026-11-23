@@ -384,9 +384,11 @@ vec4 hook() {
 }
 
 //!HOOK OUTPUT
-//!WHEN bg_on 0 >
+//!WHEN bg_on 0 > lit_on 0 > ! *
 //!BIND HOOKED
 //!DESC Cue music room light: a soft glow around the cover, centred on it, in its own colours
+// (on its own only for the cover alone; with the light show it is drawn inside that pass, below,
+// the same light on the same pixels: one pass over the whole window instead of two)
 // The music's picture is the cover (and its wings) on black; the room's light is drawn here, on
 // the graphics card, instead of a full-size picture made 60 times a second by the processor. The
 // eight colours of the cover's border (lit_p*, from the left, clockwise) face their own side; the
@@ -401,12 +403,11 @@ vec3 bg_p(int i) {
     if (i == 6) return vec3(lit_p6r, lit_p6g, lit_p6b);
     return vec3(lit_p7r, lit_p7g, lit_p7b);
 }
-vec4 hook() {
-    vec4 o = HOOKED_tex(HOOKED_pos);
-    vec2 sz = HOOKED_size;
+// the picture with the room's light over it, at pos (the window's share)
+vec3 bg_room(vec3 o, vec2 pos, vec2 sz) {
     vec2 c = vec2(bg_x, bg_y) * sz;
     float h = bg_hw * sz.x;
-    vec2 q = HOOKED_pos * sz - c;
+    vec2 q = pos * sz - c;
     if (max(abs(q.x), abs(q.y)) < h - 1.0) return o;
     // distance from a rounded square inside the cover, in half-sides of the cover (to the right,
     // bg_sx times longer: the strip's thumbnail lights the whole width of its window)
@@ -420,8 +421,12 @@ vec4 hook() {
     float g = 0.36 * exp(-(d / 2.0) * (d / 2.0)) + 0.15 * exp(-(d / 9.0) * (d / 9.0));
     vec3 light = col * g * clamp(bg_k, 0.0, 1.0);
     // a whisper of noise: no banding in the soft gradient
-    light += (fract(sin(dot(HOOKED_pos * sz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
-    return vec4(1.0 - (1.0 - o.rgb) * (1.0 - clamp(light, 0.0, 1.0)), o.a);
+    light += (fract(sin(dot(pos * sz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+    return 1.0 - (1.0 - o) * (1.0 - clamp(light, 0.0, 1.0));
+}
+vec4 hook() {
+    vec4 o = HOOKED_tex(HOOKED_pos);
+    return vec4(bg_room(o.rgb, HOOKED_pos, HOOKED_size), o.a);
 }
 
 //!HOOK OUTPUT
@@ -435,6 +440,42 @@ vec4 hook() {
 // 11, 528 tall, for a 520 cover), or the spectrum alone (768 x 320 of bars, rows of 16, above its
 // reflection). The cover,
 // the words (drawn later, by the OSD) and the dim cells of silence stay dark.
+vec3 bg_p(int i) {
+    if (i == 0) return vec3(lit_p0r, lit_p0g, lit_p0b);
+    if (i == 1) return vec3(lit_p1r, lit_p1g, lit_p1b);
+    if (i == 2) return vec3(lit_p2r, lit_p2g, lit_p2b);
+    if (i == 3) return vec3(lit_p3r, lit_p3g, lit_p3b);
+    if (i == 4) return vec3(lit_p4r, lit_p4g, lit_p4b);
+    if (i == 5) return vec3(lit_p5r, lit_p5g, lit_p5b);
+    if (i == 6) return vec3(lit_p6r, lit_p6g, lit_p6b);
+    return vec3(lit_p7r, lit_p7g, lit_p7b);
+}
+// the picture with the room's light over it, at pos (the window's share)
+vec3 bg_room(vec3 o, vec2 pos, vec2 sz) {
+    vec2 c = vec2(bg_x, bg_y) * sz;
+    float h = bg_hw * sz.x;
+    vec2 q = pos * sz - c;
+    if (max(abs(q.x), abs(q.y)) < h - 1.0) return o;
+    // distance from a rounded square inside the cover, in half-sides of the cover (to the right,
+    // bg_sx times longer: the strip's thumbnail lights the whole width of its window)
+    vec2 qd = vec2(q.x > 0.0 ? q.x / max(bg_sx, 1.0) : q.x, q.y);
+    float d = length(max(abs(qd) - vec2(h * 0.55), 0.0)) / h;
+    float u = fract(atan(q.y, q.x) / 6.2831853 + 0.5) * 8.0;
+    int i = int(floor(u));
+    vec3 col = mix(bg_p(i), bg_p(i == 7 ? 0 : i + 1), smoothstep(0.0, 1.0, u - floor(u)));
+    // (and, far from it, a wash of the same colours over the whole room, the way a blurred cover
+    // fills it: the window's own colour, music_backdrop, is where it ends)
+    float g = 0.36 * exp(-(d / 2.0) * (d / 2.0)) + 0.15 * exp(-(d / 9.0) * (d / 9.0));
+    vec3 light = col * g * clamp(bg_k, 0.0, 1.0);
+    // a whisper of noise: no banding in the soft gradient
+    light += (fract(sin(dot(pos * sz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+    return 1.0 - (1.0 - o) * (1.0 - clamp(light, 0.0, 1.0));
+}
+// the picture as the room's light leaves it (drawn in this pass when the show is on)
+vec3 room(vec2 pos) {
+    vec3 o = HOOKED_tex(pos).rgb;
+    return bg_on > 0.0 ? bg_room(o, pos, HOOKED_size) : o;
+}
 vec4 hook() {
     vec2 sz = HOOKED_size;
     vec2 c = vec2(lit_x, lit_y) * sz;
@@ -447,15 +488,15 @@ vec4 hook() {
                                 : abs(q.x) < 390.0 * u && q.y > -206.0 * u && q.y < 88.0 * u;
     if (!inside) return vec4(0.0, 0.0, 0.0, 1.0);
     vec2 d = HOOKED_pt;
-    vec3 s = (HOOKED_tex(HOOKED_pos + vec2(-d.x, -d.y)).rgb + HOOKED_tex(HOOKED_pos + vec2(d.x, -d.y)).rgb +
-              HOOKED_tex(HOOKED_pos + vec2(-d.x, d.y)).rgb + HOOKED_tex(HOOKED_pos + vec2(d.x, d.y)).rgb) * 0.25;
+    vec3 s = (room(HOOKED_pos + vec2(-d.x, -d.y)) + room(HOOKED_pos + vec2(d.x, -d.y)) +
+              room(HOOKED_pos + vec2(-d.x, d.y)) + room(HOOKED_pos + vec2(d.x, d.y))) * 0.25;
     // with the cover, the graph's own soft light shows between the dots: what is behind them is
     // read in the clear gap beside the cover and just past the wing, and taken away
     if (lit_cov > 0.5) {
         float sx = q.x < 0.0 ? -1.0 : 1.0;
         vec2 lo = HOOKED_pt * 0.5, hi = vec2(1.0) - HOOKED_pt * 0.5;
-        vec3 near = HOOKED_tex(clamp((c + vec2(sx * (h + 18.0 * u), q.y)) / sz, lo, hi)).rgb;
-        vec3 far = HOOKED_tex(clamp((c + vec2(sx * (h + 272.0 * u), q.y)) / sz, lo, hi)).rgb;
+        vec3 near = room(clamp((c + vec2(sx * (h + 18.0 * u), q.y)) / sz, lo, hi));
+        vec3 far = room(clamp((c + vec2(sx * (h + 272.0 * u), q.y)) / sz, lo, hi));
         vec3 behind = mix(near, far, clamp((abs(q.x) - h - 18.0 * u) / (254.0 * u), 0.0, 1.0));
         float lift = dot(max(s - behind, vec3(0.0)), vec3(.2126, .7152, .0722));
         return vec4(s * smoothstep(0.06, 0.35, lift), 1.0);
@@ -521,6 +562,42 @@ vec4 hook() {
 // colours (lit_p*: eight around it, from the left, clockwise), turned round it (lit_t). The
 // spectrum's dots take the colour of the cover beside them, or, alone, of the light where they
 // stand. Lights add to the picture (screen); the cover stays as is.
+vec3 bg_p(int i) {
+    if (i == 0) return vec3(lit_p0r, lit_p0g, lit_p0b);
+    if (i == 1) return vec3(lit_p1r, lit_p1g, lit_p1b);
+    if (i == 2) return vec3(lit_p2r, lit_p2g, lit_p2b);
+    if (i == 3) return vec3(lit_p3r, lit_p3g, lit_p3b);
+    if (i == 4) return vec3(lit_p4r, lit_p4g, lit_p4b);
+    if (i == 5) return vec3(lit_p5r, lit_p5g, lit_p5b);
+    if (i == 6) return vec3(lit_p6r, lit_p6g, lit_p6b);
+    return vec3(lit_p7r, lit_p7g, lit_p7b);
+}
+// the picture with the room's light over it, at pos (the window's share)
+vec3 bg_room(vec3 o, vec2 pos, vec2 sz) {
+    vec2 c = vec2(bg_x, bg_y) * sz;
+    float h = bg_hw * sz.x;
+    vec2 q = pos * sz - c;
+    if (max(abs(q.x), abs(q.y)) < h - 1.0) return o;
+    // distance from a rounded square inside the cover, in half-sides of the cover (to the right,
+    // bg_sx times longer: the strip's thumbnail lights the whole width of its window)
+    vec2 qd = vec2(q.x > 0.0 ? q.x / max(bg_sx, 1.0) : q.x, q.y);
+    float d = length(max(abs(qd) - vec2(h * 0.55), 0.0)) / h;
+    float u = fract(atan(q.y, q.x) / 6.2831853 + 0.5) * 8.0;
+    int i = int(floor(u));
+    vec3 col = mix(bg_p(i), bg_p(i == 7 ? 0 : i + 1), smoothstep(0.0, 1.0, u - floor(u)));
+    // (and, far from it, a wash of the same colours over the whole room, the way a blurred cover
+    // fills it: the window's own colour, music_backdrop, is where it ends)
+    float g = 0.36 * exp(-(d / 2.0) * (d / 2.0)) + 0.15 * exp(-(d / 9.0) * (d / 9.0));
+    vec3 light = col * g * clamp(bg_k, 0.0, 1.0);
+    // a whisper of noise: no banding in the soft gradient
+    light += (fract(sin(dot(pos * sz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+    return 1.0 - (1.0 - o) * (1.0 - clamp(light, 0.0, 1.0));
+}
+// the picture as the room's light leaves it (drawn in this pass when the show is on)
+vec3 room(vec2 pos) {
+    vec3 o = HOOKED_tex(pos).rgb;
+    return bg_on > 0.0 ? bg_room(o, pos, HOOKED_size) : o;
+}
 vec3 lit_p(int i) {
     if (i == 0) return vec3(lit_p0r, lit_p0g, lit_p0b);
     if (i == 1) return vec3(lit_p1r, lit_p1g, lit_p1b);
@@ -549,6 +626,7 @@ float lit_pool(vec2 uv, vec2 corner, float asp, float reach, float kick) {
 }
 vec4 hook() {
     vec4 o = HOOKED_tex(HOOKED_pos);
+    o.rgb = room(HOOKED_pos);
     vec2 sz = HOOKED_size;
     vec2 c = vec2(lit_x, lit_y) * sz;
     float h = lit_hw * sz.x;
@@ -588,12 +666,12 @@ vec4 hook() {
     if (lit_cov > 0.5 && abs(q.y) < 270.0 * u && abs(q.x) > h + 30.0 * u && abs(q.x) < h + 262.0 * u && l > 0.12) {
         float sx = q.x < 0.0 ? -1.0 : 1.0;
         vec2 lo = HOOKED_pt * .5, hi = vec2(1.0) - HOOKED_pt * .5;
-        vec3 near = HOOKED_tex(clamp((c + vec2(sx * (h + 18.0 * u), q.y)) / sz, lo, hi)).rgb;
-        vec3 far = HOOKED_tex(clamp((c + vec2(sx * (h + 272.0 * u), q.y)) / sz, lo, hi)).rgb;
+        vec3 near = room(clamp((c + vec2(sx * (h + 18.0 * u), q.y)) / sz, lo, hi));
+        vec3 far = room(clamp((c + vec2(sx * (h + 272.0 * u), q.y)) / sz, lo, hi));
         vec3 behind = mix(near, far, clamp((abs(q.x) - h - 18.0 * u) / (254.0 * u), 0.0, 1.0));
         float dot_k = smoothstep(0.04, 0.14, dot(max(rgb - behind, vec3(0.0)), vec3(.2126, .7152, .0722)));
         vec2 sp = (c + vec2(sx * h * 0.9, clamp(q.y, -h, h))) / sz;
-        vec3 side = lit_tone(HOOKED_tex(clamp(sp, lo, hi)).rgb);
+        vec3 side = lit_tone(room(clamp(sp, lo, hi)));
         rgb = mix(rgb, min(side * l * (1.3 + 0.12 * lit_br), vec3(1.0)), 0.55 * k * dot_k);
     }
     // the spectrum alone: its dots take the light's colour where they stand, a little brighter
@@ -608,17 +686,32 @@ vec4 hook() {
 }
 
 //!HOOK OUTPUT
-//!WHEN cov_on 0 >
+//!WHEN cov_on edge_on + veil + mono + 0 >
 //!BIND HOOKED
-//!DESC Cue music cover: a soft shadow, and the tilt and lit edge of the cover under the pointer
+//!DESC Cue music cover, edges, list veil and black and white (one pass: each is a step on the pixel the last one left)
 // The cover is part of the picture (flat, at cov_x/cov_y, half side cov_hw of the width). Each pixel
 // looks through a camera at the cover turned by cov_rx/cov_ry about its centre; where the turned
 // cover no longer covers the flat one, the soft light around it is borrowed from just outside.
+// Then, on the same pixel: the edges, the list's veil and black and white, in that order (they
+// were passes of their own over the whole window; each only reads its own pixel, so one pass
+// draws the same picture)
+// The music's picture (and its light, drawn above) can only paint inside the picture's own frame.
+// In a window much wider or taller than it, the window's colour beyond (the engine's background,
+// the room's far light in the cover's colours: edge_c*) would meet it on a straight line: on those
+// sides (edge_l/r/t/b: the fade's width, in shares of the frame) it eases into that colour.
+// A choice for music (colour stays the default); mono eases 0..1 so the colour drains away and
+// comes back instead of switching. Rec. 709 luma: each colour keeps its own brightness. The cover
+// itself stays in colour: where it is drawn (as the cover pass turns it under the pointer, the
+// same camera, so a tilted cover keeps every coloured pixel and nothing around it does).
 float cov_box(vec2 q, float h, float r) {
     vec2 d = abs(q) - vec2(h - r);
     return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
 }
-vec4 hook() {
+float mono_box(vec2 q, float h, float r) {
+    vec2 d = abs(q) - vec2(h - r);
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+vec4 cov_pass() {
     vec2 sz = HOOKED_size;
     vec2 c = vec2(cov_x, cov_y) * sz;
     float h = cov_hw * sz.x;
@@ -666,48 +759,7 @@ vec4 hook() {
     return vec4(mix(bg, art, cover), original.a);
 }
 
-//!HOOK OUTPUT
-//!WHEN edge_on 0 >
-//!BIND HOOKED
-//!DESC Cue music edges: where the picture stops short of the window, it fades into the window's own colour
-// The music's picture (and its light, drawn above) can only paint inside the picture's own frame.
-// In a window much wider or taller than it, the window's colour beyond (the engine's background,
-// the room's far light in the cover's colours: edge_c*) would meet it on a straight line: on those
-// sides (edge_l/r/t/b: the fade's width, in shares of the frame) it eases into that colour.
-vec4 hook() {
-    vec4 o = HOOKED_tex(HOOKED_pos);
-    vec2 p = HOOKED_pos;
-    float k = 1.0;
-    if (edge_l > 0.0) k *= smoothstep(0.0, edge_l, p.x);
-    if (edge_r > 0.0) k *= smoothstep(0.0, edge_r, 1.0 - p.x);
-    if (edge_t > 0.0) k *= smoothstep(0.0, edge_t, p.y);
-    if (edge_b > 0.0) k *= smoothstep(0.0, edge_b, 1.0 - p.y);
-    return vec4(mix(vec3(edge_cr, edge_cg, edge_cb), o.rgb, k), o.a);
-}
-
-//!HOOK OUTPUT
-//!WHEN veil 0 >
-//!BIND HOOKED
-//!DESC Cue music list: the cover steps back into the dark while the list is open over it
-vec4 hook() {
-    vec4 o = HOOKED_tex(HOOKED_pos);
-    return vec4(o.rgb * (1.0 - 0.86 * clamp(veil, 0.0, 1.0)), o.a);
-}
-
-//!HOOK OUTPUT
-//!WHEN mono 0 >
-//!BIND HOOKED
-//!DESC Cue music in black and white: its spectrum and its light, as their own greys; the cover keeps its colours
-// A choice for music (colour stays the default); mono eases 0..1 so the colour drains away and
-// comes back instead of switching. Rec. 709 luma: each colour keeps its own brightness. The cover
-// itself stays in colour: where it is drawn (as the cover pass turns it under the pointer, the
-// same camera, so a tilted cover keeps every coloured pixel and nothing around it does).
-float mono_box(vec2 q, float h, float r) {
-    vec2 d = abs(q) - vec2(h - r);
-    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
-}
-vec4 hook() {
-    vec4 o = HOOKED_tex(HOOKED_pos);
+vec4 mono_pass(vec4 o) {
     float k = clamp(mono, 0.0, 1.0);
     if (cov_on > 0.5 && cov_hide < 0.0005) {
         vec2 sz = HOOKED_size;
@@ -725,6 +777,22 @@ vec4 hook() {
     }
     float luma = dot(o.rgb, vec3(.2126, .7152, .0722));
     return vec4(mix(o.rgb, vec3(luma), k), o.a);
+}
+
+vec4 hook() {
+    vec4 o = cov_on > 0.0 ? cov_pass() : HOOKED_tex(HOOKED_pos);
+    if (edge_on > 0.0) {
+        vec2 p = HOOKED_pos;
+        float k = 1.0;
+        if (edge_l > 0.0) k *= smoothstep(0.0, edge_l, p.x);
+        if (edge_r > 0.0) k *= smoothstep(0.0, edge_r, 1.0 - p.x);
+        if (edge_t > 0.0) k *= smoothstep(0.0, edge_t, p.y);
+        if (edge_b > 0.0) k *= smoothstep(0.0, edge_b, 1.0 - p.y);
+        o = vec4(mix(vec3(edge_cr, edge_cg, edge_cb), o.rgb, k), o.a);
+    }
+    if (veil > 0.0) o = vec4(o.rgb * (1.0 - 0.86 * clamp(veil, 0.0, 1.0)), o.a);
+    if (mono > 0.0) o = mono_pass(o);
+    return o;
 }
 
 //!HOOK OUTPUT

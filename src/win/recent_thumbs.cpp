@@ -1,4 +1,5 @@
 #include "recent_thumbs.h"
+#include "../core/detached_thread.h"
 
 #include <algorithm>
 #include <fstream>
@@ -112,7 +113,7 @@ void RecentThumbs::start(HWND hwnd, UINT msg, std::filesystem::path dir) {
   sh->msg = msg;
   sh->dir = std::move(dir);
   try {
-    std::thread(run, sh).detach();
+    start_detached([sh] { run(sh); });
     sh_ = std::move(sh);
   } catch (...) {}
 }

@@ -3,6 +3,7 @@
 // through the same actions as the dock, so the PC shows the same feedback ("+15", the pause
 // icon, "subtitles on") as if the person had clicked.
 #include <memory>
+#include "../core/detached_thread.h"
 #include <mutex>
 #include <thread>
 #include "app.h"
@@ -136,7 +137,7 @@ std::string App::remote_folder_name(const std::string& path) {
   if (auto it = folder_names_.find(path); it != folder_names_.end()) return it->second;
   if (folder_names_asked_.insert(path).second) {
     try {
-      std::thread([this, path, hwnd = hwnd_] {
+      start_detached([this, path, hwnd = hwnd_] {
         const HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         std::string name;
         try { name = folder_display_name(path); } catch (...) {}
@@ -151,7 +152,7 @@ std::string App::remote_folder_name(const std::string& path) {
           }
         });
         if (!PostMessageW(hwnd, WM_APP_FILE_KINDS, 0, (LPARAM)f)) delete f;
-      }).detach();
+      });
     } catch (...) {}
   }
   return folder_own_name(path);
@@ -224,7 +225,7 @@ void App::remote_publish() {
     st.subs_on = in.sid != 0 && in.sub_visible;
     st.sub_delay = in.sub_delay;
     st.sub_size = in.style.size;
-    st.sub_pos = in.style.pos;
+    st.sub_pos = std::min(in.style.pos, kSubPosMax);  // (1.4.1) dragged under the picture: the slider's foot
     st.sub_pos_default = in.default_style.pos;
     st.sub_pos_min = kSubPosMin;
     st.sub_pos_max = kSubPosMax;
@@ -606,7 +607,7 @@ void App::lan_refresh() {
   }
   auto state = lan_;
   HWND hwnd = hwnd_;
-  std::thread([state, hwnd] {
+  start_detached([state, hwnd] {
     std::string ip = lan_address();
     {
       std::lock_guard<std::mutex> lock(state->mu);
@@ -615,7 +616,7 @@ void App::lan_refresh() {
       state->busy = false;
     }
     PostMessageW(hwnd, WM_APP_LAN, 0, 0);
-  }).detach();
+  });
 }
 
 // the address for the scene: the last one the worker found (a fresh look is asked at once); the

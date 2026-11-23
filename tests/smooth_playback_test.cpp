@@ -44,6 +44,23 @@ int main() {
   // a film switches its timing only under a full-screen window (as before 1.2.3), never minimized
   std::string idle = body(s, "void App::update_music_idle()", "void App::set_hidden(bool h)");
   assert(idle.find("hidden_now()") == std::string::npos && idle.find("&& hidden_;") != std::string::npos);
+  // (1.4.1) a song nobody sees is drawn the plainest way: only how the engine draws it changes
+  // (its scaling, two passes off); its picture's chain is never rebuilt or given a step for it (a
+  // first version added a filter step after the graph: the song paused and came back on
+  // minimizing, 23/11), and a film's options are never touched
+  {
+    std::string rest = body(s, "void App::send_music_scale(bool cover, bool sync)", "// (19f, 17/11, varredura)");
+    assert(rest.find("audio_only_ && waveform_active_") != std::string::npos && rest.find("hidden_now()") != std::string::npos);
+    assert(rest.find("music_rest_ ? \"bilinear\"") != std::string::npos && rest.find("update_blur_cloud();") != std::string::npos);
+    assert(rest.find("\"vf\"") == std::string::npos && rest.find("lavfi-complex") == std::string::npos && rest.find("audio_mix_graph") == std::string::npos);
+    assert(s.find("@cuerest") == std::string::npos && s.find("{\"vf\", \"add\"") == std::string::npos);
+    std::string prep = body(s, "void App::configure_audio_mode() {", "waveform_active_ = false;");
+    assert(prep.find("if (!audio_only_) music_rest_ = false;") != std::string::npos);
+    // what the window shows the moment it comes back stays drawn: the room's light, the shadow, the edges
+    std::string cloud = body(s, "void App::update_blur_cloud() {", "void App::upload_overlays() {");
+    assert(cloud.find("&& first_frame_ && !music_rest_;") == std::string::npos && cloud.find("!hidden_ && !music_rest_;") == std::string::npos);
+    assert(cloud.find("!hidden_ && !music_rest_ && light_k_") != std::string::npos);
+  }
   // the look's reopen: out with the picture, back in after, the person's volume untouched
   std::string sw = body(s, "bool App::step_audio_switch(double t)", "void App::refresh_subtitles()");
   assert(sw.find("if (a.reopen) set_switch_gain(1 - k);") != std::string::npos);

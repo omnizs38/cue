@@ -43,13 +43,14 @@ void Ambient::free_bitmaps() {
     s.mem = nullptr;
     s.bmp = nullptr;
     s.bits = nullptr;
+    s.held.clear();
     s.w = s.h = 0;
   }
 }
 
 void Ambient::free_surfaces() {
   free_bitmaps();
-  for (auto& s : st_) s.shape.clear();
+  for (auto& s : st_) { s.runs.clear(); s.runs.shrink_to_fit(); }
   built_ = false;
 }
 
@@ -121,10 +122,11 @@ void Ambient::build_shape(const RECT& r, int dpi) {
     fall_made = true;
   }
   const double inv_m2 = 1.0 / ((double)M_ * M_);
+  std::vector<uint32_t> code;  // one strip at a time: (lut << 8 | a) per pixel, 0 where nothing glows
   for (int k = 0; k < 4; ++k) {
     Strip& s = st_[k];
     if (s.fw <= 0 || s.fh <= 0 || s.fw > 65535 || s.fh > 65535) continue;
-    s.shape.reserve((size_t)s.fw * s.fh / 2);
+    code.assign((size_t)s.fw * s.fh, 0);
     for (int ly = 0; ly < s.fh; ++ly)
       for (int lx = 0; lx < s.fw; ++lx) {
         int x = s.fx + lx, y = s.fy + ly;
@@ -155,8 +157,28 @@ void Ambient::build_shape(const RECT& r, int dpi) {
         else if (y >= M_ + wh) p = ww + wh + (ww - 1 - ex);
         else p = 2.0 * ww + wh + (wh - 1 - ey);
         int li = std::clamp((int)(p / P * kLut), 0, kLut - 1);
-        s.shape.push_back({(uint16_t)lx, (uint16_t)ly, (uint16_t)li, (uint8_t)a});
+        code[(size_t)ly * s.fw + lx] = (uint32_t)li << 8 | (uint32_t)a;
       }
+    // (23/11) the same pixels as runs of one colour: along a top or bottom strip the falloff is
+    // the same across a row and the edge's colour changes every ~16 px; down a side strip, the
+    // same down a column. A paint looks a colour up once per run and fills the run, instead of
+    // once per pixel (the 4K opening window: 1.6 million lookups a paint, now 160 thousand), and the
+    // shape takes about a tenth of the memory.
+    const bool down = k >= 2;  // (the side strips: down their columns)
+    s.runs.clear();
+    const int outer = down ? s.fw : s.fh, inner = down ? s.fh : s.fw;
+    for (int o = 0; o < outer; ++o) {
+      uint32_t prev = 0;
+      for (int i = 0; i < inner; ++i) {
+        const size_t at = down ? (size_t)i * s.fw + o : (size_t)o * s.fw + i;
+        const uint32_t c = code[at];
+        if (c && c == prev && s.runs.back().n < 65535) { ++s.runs.back().n; continue; }
+        if (c) s.runs.push_back({(uint32_t)at, 1, (uint16_t)(c >> 8), (uint8_t)(c & 0xFF), (uint8_t)down});
+        prev = c;
+      }
+    }
+    s.runs.shrink_to_fit();
+    s.held.clear();
   }
   built_ = true;
   colors_dirty_ = true;
@@ -180,7 +202,7 @@ void Ambient::layout_cut(const RECT& r, RECT out[4]) const {
   for (int k = 0; k < 4; ++k) {
     const Strip& s = st_[k];
     RECT full{s.fx, s.fy, s.fx + s.fw, s.fy + s.fh};
-    if (s.shape.empty() || !IntersectRect(&out[k], &full, &screens)) SetRectEmpty(&out[k]);
+    if (s.runs.empty() || !IntersectRect(&out[k], &full, &screens)) SetRectEmpty(&out[k]);
   }
 }
 
@@ -217,6 +239,7 @@ bool Ambient::cut_surfaces(const RECT cut[4]) {
     SelectObject(s.mem, s.bmp);
     s.bits = static_cast<uint32_t*>(bits);
     std::memset(s.bits, 0, (size_t)s.w * s.h * 4);
+    s.held.clear();  // (a new surface holds nothing yet)
   }
   ReleaseDC(nullptr, screen);
   colors_dirty_ = true;
@@ -255,6 +278,14 @@ void Ambient::place(HWND owner, bool show) {
   if (dw) EndDeferWindowPos(dw);
 }
 
+// the falloff's levels as they are: the table a paint reads when the light neither comes nor goes
+static constexpr struct Levels {
+  uint8_t v[256];
+  constexpr Levels() : v{} { for (int i = 0; i < 256; ++i) v[i] = (uint8_t)i; }
+} kLevels{};
+// (no colour a paint can make: the tint table's alpha is never above 235, so 0xFFFFFFFF never appears)
+static constexpr uint32_t kNothing = 0xFFFFFFFFu;
+
 void Ambient::paint(HWND owner) {
   if (!built_) return;
   LARGE_INTEGER q0, qf;
@@ -263,29 +294,68 @@ void Ambient::paint(HWND owner) {
   bool needs_show = false;
   HDC screen = GetDC(nullptr);
   BLENDFUNCTION bf{AC_SRC_OVER, 0, blend(), AC_SRC_ALPHA};
+  // (the cost the reveal goes by, paint_ms_, is a whole halo's: a paint that sent only a changed
+  // part says nothing about it, see below)
+  bool whole_paint = true;
   for (auto& s : st_) {
     if (!s.bits) { if (s.wnd && IsWindowVisible(s.wnd)) ShowWindow(s.wnd, SW_HIDE); continue; }
     needs_show |= !IsWindowVisible(s.wnd);
     // the surface is the strip's part on a screen: the shape's pixels off it are skipped
     const int ox = s.fx - s.x, oy = s.fy - s.y;
     const bool whole = ox == 0 && oy == 0 && s.w == s.fw && s.h == s.fh;
-    if (remap_on_) {
-      // coming or going: each pixel's falloff through the reveal's table (one lookup more, only now)
-      for (const Px& q : s.shape) {
-        const unsigned px = (unsigned)(q.x + ox), py = (unsigned)(q.y + oy);
-        if (!whole && (px >= (unsigned)s.w || py >= (unsigned)s.h)) continue;
-        s.bits[(size_t)py * s.w + px] = tint_[(size_t)q.lut * 256 + remap_[q.a]];
+    // coming or going: each pixel's falloff through the reveal's table (one lookup more, only now)
+    const uint8_t* level = remap_on_ ? remap_ : kLevels.v;
+    const uint32_t* tint = tint_.data();
+    // what each run holds already: a run whose colour is the same as last time is not written
+    // again (a light flowing slowly changes a few levels at a time, and its faint outer pixels,
+    // premultiplied, often not at all). Forgotten whenever the surfaces are made again.
+    const bool fresh = s.held.size() != s.runs.size();  // (a new surface: everything is sent)
+    if (fresh) s.held.assign(s.runs.size(), kNothing);
+    uint32_t* held = s.held.data();
+    size_t rewritten = 0;
+    // the part that changed, in the surface's coordinates (only that goes to Windows)
+    int dx0 = s.w, dy0 = s.h, dx1 = 0, dy1 = 0;
+    auto changed = [&](int x0, int y0, int x1, int y1) {
+      dx0 = std::min(dx0, x0); dy0 = std::min(dy0, y0); dx1 = std::max(dx1, x1); dy1 = std::max(dy1, y1);
+    };
+    for (const Run& q : s.runs) {
+      const uint32_t v = tint[(size_t)q.lut * 256 + level[q.a]];
+      uint32_t& had = *held++;
+      if (v == had) continue;
+      had = v;
+      ++rewritten;
+      const int x = (int)(q.off % (uint32_t)s.fw) + ox, y = (int)(q.off / (uint32_t)s.fw) + oy;
+      if (whole) {
+        uint32_t* d = s.bits + q.off;
+        if (!q.down) { std::fill_n(d, q.n, v); changed(x, y, x + q.n, y + 1); }
+        else { for (int i = 0; i < q.n; ++i, d += s.w) *d = v; changed(x, y, x + 1, y + q.n); }
+        continue;
       }
-    } else {
-      for (const Px& q : s.shape) {
-        const unsigned px = (unsigned)(q.x + ox), py = (unsigned)(q.y + oy);
-        if (!whole && (px >= (unsigned)s.w || py >= (unsigned)s.h)) continue;
-        s.bits[(size_t)py * s.w + px] = tint_[(size_t)q.lut * 256 + q.a];
+      // a surface cut to the screens: the run clipped to it (in its own coordinates)
+      if (!q.down) {
+        if (y < 0 || y >= s.h) continue;
+        const int x0 = std::max(x, 0), x1 = std::min(x + (int)q.n, s.w);
+        if (x1 > x0) { std::fill_n(s.bits + (size_t)y * s.w + x0, x1 - x0, v); changed(x0, y, x1, y + 1); }
+      } else {
+        if (x < 0 || x >= s.w) continue;
+        const int y0 = std::max(y, 0), y1 = std::min(y + (int)q.n, s.h);
+        for (int yy = y0; yy < y1; ++yy) s.bits[(size_t)yy * s.w + x] = v;
+        if (y1 > y0) changed(x, y0, x + 1, y1);
       }
     }
     POINT dst{rect_.left - M_ + s.x, rect_.top - M_ + s.y}, src{0, 0};
     SIZE sz{s.w, s.h};
-    if (!UpdateLayeredWindow(s.wnd, screen, &dst, &sz, s.mem, &src, 0, &bf, ULW_ALPHA)) failed_ = true;
+    // (23/11) only what changed goes to Windows: a strip none of whose pixels changed, already shown
+    // where it is with this opacity, is left as it is; otherwise the changed part is sent (the rest
+    // of the window keeps the very same pixels from before). A new surface goes whole.
+    RECT win{};
+    const bool in_place = !fresh && IsWindowVisible(s.wnd) && GetWindowRect(s.wnd, &win) && win.left == dst.x &&
+                          win.top == dst.y && win.right - win.left == s.w && win.bottom - win.top == s.h;
+    if (rewritten < s.runs.size()) whole_paint = false;
+    if (in_place && dx1 <= dx0 && bf.SourceConstantAlpha == last_a_) continue;
+    RECT dirty{dx0, dy0, dx1, dy1};
+    UPDATELAYEREDWINDOWINFO info{sizeof info, screen, &dst, &sz, s.mem, &src, 0, &bf, ULW_ALPHA, in_place && dx1 > dx0 ? &dirty : nullptr};
+    if (!UpdateLayeredWindowIndirect(s.wnd, &info)) failed_ = true;
   }
   ReleaseDC(nullptr, screen);
   if (needs_show) place(owner, true); // colour changes do not need another move/z-order batch
@@ -293,7 +363,9 @@ void Ambient::paint(HWND owner) {
     LARGE_INTEGER q1;
     QueryPerformanceCounter(&q1); QueryPerformanceFrequency(&qf);
     const double ms = (q1.QuadPart - q0.QuadPart) * 1000.0 / qf.QuadPart;
-    paint_ms_ = paint_ms_ > 0 ? paint_ms_ * 0.7 + ms * 0.3 : ms;
+    // only a paint of the whole halo (the reveal's own steps are those): one that sent a few
+    // changed pixels costs far less, and would let the reveal believe it is cheap here
+    if (whole_paint || paint_ms_ <= 0) paint_ms_ = paint_ms_ > 0 ? paint_ms_ * 0.7 + ms * 0.3 : ms;
   }
   last_a_ = blend();
   painted_remap_on_ = remap_on_;
@@ -345,7 +417,7 @@ void Ambient::follow(HWND owner, bool defer_geometry) {
     if (defer_geometry) {
       for (int k = 0; k < 4; ++k) {
         const Strip& s = st_[k];
-        if (s.shape.empty()) SetRectEmpty(&cut[k]);
+        if (s.runs.empty()) SetRectEmpty(&cut[k]);
         else cut[k] = {s.fx, s.fy, s.fx + s.fw, s.fy + s.fh};
       }
     }

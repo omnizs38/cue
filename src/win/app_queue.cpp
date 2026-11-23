@@ -141,7 +141,7 @@ void App::finish_folder() {
   if(job->files.empty()) {auto label=tr(job->limited?str::queue_limit:str::queue_no_media);say(label);queue_notice(label,job->limited?3:2);return;}
   size_t added=queue_add(job->files,job->replace);
   bool limited=job->limited||added<job->files.size();
-  if(limited)say(tr(str::queue_limit));
+  if(job->limited&&added>=job->files.size())say(tr(str::queue_limit));  // (queue_add said it already when the list was full: once, 1.4.1)
   queue_notice(tr(limited?str::queue_limit:str::queue_added),added?1:3);
 }
 

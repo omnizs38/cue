@@ -1,4 +1,5 @@
 // Behaviour checks for the portable core (run on any OS).
+#include "../src/core/subtitle_geometry.h"
 #include "../src/core/i18n.h"
 #include <cassert>
 #include <cstdio>
@@ -78,12 +79,23 @@ int main() {
   CHECK(track_label(tr[1], tr) == "English · commentary");
   CHECK(track_label(tr[2], tr) == "English 2");
   CHECK(track_label(tr[3], tr) == "faixa 4");
+  // (1.4.1) an OBS recording: the MP4 keeps its tracks' names apart from the titles ("und": no
+  // number after each name); a name used twice gets one; a stock handler or an id is no name
+  {
+    std::vector<Track> obs = {{1, "audio", "und", "", "aac"}, {2, "audio", "und", "", "aac"}, {3, "audio", "und", "", "aac"}, {4, "audio", "und", "", "aac"}};
+    obs[0].name = "Game"; obs[1].name = "Microfone"; obs[2].name = "Microfone";
+    CHECK(track_label(obs[0], obs) == "Game");
+    CHECK(track_label(obs[1], obs) == "Microfone 1" && track_label(obs[2], obs) == "Microfone 2");
+    CHECK(track_label(obs[3], obs) == "faixa 4");
+    std::vector<Track> titled = {{1, "audio", "und", "Desktop", "aac"}, {2, "audio", "und", "Mic", "aac"}};
+    CHECK(track_label(titled[0], titled) == "Desktop" && track_label(titled[1], titled) == "Mic");
+  }
   CHECK(fmt_time(5052) == "1:24:12" && fmt_time(522) == "08:42" && fmt_delay(0.3) == "+0,3 s");
   // subtitle: drag it straight from the video, no panel needed; a click on it belongs to it
   {
     PlayView v; v.in.dur = 100; v.in.sid = 1; v.in.sub_shown = true; v.in.kind = SubKind::Text;
     v.resize(W, H, s); double tt = 1; v.reset(tt); run(v, tt, 0.3); v.take_actions();
-    int sy = (int)(v.lifted_pos() / 100.0 * H) - 15;  // inside the subtitle strip, where it is drawn
+    int sy = (int)subtitle_block_bottom(H, v.lifted_pos(), v.sub_font_px()) - 15;  // inside the subtitle strip, where it is drawn
     v.mouse_down(W / 2, sy, tt); v.mouse_up(W / 2, sy, tt);
     auto a1 = v.take_actions();
     CHECK(a1.empty());                               // never pauses through the subtitle
@@ -116,7 +128,8 @@ int main() {
     v.in.sub_text = {"to bind us", "to whomever we meet."};
     v.place.anchor = DockAnchor::TopCenter;  // the dock away from the subtitle: no lift in this check
     v.resize(W, H, s); double tt = 1; v.reset(tt); run(v, tt, 3.0);  // dock gone: subtitle at its place
-    double k = H / 720.0, fs = 44 * k, top = (H - 22 * k - 2 * fs) * v.in.style.pos / 100.0;
+    // (1.4.1) where the engine draws it: the block's foot by the position (subtitle_block_bottom)
+    double fs = v.sub_font_px(), top = subtitle_block_bottom(H, v.lifted_pos(), fs) - 2 * fs;
     int y1 = (int)(top + fs * 0.5), y2 = (int)(top + fs * 1.5);
     v.mouse_move(W / 2, y1, tt);       CHECK(v.cursor_kind() == 2);   // on the first line
     v.mouse_move(W / 2 + 150, y1, tt); CHECK(v.cursor_kind() == 0);   // beside the short line

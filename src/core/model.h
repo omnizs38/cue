@@ -13,13 +13,13 @@ constexpr double kVolMax = 125;
 
 struct SubStyle {
   int font = 1;        // 0 Omni, 1 Clean, 2 Readable
-  int size = 44;       // libass scaled px (relative to a 720 px tall window)
+  int size = 36;       // libass scaled px (relative to a 720 px tall window); 44 until 1.4.1 (the author's choice, 22/11: a line 5% of the picture's height)
   int text_op = 100;   // 0..100
   int bg_op = 45;      // 0 transparent, 1..99 translucent black, 100 solid
   double pos = 93;     // sub-pos, % of window height (bottom of the block)
   int outline = 2;     // 0 = no outline; thickness when the background is transparent
   int line_gap = 0;    // space added between lines (px); negative pulls them together
-  int tracking = 0;    // letter spacing, 'kerning' (scaled px, may be negative)
+  int tracking = 1;    // letter spacing, 'kerning' (scaled px, may be negative); 0 until 1.4.1 (a little air with the outline)
   int ass_mode = 0;    // ASS/SSA tracks: 0 original styling, 1 my style
   bool operator==(const SubStyle& o) const {
     return font == o.font && size == o.size && text_op == o.text_op && bg_op == o.bg_op &&
@@ -51,6 +51,10 @@ struct Track {
   int64_t id = 0;
   std::string type;  // video | audio | sub
   std::string lang, title, codec;
+  // (1.4.1) the track's name where the file keeps it elsewhere: an MP4's own track name (OBS writes
+  // the names given to its audio tracks there), or a handler that names it. Only for the menus'
+  // words: nothing that decides what plays reads it (the recording's tracks are mixed as before)
+  std::string name;
   bool selected = false, external = false, forced = false, is_default = false;
   std::string external_file;  // an external track's file (subtitles or sound loaded beside the film)
   bool albumart = false;

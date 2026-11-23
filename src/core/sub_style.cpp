@@ -1,4 +1,5 @@
 #include "sub_style.h"
+#include "subtitle_geometry.h"
 
 #include <cstdio>
 #include <algorithm>
@@ -25,11 +26,11 @@ StyleCaps style_caps(const SubStyle& st, SubKind kind) {
   return c;
 }
 
-std::vector<PropSet> sub_style_props(const SubStyle& st, SubKind kind, double typography_scale, double dim) {
+std::vector<PropSet> sub_style_props(const SubStyle& st, SubKind kind, double typography_scale, double dim, double line_px) {
   const double k = std::isfinite(dim) ? std::clamp(dim, 0.0, 1.0) : 1.0;
   // Original ASS typesetting and bitmap subtitles remain authored by the file.
   const double scale=style_caps(st,kind).size&&std::isfinite(typography_scale)
-      ?std::clamp(typography_scale,1.0,2.0):1.0;
+      ?std::clamp(typography_scale,0.05,3.0):1.0;
   std::vector<PropSet> v;
   auto add = [&](std::initializer_list<const char*> names, std::string val) {
     PropSet p;
@@ -42,7 +43,13 @@ std::vector<PropSet> sub_style_props(const SubStyle& st, SubKind kind, double ty
   auto f = [&](double x) { std::snprintf(num, sizeof num, "%.2f", x); return std::string(num); };
   add({"sub-ass-override"}, (kind == SubKind::Ass && st.ass_mode == 0) ? "no" : "force");
   add({"sub-font"}, kSubFontFamily[st.font < 0 || st.font > 2 ? 1 : st.font]);
-  add({"sub-font-size"}, scale==1.0?std::to_string(st.size):f(st.size*scale));
+  const bool styled = style_caps(st, kind).size;
+  // (1.4.1) Cue's style reaches the engine at the size of 44 and grows through its sub-scale
+  // ("sub-scale" here is that factor: size/44 x the window's typography; the app multiplies its own
+  // lift and the mini player's floor into it). Letter spacing grows with the letters that way:
+  // the engine takes sub-spacing only from -10 to 10, so 10 at a size of 52, or in a window larger
+  // than the one Cue opens in, was refused and the letters came back together (measured under Wine).
+  add({"sub-font-size"}, styled ? "44" : std::to_string(st.size));
   add({"sub-scale-by-window"},"yes");
   add({"sub-scale-with-window"},"yes");
   add({"sub-bold"}, "no");
@@ -50,9 +57,20 @@ std::vector<PropSet> sub_style_props(const SubStyle& st, SubKind kind, double ty
   // spacing follows the text size (like em-based tracking and leading): the same setting looks
   // the same at 28 or 72, and a tight negative leading never makes small lines collide
   double em = st.size / 44.0;
-  add({"sub-spacing"}, f(st.tracking * em * scale));
-  // libass line spacing is already in physical frame pixels, unlike font metrics.
-  add({"sub-line-spacing", "sub-ass-line-spacing", "ass-line-spacing"}, f(st.line_gap * em));
+  add({"sub-spacing"}, styled ? f(std::clamp(st.tracking, -10, 10)) : f(st.tracking * em * scale));
+  {
+    char sc[32];
+    std::snprintf(sc, sizeof sc, "%.4f", styled ? em * scale : 1.0);
+    add({"sub-scale"}, sc);
+  }
+  // libass line spacing is already in physical frame pixels, unlike font metrics. (1.4.1) so it is
+  // given as a share of the letters' size on screen: the same look in every window and on every
+  // screen (a fixed number of px barely moved the lines at 4K and laid a small subtitle's lines over
+  // each other)
+  const double gap_px = std::isfinite(line_px) && line_px > 0 && style_caps(st, kind).size
+                            ? subtitle_line_gap_share(st.line_gap, st.font) * line_px
+                            : st.line_gap * em;
+  add({"sub-line-spacing", "sub-ass-line-spacing", "ass-line-spacing"}, f(gap_px));
   add({"sub-color"}, rgba(1, 1, 1, k * st.text_op / 100.0));
   add({"sub-pos"}, std::to_string((int)(st.pos + 0.5)));
 

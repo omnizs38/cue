@@ -3,9 +3,9 @@
 #include "build_identity.h"
 #define CUE_VERSION_MAJOR 1
 #define CUE_VERSION_MINOR 4
-#define CUE_VERSION_PATCH 0
-#define CUE_VERSION "1.4"
-#define CUE_VERSION_SHORT "1.4"
+#define CUE_VERSION_PATCH 1
+#define CUE_VERSION "1.4.1"
+#define CUE_VERSION_SHORT "1.4.1"
 // The version whose news the home shows: a fix release (1.2.1, 1.2.3) does not bring them back;
 // 1.3 has its own (the mini player, controls that fit any window). 1.4 is about speed and
 // battery, nothing new to show on the home, so it keeps 1.3's.

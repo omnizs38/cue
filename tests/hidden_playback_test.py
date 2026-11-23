@@ -62,6 +62,7 @@ struct App {
   void try_start_iris();
   bool in_sizemove_=false,local_ready=false,engine_log_=false;
   struct {bool loaded=true,busy=false,failed=false;uint64_t request=0,generation=1;} preview_;
+  bool helper_memory_rest_=false;  // (1.4.1: the helper resting while Windows says memory is low)
   PreviewDispatch preview_dispatch_;
   double thumb_want_=-1,remote_peek_want_=-1,accent_want_=-1,thumb_interaction_at_=-1,thumb_seek_t_=0,thumb_dispatched_at_=0,thumb_request_at_=0;
   uint64_t thumb_want_epoch_=1;

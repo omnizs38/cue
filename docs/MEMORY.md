@@ -20,6 +20,12 @@ A 3840×2160 BGRA buffer is 31.64 MiB. The scene has both a DIB and a CPU canvas
 
 Current release evidence: [VALIDATION.md](VALIDATION.md).
 
+## 1.4.1: the film's ambient light
+
+The halo's shape was one entry per lit pixel (8 bytes: 14.3 MB at the 4K opening window, 21.2 MB
+maximized); it is now runs of one colour (12 bytes each, plus 4 for the colour each run holds:
+2.4 MB and 2.6 MB). Its four surfaces (the strips' pixels, 7.5 MB at that window) are unchanged.
+
 ## Intentional bounded storage
 
 The timeline thumbnail cache, remote thumbnail cache, known fallback glyphs, fonts, synthesized pairing sounds and decoder buffers are intentional. A rise during first use or a high working set alone does not prove a leak. The important distinction is whether repeated identical operations continue to add live resources after warm-up.

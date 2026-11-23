@@ -1,4 +1,5 @@
 #include "sound_parts.h"
+#include "../core/detached_thread.h"
 
 #include <algorithm>
 #include <cstring>
@@ -150,7 +151,7 @@ void SoundFinder::keep_identity_locked(const std::string& path, const std::strin
 
 void SoundFinder::look_up(const std::string& path) {
   try {
-    std::thread([this, path] {
+    start_detached([this, path] {
       auto* r = new LookUp{path, false};
       const std::wstring w = widen(path);
       const DWORD a = GetFileAttributesW(w.c_str());
@@ -166,7 +167,7 @@ void SoundFinder::look_up(const std::string& path) {
         msg = msg_;
       }
       if (!hwnd || !PostMessageW(hwnd, msg, 1, (LPARAM)r)) delete r;
-    }).detach();
+    });
   } catch (...) {}
 }
 

@@ -57,7 +57,9 @@ int main() {
     hv.enter(now);
     Canvas shown, back, whole, scratch;  // the app's two canvases; the reference; clear's scratch
     uint64_t key_of_shown = 0;
+    int cover_until = -1;
     for (int step = 0; step < 900; ++step) {
+      if (step == cover_until) hv.cover_list(false);
       // something happens (often nothing: the eyes alone follow a pointer)
       // (stretches where only the pointer moves, as on a real home, between bursts of everything)
       const bool calm = (step / 60) % 2 == 1;
@@ -85,6 +87,7 @@ int main() {
       else if (e < 69) hv.enter(now, rng() % 2);
       else if (e < 70 && !hv.rows.empty()) hv.clear_animated(now, &scratch);
       else if (e < 71) { i18n::set_language(rng() % 2 ? i18n::Lang::De : i18n::Lang::PtBR); hv.relayout(); }
+      else if (e < 72) { hv.cover_list(true); cover_until = step + 20; }  // (the Settings panel over the list for a moment)
       // time passes: one display frame, or a long idle (blinks, a thought, the eyes giving up following)
       const double dt = e % 13 == 0 ? 0.5 + (rng() % 4000) / 1000.0 : 1 / 60.0;
       now += dt;

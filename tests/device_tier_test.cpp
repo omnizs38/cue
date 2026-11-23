@@ -60,7 +60,7 @@ int main() {
   assert(strong.allow_smooth_motion() && office.allow_smooth_motion() && !none.allow_smooth_motion());
   assert(strong.ui_frame_interval() < 1.0 / 50.0 && none.ui_frame_interval() > 1.0 / 35.0);
   assert(strong.colour_interval_scale() == 1 && office.colour_interval_scale() == 2 && laptop.colour_interval_scale() == 2);
-  assert(std::string(music_scale(GpuTier::Full, true)) == "spline36");
+  assert(std::string(music_scale(GpuTier::Full, true)) == "catmull_rom");
   assert(std::string(music_scale(GpuTier::Light, true)) == "bilinear");
   assert(std::string(music_scale(GpuTier::Software, true)) == "bilinear");
   assert(std::string(music_scale(GpuTier::Software, false)) == "nearest");

@@ -79,7 +79,7 @@ class App {
  private:
   enum class Mode { Home, Play };
   enum : UINT { WM_APP_MPV = WM_APP + 1, WM_APP_ENGINE = WM_APP + 2, WM_APP_RECENTS = WM_APP + 3, WM_APP_THUMB = WM_APP + 4, WM_APP_MOUSE = WM_APP + 5, WM_APP_OPEN_FILES = WM_APP + 6, WM_APP_LEFT_DOWN = WM_APP + 7, WM_APP_LEFT_UP = WM_APP + 8, WM_APP_RIGHT_UP = WM_APP + 9, WM_APP_VSYNC = WM_APP + 10, WM_APP_UPDATE = WM_APP + 11, WM_APP_REMOTE = WM_APP + 12, WM_APP_QUEUE_CANCEL = WM_APP + 13, WM_APP_WHEEL = WM_APP + 14, WM_APP_MEDIA_BUTTON = WM_APP + 15, WM_APP_HOME_THUMB = WM_APP + 16, WM_APP_SOUND_PARTS = WM_APP + 17, WM_APP_DISK_CHECK = WM_APP + 18, WM_APP_LAN = WM_APP + 19, WM_APP_OGG_KIND = WM_APP + 20, WM_APP_FILE_KINDS = WM_APP + 21 };
-  enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREVIEW = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14, T_FOLDER = 15, T_QUEUE = 16, T_VOLUME = 17, T_REMOTE_PATH = 18, T_SEEK_FADE = 19, T_HOME_SHOT = 20, T_HELPER_REST = 21, T_LIST_HOLD = 22, T_PRELOAD = 23, T_SKIP_DIP = 24, T_SHAPE_WAIT = 25, T_SHELL_BATCH = 26, T_AUDIO_DEVICE = 27 };
+  enum : UINT_PTR { T_ANIM = 1, T_POLL = 2, T_WAKE = 3, T_SAVE = 4, T_THUMB = 5, T_PERSIST = 6, T_GEOM = 7, T_PREVIEW = 8, T_FINE = 9, T_MAINTENANCE = 10, T_REMOTE = 11, T_REMOTE_START = 12, T_NEXT = 13, T_NEWS = 14, T_FOLDER = 15, T_QUEUE = 16, T_VOLUME = 17, T_REMOTE_PATH = 18, T_SEEK_FADE = 19, T_HOME_SHOT = 20, T_HELPER_REST = 21, T_LIST_HOLD = 22, T_PRELOAD = 23, T_SKIP_DIP = 24, T_SHAPE_WAIT = 25, T_SHELL_BATCH = 26, T_AUDIO_DEVICE = 27, T_MEMORY_BACK = 28 };
 
   HINSTANCE inst_ = nullptr;
   HWND hwnd_ = nullptr, video_ = nullptr;
@@ -176,9 +176,17 @@ class App {
   // size, then a spring into the corner)
   struct MiniFx {
     bool on = false, cloaked = false, entering = false, ghost = false; int stage = 0; double t0 = 0, rise = 0.14, dur = 0.45, hold = 0.08; RECT to{}, from{}, gto{};
+    RECT here{};       // (a song on its way in) where the full player was: the still layer's place at the start
+    double cell0 = 0;  // its pixels' size on screen then (the live picture's pixels start from it)
+    bool still_tried = false;   // the engine asked for its picture of the window (a frame or two before the switch)
+    bool still_back = false;    // and it answered (with a picture or not)
+    double still_asked = 0;     // when
+    uint64_t still_id = 0;      // the request's reply id
   } mini_fx_;
   bool music_cover_on_screen(const MusicView& v, double& x, double& y, double& side) const;
   FlightGhost ghost_;
+  StillLayer still_;  // (a song on its way into the mini player) the full player as it was, gathering into the card
+  uint64_t still_seq_ = 0;
   StageCover stage_cover_;  // black over the screen while full screen changes the window's size
   GrowCover grow_cover_;    // black over the window while it grows with a black picture (see grow_cover_wanted)
   double grow_cover_ready_at_ = -1;  // the glide landed and what is under the cover caught up
@@ -195,6 +203,7 @@ class App {
   void end_mini_fx(bool apply = true);  // apply: a switch still pending happens now (else it is dropped)
   void mini_switch(bool entering);  // the mini player on or off, the window at its new size  // false: no pixels (Windows' animations off, another effect running)
   bool step_mini_fx(double t);
+  void mini_still(const mpv_event* e);  // (the still layer's picture, from the engine)
   bool keep_music_window_ = false;  // a song after a song: the window keeps the person's size
   WINDOWPLACEMENT mini_restore_{sizeof(WINDOWPLACEMENT)};
   void enter_mini();
@@ -288,6 +297,8 @@ class App {
   bool shape_wait_ = false;   // opened with Cue closed: out of sight until the film's shape is known
   void end_shape_wait();
   void update_music_idle();  // a film under a full-screen window: frames timed by the sound
+  void update_music_rest();  // a song nobody can see: drawn the plainest way
+  void send_music_scale(bool cover, bool sync);
   bool poll_slow_ = false;    // minimized: the poll at 4 Hz
   // the poll's pace (core/poll_pace.h): 30 a second while anything can change on screen, slower
   // when nothing can; any input, animation or engine event brings it back at once
@@ -303,6 +314,8 @@ class App {
   UINT play_pace(bool hidden) const;
   void fit_fullscreen();  // full screen fits its monitor again (resolution, scale, monitors changed)
   bool film_idle_ = false;    // a film under a full-screen window: video-sync=audio
+  bool music_rest_ = false;   // a song minimized or covered: drawn the plainest way (1.4.1)
+  bool music_scale_cover_ = false;  // the song's scaling was chosen for its cover (send_music_scale)
   // a song opened again (a new look): its sound fades out and back in through the engine's own
   // gain (volume-gain, dB), never the person's volume, so the reopen is a breath, not a cut
   double switch_gain_ = 1;
@@ -386,6 +399,13 @@ class App {
   void resolve_props();
   // timeline previews
   ThumbClient thumbs_;  // previews + film colour, decoded in a background helper process
+  // (1.4.1) Windows' own "memory is low" signal: the helper goes while it lasts (its engine and
+  // decoder's frames), and comes back 30 s after it ends; the light keeps its last colours
+  HANDLE low_memory_ = nullptr;
+  bool helper_memory_rest_ = false;
+  double memory_checked_t_ = -10, memory_low_t_ = -100;
+  bool memory_low_test_ = false;  // --low-memory-test: the signal on for 20 s, 10 s in (checks)
+  void check_memory();
   std::string thumb_path_;
   PreviewSession preview_;
   PreviewDispatch preview_dispatch_;
@@ -489,7 +509,10 @@ class App {
   void start_update();
   void on_update(UpdateMsg* m);
   void show_update_state();
-  void say(const std::string& text);  // a short message wherever the person is (home or player)
+  void say(const std::string& text);
+  // (1.4.1) a manual update check's answer: in its own row while Settings is open over the home
+  void update_reply(const std::string& text, bool ok = false);
+  double upd_reply_until_ = -1;  // a short message wherever the person is (home or player)
   // the film's atmosphere: sampled from the preview engine (never the playback one)
   Ambient ambient_;
   ColorSmoother accent_sm_;
@@ -685,6 +708,7 @@ class App {
   bool auto_portrait_ = false;     // the current portrait shape came from us
   bool in_sizemove_ = false;
   SIZE sizemove_start_{0, 0};
+  bool film_centre_ = false;      // (1.4.1) this file came from the home: its window grows from the screen's centre
   double pending_ar_ = 0;          // decided while fullscreen: applied on the way out
   SIZE landscape_size_{0, 0};      // last landscape window size, to come back to
   // kind: 0 a shape change, 1 growing into fullscreen, 2 coming back out of it
@@ -734,6 +758,9 @@ class App {
   void adapt_window(double ar);
   RECT film_window_rect(double ar) const;
   RECT home_default_rect() const;
+  double sub_ref_h() const;  // (1.4.1) the picture of the window Cue opens in, here: 0 in the mini player (its own rule)
+  double sub_q_ = 1, sub_font_factor_ = 1;  // (1.4.1) sub-scale = the style's factor (sub_style_props) x the lift and the mini player's floor
+  void send_sub_scale();  // (1.4.1) the engine's sub-scale now (the lift, the mini player's floor): the line spacing follows it
   bool shell_batch_more_ = false, shell_batch_listed_ = false, shell_batch_cold_ = false;
   static constexpr double kShellBatchGap = 0.6, kShellBatchCold = 1.5;  // (s) one Explorer selection's hand-overs
   double shell_batch_t_ = -10;  // when Explorer last handed files over (a selection opened at once arrives one by one)

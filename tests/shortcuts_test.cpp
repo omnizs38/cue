@@ -127,7 +127,8 @@ int main(int argc, char** argv) {
     std::filesystem::path root = source_root(exe.string().c_str());
     std::ifstream sh(root / "src/win/blur_shader.h"), app(root / "src/win/app.cpp");
     std::stringstream a, b; a << sh.rdbuf(); b << app.rdbuf();
-    assert(a.str().find("//!PARAM mono") != std::string::npos && a.str().find("//!WHEN mono 0 >") != std::string::npos);
+    assert(a.str().find("//!PARAM mono") != std::string::npos && a.str().find("mono + 0 >") != std::string::npos &&
+           a.str().find("if (mono > 0.0) o = mono_pass(o);") != std::string::npos);
     // the cover keeps its colours: the pass leaves out what the (tilted) cover covers
     assert(a.str().find("mono_box(uv, h, h * 0.02)") != std::string::npos);
     for (const char* k : {"{\"?\", \"qmark\"}", "{\"l\", \"l\"}", "{\"n\", \"n\"}", "{\"p\", \"p\"}", "{\"c\", \"c\"}", "{\"Ctrl+t\", \"c_t\"}"})

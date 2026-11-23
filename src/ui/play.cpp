@@ -1715,7 +1715,13 @@ void PlayView::build_rows() {
     ct->icon = "about:mail";
     R(RK::Submenu, R_LICENSES, tr(str::about_licenses));
     R(RK::Submenu, R_KEYS, tr(str::keys_title))->right = "?";  // the sheet, and the key that opens it
-    if (!in.update_label.empty()) R(RK::Action, R_UPDATE, in.update_label);  // (it acts here: no other screen)
+    if (!in.update_label.empty()) {  // (it acts here: no other screen)
+      // (1.4.1) its answer takes its place for a moment, then it is the row again; measured as it
+      // rests, so the sheet never changes width for it (the answer is cut first)
+      const bool reply = !in.update_reply.empty() && !measuring_;
+      Row* u = R(RK::Action, R_UPDATE, reply ? in.update_reply : in.update_label);
+      if (reply && in.update_reply_ok) u->icon = "check";
+    }
   } else if (panel_ == Panel::Speed) {
     // Keep the value on the title line, at the same scale as the dock.
     R(RK::Hint, R_NONE, tr(str::speed_title))->right = speed_label(in.speed);
@@ -1848,6 +1854,7 @@ int PlayView::big_width() {
                           std::to_string((int)style_caps(in.style, in.kind).font) + std::to_string((int)in.kind);
   if (key == big_key_ && big_w_ > 0) return big_w_;
   const Panel keep = panel_;
+  measuring_ = true;
   std::vector<Row> rows = rows_;
   const bool fold = settings_fold_, compact = settings_compact_, side = settings_side_;
   int W = 204;  // never narrower than this: a sheet, not a strip (the widest page sets the rest)
@@ -1868,6 +1875,7 @@ int PlayView::big_width() {
     W = std::max(W, need);
   }
   panel_ = keep;
+  measuring_ = false;
   rows_ = std::move(rows);
   settings_fold_ = fold; settings_compact_ = compact; settings_side_ = side;
   big_key_ = key;
@@ -3818,21 +3826,70 @@ Rect PlayView::sub_band() const {
 // Where libass draws each line, computed the same way it does (see sub_metrics.h):
 //   line pitch = font size + line spacing; block height = n lines minus one spacing;
 //   a bottom subtitle's top = (height - bottom margin - block height) * sub-pos / 100.
+// (1.4.1) A line wider than the engine's breaking width (subtitle_wrap_width) is broken by the
+// engine into even lines; the same here, so the hand and the lift see the lines really drawn
+static std::vector<std::string> wrap_even(const std::string& line, int font, double fs, double track, double maxw) {
+  if (!(maxw > 0) || sub_line_width(line, font, fs, track) <= maxw) return {line};
+  std::vector<std::string> words;
+  for (size_t i = 0; i < line.size();) {
+    size_t j = line.find(' ', i);
+    if (j == std::string::npos) j = line.size();
+    if (j > i) words.push_back(line.substr(i, j - i));
+    i = j + 1;
+  }
+  const int n = (int)words.size();
+  if (n < 2 || n > 200) return {line};
+  auto span = [&](int a, int b) {  // words a..b-1 as one line
+    std::string t;
+    for (int k = a; k < b; ++k) { if (k > a) t += ' '; t += words[k]; }
+    return sub_line_width(t, font, fs, track);
+  };
+  int rows = 1;  // as many rows as greedy breaking needs, then the breaks evened out
+  for (int a = 0, b = 1; b <= n; ++b)
+    if (span(a, b) > maxw && b - 1 > a) { ++rows; a = b - 1; }
+  rows = std::min(rows, n);
+  // the fewest-widest split into `rows` lines (small: a subtitle has few words)
+  std::vector<std::vector<double>> best(rows + 1, std::vector<double>(n + 1, 1e18));
+  std::vector<std::vector<int>> cut(rows + 1, std::vector<int>(n + 1, 0));
+  best[0][0] = 0;
+  for (int r = 1; r <= rows; ++r)
+    for (int b = r; b <= n; ++b)
+      for (int a = r - 1; a < b; ++a) {
+        const double v = std::max(best[r - 1][a], span(a, b));
+        if (v < best[r][b]) { best[r][b] = v; cut[r][b] = a; }
+      }
+  std::vector<std::string> out(rows);
+  for (int r = rows, b = n; r >= 1; --r) {
+    const int a = cut[r][b];
+    std::string t;
+    for (int k = a; k < b; ++k) { if (k > a) t += ' '; t += words[k]; }
+    out[r - 1] = t;
+    b = a;
+  }
+  return out;
+}
+
 bool PlayView::sub_line_rects(double pos, std::vector<Rect>& out) const {
   out.clear();
   if (in.sub_text.empty() || (in.kind == SubKind::Ass && in.style.ass_mode == 0) || in.kind == SubKind::Bitmap)
     return false;
-  double k = h_ / 720.0 * subtitle_typography_scale(w_,h_);
+  double k = h_ / 720.0 * subtitle_typography_scale(w_,h_,in.preview_aspect,in.sub_ref_h,in.style.size,in.style.tracking);
   double fs = in.style.size * k;
   double em = in.style.size / 44.0;            // spacing follows the size (sub_style.cpp)
-  double gap = in.style.line_gap * em, track = in.style.tracking * em * k;
-  double margin = 22 * h_ / 720.0;                      // sub-margin-y default
-  int n = (int)in.sub_text.size();
-  double bh = n * fs + (n - 1) * gap;
-  double top = (h_ - margin - bh) * pos / 100.0;
+  // (1.4.1) the line spacing is a share of the letters' size (subtitle_line_gap_share)
+  double gap = subtitle_line_gap_share(in.style.line_gap, in.style.font) * fs, track = in.style.tracking * em * k;
   int font = std::clamp(in.style.font, 0, 2);
+  const double maxw = in.sub_ref_h > 0 ? subtitle_wrap_width(w_, h_, in.preview_aspect) : 0;
+  std::vector<std::string> lines;
+  for (const auto& l : in.sub_text)
+    for (auto& part : wrap_even(l, font, fs, track, maxw)) lines.push_back(std::move(part));
+  int n = (int)lines.size();
+  double bh = n * fs + (n - 1) * gap;
+  // (1.4.1) where the engine really puts the block: its foot is fixed by the position, it grows up
+  // (subtitle_block_bottom; the model before put the words half a line lower than they are)
+  double top = subtitle_block_bottom(h_, pos, fs) - bh;
   for (int i = 0; i < n; ++i) {
-    double lw = sub_line_width(in.sub_text[i], font, fs, track);
+    double lw = sub_line_width(lines[i], font, fs, track);
     double y = top + i * (fs + gap);
     out.push_back({(int)std::lround(w_ / 2.0 - lw / 2.0), (int)std::lround(y), (int)std::lround(lw), (int)std::lround(fs)});
   }
@@ -3843,13 +3900,13 @@ bool PlayView::sub_line_rects(double pos, std::vector<Rect>& out) const {
 // corner of a two-line block.
 bool PlayView::sub_hit(int x, int y) const {
   std::vector<Rect> rs;
-  if (!sub_line_rects(sub_drag_ ? in.style.pos : lifted_pos(), rs)) return sub_band().contains(x, y);
+  if (!sub_line_rects(lifted_pos(), rs)) return sub_band().contains(x, y);
   for (const Rect& r : rs)
     if (r.grow(3 * s_).contains(x, y)) return true;
   return false;
 }
 
-Rect PlayView::sub_rect() const { return sub_rect_at(sub_drag_ ? in.style.pos : lifted_pos()); }
+Rect PlayView::sub_rect() const { return sub_rect_at(lifted_pos()); }
 
 Rect PlayView::sub_rect_at(double pos) const {
   std::vector<Rect> rs;
@@ -3859,15 +3916,15 @@ Rect PlayView::sub_rect_at(double pos) const {
       int x0 = std::min(u.x, r.x), y0 = std::min(u.y, r.y), x1 = std::max(u.r(), r.r()), y1 = std::max(u.b(), r.b());
       u = {x0, y0, x1 - x0, y1 - y0};
     }
-    return u.grow((int)std::lround(4 * h_ / 720.0 * subtitle_typography_scale(w_,h_)));  // the background box pads it a little
+    return u.grow((int)std::lround(4 * h_ / 720.0 * subtitle_typography_scale(w_,h_,in.preview_aspect,in.sub_ref_h,in.style.size,in.style.tracking)));  // the background box pads it a little
   }
-  const double k=h_/720.0*(style_caps(in.style,in.kind).size?subtitle_typography_scale(w_,h_):1.0);
+  const double k=h_/720.0*(style_caps(in.style,in.kind).size?subtitle_typography_scale(w_,h_,in.preview_aspect,in.sub_ref_h,in.style.size,in.style.tracking):1.0);
   double fs = in.style.size * k;
   int lines = std::max(1, in.sub_lines);
   double em = in.style.size / 44.0;
-  double bh = lines * fs * 1.15 + std::max(0, lines - 1) * in.style.line_gap * em + fs * 0.2;
+  double bh = lines * fs * 1.15 + std::max(0, lines - 1) * subtitle_line_gap_share(in.style.line_gap, in.style.font) * fs + fs * 0.2;
   double bw = std::clamp(in.sub_chars * (fs * 0.5 + in.style.tracking * em * k) + fs * 0.4, fs * 3, w_ * 0.92);
-  double bottom = pos / 100.0 * h_;
+  double bottom = subtitle_block_bottom(h_, pos, fs);
   return {(int)(w_ / 2 - bw / 2), (int)(bottom - bh), (int)bw, (int)bh};
 }
 
@@ -4342,7 +4399,19 @@ void PlayView::compose(double now) {
     }
     int tx = (w_ - toast_base_.w) / 2 / s * s, ty = kMargin * s + (int)std::lround((1 - ta) * -3) * s;
     toast_rect_ = {tx, ty, toast_base_.w, toast_base_.h};
+    // what comes next, by itself: a 1 px line inside its foot, as "skip intro"'s, shorter by whole
+    // pixels as the film's time runs out (it stands still while the film is paused; none with
+    // reduced motion)
+    int line = 0;
+    if (next_toast_ && next_counting_ && !reduce_motion() && in.dur > 0) {
+      const double left = std::max(0.0, in.dur - in.time) / std::max(0.1, in.speed);
+      const int room = toast_base_.w - 8 * s;
+      line = (int)std::ceil(room / (double)s * std::clamp(left / kNextCount, 0.0, 1.0)) * s;
+    }
+    if (line != next_line_) { next_line_ = line; T.lgen = 0; }  // (staged again with it)
+    const bool fresh = T.lgen != toast_gen_ || T.la != (int)std::lround(std::clamp(ta, 0.0, 1.0) * 255) || T.c.px.empty();
     restage(T, toast_base_, toast_gen_, ta, tx, ty);
+    if (fresh && line > 0) T.c.fill(Rect{4 * s, toast_base_.h - 3 * s, line, s}, p.dim, ta);
   } else if (T.visible) {
     T.visible = false; T.dirty = true; T.lgen = 0; toast_text_.clear();
     toast_btn_ = toast_hot_ = false;
@@ -4697,7 +4766,7 @@ bool PlayView::tip_want() const {
 
 void PlayView::tip_frame_size(int& W, int& H) const {
   W = H = 0;
-  if (in.audio_only) return;
+  if (in.audio_only || in.previews_off) return;  // (an empty card waiting for a picture that will not come)
   double aspect = in.preview_aspect > 0 ? in.preview_aspect :
       thumb_slot_h_ > 0 ? (double)thumb_slot_w_/thumb_slot_h_ : 0;
   if (!std::isfinite(aspect) || aspect <= 0) return;
@@ -4798,9 +4867,17 @@ void PlayView::render_music() {
   if (beside && !card_ && !header) room = std::max((int)(60 * s), std::min(room, w_ - (int)(kMargin * s) - (int)std::lround(scene_words_x(S, V))));
   // under the cover the words keep to the cover's width (a little past it), so a big window does
   // not get a title wider than the picture it names
+  // (1.4.1) unless the title does not fit there even at the type's own size: then it takes the
+  // window's width, at that size, before it is cut ("o nome da música cortando": a long title was
+  // cut at the cover's width with the window's width free on both sides)
+  bool long_title = false;
   if (!beside && !card_) {
     const Rect cv = cover_screen_rect();
-    if (cv.w > 0) room = std::max((int)(60 * s), std::min(room, (int)std::lround(centre ? std::max(cv.w * 1.7, 320.0 * s) : cv.w * 1.2)));
+    if (cv.w > 0) {
+      const int keep = std::max((int)(60 * s), std::min(room, (int)std::lround(centre ? std::max(cv.w * 1.7, 320.0 * s) : cv.w * 1.2)));
+      long_title = text_w(in.music_title, s) > keep && room > keep;
+      if (!long_title) room = keep;
+    }
   }
   // the album's list open beside the centred cover: the words keep to the left half, with the
   // cover (16/11: in the large sizes the title at twice the type ran on under the list)
@@ -4811,7 +4888,7 @@ void PlayView::render_music() {
   double ts = s;
   // (the card too: its column is narrow, a title at twice the type stood far from its artist)
   const bool caption = header || (card_ && cmode_ != 5 && cmode_ != 4) || (!beside && !centre && !card_);
-  for (double f : {2.0, 1.5}) if (!(caption && f > 1.5) && text_w(in.music_title, std::round(s * f * 2) / 2) <= room) { ts = std::round(s * f * 2) / 2; break; }
+  for (double f : {2.0, 1.5}) if (!long_title && !(caption && f > 1.5) && text_w(in.music_title, std::round(s * f * 2) / 2) <= room) { ts = std::round(s * f * 2) / 2; break; }
   // the artist a size up in the card and under the centred cover, when it fits
   double as = s;
   if (centre && text_w(in.music_artist, std::round(s * 2.5) / 2) <= room) as = std::round(s * 2.5) / 2;
@@ -5206,7 +5283,7 @@ void PlayView::changed(double now) {
     if (panel_ == Panel::Volume || mini_) ps += "|vol:" + std::to_string((int)std::lround(in.volume)) + (in.muted ? "m" : "");
     if (panel_ == Panel::FileInfo) ps += "|info:" + std::to_string(in.file_info_revision);
     if(panel_==Panel::Queue)ps+="|q:"+std::to_string(in.queue_revision)+(in.paused?"p":"r");
-    ps += "|up:" + in.update_label + (in.update_ready ? "!" : "");
+    ps += "|up:" + in.update_label + (in.update_ready ? "!" : "") + "|" + in.update_reply;
     ps += "|lang:" + std::to_string(in.language) + ":" + std::to_string(i18n::revision());
     ps += "|sub:" + std::to_string(in.sub_selection.shown(in.sid));
     ps += "|ms:" + std::to_string(in.mini_sub_size);
@@ -5380,6 +5457,7 @@ bool PlayView::pinned() const {
 
 void PlayView::toast(const std::string& t, const char* icon, double now, bool icon_after) {
   next_toast_ = false;
+  next_counting_ = false;
   toast_text_ = t;
   toast_icon_ = icon;
   toast_icon_after_ = icon_after;
@@ -5450,12 +5528,15 @@ void PlayView::set_next_picture(const std::vector<uint32_t>& pixels,int w,int h)
   if(w!=84 || h!=48 || pixels.size()!=84*48) return;
   next_picture_.resize(w,h); next_picture_.px=pixels; toast_dirty_=true;
 }
-void PlayView::next_notice(const std::string& label, double now) {
+void PlayView::next_notice(const std::string& label, double now, bool counting) {
   // (the mini player shows no notices about what comes next: it just goes on)
-  if (label.empty() || (in.mini_player && !in.fullscreen)) { if (next_toast_) { toast_text_.clear(); toast_alpha_ = 0; toast_dirty_ = true; next_toast_ = false; } return; }
+  if (label.empty() || (in.mini_player && !in.fullscreen)) { if (next_toast_) { toast_text_.clear(); toast_alpha_ = 0; toast_dirty_ = true; next_toast_ = false; next_counting_ = false; } return; }
+  // (the same words again, a second later: nothing to draw anew; the line counts on its own)
+  if (next_toast_ && label == toast_text_ && counting == next_counting_) return;
   double started = next_toast_ ? toast_t0_ : now;
   toast(label, "skip-forward", started);
   next_toast_ = true; toast_btn_ = true; toast_hold_ = 12;
+  next_counting_ = counting;
 }
 
 // Page Up / Page Down: the next chapter, or back to the start of this one (the one before
@@ -5654,22 +5735,51 @@ bool PlayView::back_hit(int x, int y) const { return back_vis_.v > 0.2 && back_r
 
 // While the dock sits over the subtitle, the subtitle rises above it.
 double PlayView::lifted_pos() const {
-  return in.style.pos - (sub_drag_ ? 0 : subtitle_lift_.x);
+  if (sub_drag_) return placed_pos(in.style.pos);
+  return placed_pos(in.style.pos) - subtitle_lift_.x;
+}
+
+// (1.4.1) the subtitle's size on screen, in px (the engine's font size)
+double PlayView::sub_font_px() const {
+  const bool styled = style_caps(in.style, in.kind).size;
+  return in.style.size * h_ / 720.0 *
+         (styled ? subtitle_typography_scale(w_,h_,in.preview_aspect,in.sub_ref_h,in.style.size,in.style.tracking) : 1.0);
+}
+
+// (1.4.1) the position is the picture's (subtitle_window_pos): with black bands the words stay
+// in the picture, or under it when dragged there; the words Cue does not style (ASS in its own
+// style, pictures) stay put
+double PlayView::placed_pos(double pos) const {
+  if (in.sid == 0 || in.kind == SubKind::Bitmap || (in.kind == SubKind::Ass && in.style.ass_mode == 0)) return subtitle_bandless_pos(pos);
+  const double fs = sub_font_px();
+  std::vector<Rect> rs;  // the rows the engine draws now (a long line broken), for a subtitle of three or more
+  const int rows = sub_line_rects(in.style.pos, rs) ? (int)rs.size() : 2;
+  return subtitle_window_pos(pos, w_, h_, in.preview_aspect, fs, subtitle_line_gap_share(in.style.line_gap, in.style.font) * fs, rows);
+}
+
+double PlayView::picture_pos(double wpos) const {
+  if (in.sid == 0 || in.kind == SubKind::Bitmap || (in.kind == SubKind::Ass && in.style.ass_mode == 0)) return wpos;
+  const double fs = sub_font_px();
+  std::vector<Rect> rs;
+  const int rows = sub_line_rects(in.style.pos, rs) ? (int)rs.size() : 2;
+  return subtitle_picture_pos(wpos, w_, h_, in.preview_aspect, fs, subtitle_line_gap_share(in.style.line_gap, in.style.font) * fs, rows);
 }
 
 double PlayView::wanted_subtitle_lift() const {
   if (sub_drag_ || sub_settling_ || vis_.target < 1 || in.sid == 0 || in.kind == SubKind::Bitmap) return 0;
-  const double pos = in.style.pos;
+  const double pos = placed_pos(in.style.pos);  // (1.4.1) where the words stand, next to the picture or not
   Rect d = {(int)px_.target, (int)py_.target, dw_, dh_};
   if (d.y + d.h / 2 < h_ / 2) return 0;
   if(lift_cache_valid_&&lift_style_==in.style&&lift_dock_.x==d.x&&lift_dock_.y==d.y&&lift_dock_.w==d.w&&lift_dock_.h==d.h&&
-     lift_w_==w_&&lift_h_==h_&&lift_scale_==s_&&lift_lines_==in.sub_lines&&lift_chars_==in.sub_chars&&lift_text_==in.sub_text)return lift_value_;
-  lift_cache_valid_=true;lift_style_=in.style;lift_dock_=d;lift_w_=w_;lift_h_=h_;lift_scale_=s_;
+     lift_w_==w_&&lift_h_==h_&&lift_scale_==s_&&lift_aspect_==in.preview_aspect&&lift_lines_==in.sub_lines&&lift_chars_==in.sub_chars&&lift_text_==in.sub_text)return lift_value_;
+  lift_cache_valid_=true;lift_style_=in.style;lift_dock_=d;lift_w_=w_;lift_h_=h_;lift_scale_=s_;lift_aspect_=in.preview_aspect;
   lift_lines_=in.sub_lines;lift_chars_=in.sub_chars;lift_text_=in.sub_text;lift_value_=0;
   Rect sr = sub_rect_at(pos);
   bool overlap = !(sr.r() < d.x || d.r() < sr.x || sr.b() < d.y || d.b() < sr.y);
   if (!overlap) return 0;
-  const double ceiling=d.y-5.0*s_;
+  // (1.4.1) half a line of the subtitle's own letters between it and the controls (5 art px was
+  // tight: the author's look, 22/11 19:10); grows with the subtitle's size
+  const double ceiling=d.y-std::max(5.0*s_,0.5*sub_font_px());
   double lo=kSubPosMin,hi=pos;
   for(int i=0;i<12;++i) {
     double mid=(lo+hi)*.5;
@@ -5688,7 +5798,7 @@ double PlayView::wanted_subtitle_dim() const {
   const Rect pn = panel_rect();
   if (pn.w <= 0 || pn.h <= 0) return 1;
   // where the line will be once the bar has moved it (the dock's lift is its target)
-  const Rect sr = sub_rect_at(in.style.pos - (sub_drag_ ? 0 : subtitle_lift_.target));
+  const Rect sr = sub_rect_at(placed_pos(in.style.pos) - (sub_drag_ ? 0 : subtitle_lift_.target));
   const bool over = sr.w > 0 && !(sr.r() < pn.x || pn.r() < sr.x || sr.b() < pn.y || pn.b() < sr.y);
   return over ? kSubDim : 1;
 }
@@ -6191,7 +6301,7 @@ void PlayView::mouse_move(int x, int y, double now) {
     pending_click_ = P_NONE;
     second_click_ = false;
     if (press_ == P_SUB) {
-      in.style.pos = lifted_pos();
+      in.style.pos = picture_pos(lifted_pos());
       subtitle_lift_.snap(0);
       begin_sub_edit(now);
       sub_drag_ = true;
@@ -6207,9 +6317,9 @@ void PlayView::mouse_move(int x, int y, double now) {
   }
   if (win_drag_) return;
   if (sub_drag_) {
-    double raw = sub_start_pos_ + (y - sub_start_y_) * 100.0 / std::max(1, h_);
-    raw = std::clamp(raw, kSubPosMin, kSubPosMax);
-    in.style.pos = snap_sub(raw);
+    // (1.4.1) moved on the screen, kept as the picture's position (under it when dropped in the band)
+    const double wraw = std::clamp(placed_pos(sub_start_pos_) + (y - sub_start_y_) * 100.0 / std::max(1, h_), kSubPosMin, kSubPosMax);
+    in.style.pos = snap_sub(picture_pos(wraw));
     act(PA::StyleLive);
     update_sub_layers();
     return;
@@ -6311,7 +6421,7 @@ void PlayView::mouse_down(int x, int y, double now) {
     if (!other_button) { swallow_up_ = true; return; }
   }
   if (b == B_NONE && panel_ == Panel::Style && sub_hit(x, y) && style_caps(in.style, in.kind).position) {
-    in.style.pos = lifted_pos();  // grab it where it is on screen, no jump
+    in.style.pos = picture_pos(lifted_pos());  // grab it where it is on screen, no jump
     subtitle_lift_.snap(0);
     begin_sub_edit(now);
     sub_drag_ = true;

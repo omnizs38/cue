@@ -175,12 +175,24 @@ std::string track_label(const Track& t, const std::vector<Track>& all) {
     return subtitle_label(t,1);
   }
   std::string name = lang_name(t.lang);
-  bool title_ok = !t.title.empty() && !technical(t.title);
-  if (name.empty()) name = title_ok ? t.title : "";
+  // (1.4.1) without a title, the name the file keeps for the track (see Track::name): "Microfone"
+  // instead of "faixa 2"
+  const std::string& own = t.title.empty() ? t.name : t.title;
+  bool title_ok = !own.empty() && !technical(own);
+  if (name.empty()) name = title_ok ? own : "";
   if (name.empty()) {
     int n = 1;
     for (auto& o : all) { if (o.id == t.id) break; ++n; }
     name = i18n::format(str::track_n, {{"n", std::to_string(n)}});
+  } else if (lang_name(t.lang).empty()) {
+    // (1.4.1) named by its title: a number only where two tracks have the same name. ("und", the
+    // language of none, counted every titled track as the same language: "Game 1", "Mic 2")
+    int same = 0, idx = 0;
+    for (auto& o : all) {
+      const std::string& oo = o.title.empty() ? o.name : o.title;
+      if (lang_name(o.lang).empty() && lower(oo) == lower(own)) { ++same; if (o.id == t.id) idx = same; }
+    }
+    if (same > 1) name += " " + std::to_string(idx);
   } else {
     // same language twice: tell them apart without jargon
     int same = 0, idx = 0;
@@ -188,7 +200,7 @@ std::string track_label(const Track& t, const std::vector<Track>& all) {
       if (lang_name(o.lang) == lang_name(t.lang) && !t.lang.empty()) { ++same; if (o.id == t.id) idx = same; }
     }
     if (same > 1) {
-      if (title_ok && lower(t.title) != lower(name)) name += " · " + lower(t.title);
+      if (title_ok && lower(own) != lower(name)) name += " · " + lower(own);
       else name += " " + std::to_string(idx);
     }
   }

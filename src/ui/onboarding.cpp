@@ -6,11 +6,12 @@
 #include "../core/i18n.h"
 #include "../core/ui_scale.h"
 #include "light.h"
+#include "blur_cloud.h"
 
 namespace {
 const str::Id kSizeNames[kUiSizes] = {str::size_small, str::size_medium, str::size_large, str::size_larger};
-const str::Id kTitles[3] = {str::ob_intro, str::ob_ambient_title, str::ob_size_title};
-const str::Id kLines[3] = {str::ob_intro_line, str::ob_ambient_line, str::ob_size_line};
+const str::Id kTitles[4] = {str::ob_intro, str::ob_ambient_title, str::ob_bg_title, str::ob_size_title};
+const str::Id kLines[4] = {str::ob_intro_line, str::ob_ambient_line, str::ob_bg_line, str::ob_size_line};
 
 constexpr double kIntroType = 0.7, kCharDur = 0.045;
 constexpr double kFootIn = 0.55;   // the footer comes in with the eyes, not after the greeting
@@ -81,8 +82,11 @@ void OnboardingView::set_size(int w_, int h_, double s_) {
   // window shows the same composition, only at its own pixel: nothing is ever just "smaller".
   // Made for the window, not for the size chosen on the third screen: choosing one changes the
   // controls, not the screen around them.
-  if (first || w != page_s_w_ || h != page_s_h_) {
-    page_s_w_ = w; page_s_h_ = h;
+  // (1.4.1: also when the interface's own scale changed under the same window. The window's first
+  // size reached the welcome before Cue knew the screen's DPI, at 96; on a laptop at 125% the page
+  // kept that first, smaller scale for good, the controls on it a size bigger)
+  if (first || w != page_s_w_ || h != page_s_h_ || eff_s_[1] != page_s_base_) {
+    page_s_w_ = w; page_s_h_ = h; page_s_base_ = eff_s_[1];
     const double base = std::max(1.0, eff_s_[1]);
     const double want = std::round(base * 1.25 * 2) / 2;
     const double room = std::floor(std::min(w / 640.0, h / 400.0) * 2) / 2;  // the composition is ~600 x 380 art
@@ -178,10 +182,24 @@ void OnboardingView::layout() {
   }
   {
     double tw = 28 + 8 + toggle_label_w(1);
-    L_[1].toggle = R(std::round(W / 2 - tw / 2), cy, 28, 16);
+    L_[kPageLight].toggle = R(std::round(W / 2 - tw / 2), cy, 28, 16);
   }
   {
-    Lay& L = L_[2];
+    // the background: two choices, as the sizes are chosen (1.4.1)
+    Lay& L = L_[kPageBg];
+    const str::Id names[2] = {str::more_with_bg, str::more_without_bg};
+    double segw = 8;
+    for (auto n : names) segw += text_w(tr(n), 1) + 16;
+    L.segs.clear();
+    double sx = std::round(W / 2 - segw / 2) + 4;
+    for (auto n : names) {
+      const double sw = text_w(tr(n), 1) + 16;
+      L.segs.push_back(R(sx, cy, sw, 16));
+      sx += sw;
+    }
+  }
+  {
+    Lay& L = L_[kPageSize];
     double segw = 8;
     for (auto n : kSizeNames) segw += text_w(tr(n), 1) + 16;
     L.segs.clear();
@@ -257,6 +275,7 @@ void OnboardingView::start(double now) {
   if (reduce_motion()) t0_ = now - 10;
   knob_.snap(ambient ? 1 : 0);
   glow_.snap(ambient ? 1 : 0);
+  bg_.snap(controls_free ? 1 : 0);
 }
 
 void OnboardingView::go(int p, double now) {
@@ -286,12 +305,19 @@ void OnboardingView::set_scale_choice(int id, double now) {
   // mid-crossfade: it starts again from what is shown most
   if (now - scale_t_ >= kScaleFade * 0.5 || prev_scale_idx_ < 0) prev_scale_idx_ = scale_index();
   ui_scale = id;
-  if (L_[2].segs.size() == 4) {
-    const Rect& sel = L_[2].segs[std::clamp(scale_index(), 0, kUiSizes - 1)];
+  if (L_[kPageSize].segs.size() == 4) {
+    const Rect& sel = L_[kPageSize].segs[std::clamp(scale_index(), 0, kUiSizes - 1)];
     seg_x_.target = sel.x;
     seg_w_.target = sel.w;
   }
   scale_t_ = now;
+}
+
+void OnboardingView::set_controls_free(bool free, double now) {
+  (void)now;
+  if (free == controls_free) return;
+  controls_free = free;
+  bg_.target = free ? 1 : 0;
 }
 
 void OnboardingView::finish(double now, double face_x, double face_y, double face_scale) {
@@ -427,6 +453,7 @@ bool OnboardingView::tick(double now, double dt) {
   moving |= knob_.step(dt);
   moving |= glow_.step(dt);
   moving |= seg_x_.step(dt) | seg_w_.step(dt);
+  moving |= bg_.step(dt);
   place_face(now, false);
   moving |= fx_.step(dt) | fy_.step(dt) | fs_.step(dt);
   place_face(now, false);
@@ -486,14 +513,17 @@ int OnboardingView::hit(int x, int y) const {
   if (L.back.grow(2 * s).contains(x, y)) return page_ == 0 ? kSkip : kBack;
   for (int i = 0; i < (int)L.dots.size(); ++i)
     if (L.dots[i].contains(x, y)) return kDot0 + i;
-  if (page_ == 1 && L.toggle.grow(3 * s).contains(x, y)) return kToggle;
-  if (page_ == 1) {  // the label next to the toggle flips it too
+  if (page_ == kPageLight && L.toggle.grow(3 * s).contains(x, y)) return kToggle;
+  if (page_ == kPageLight) {  // the label next to the toggle flips it too
     Rect lab{L.toggle.r(), L.toggle.y, (int)(8 * s) + toggle_label_w(s), L.toggle.h};
     if (lab.contains(x, y)) return kToggle;
   }
-  if (page_ == 2)
+  if (page_ == kPageSize)
     for (int i = 0; i < (int)L.segs.size(); ++i)
       if (L.segs[i].contains(x, y)) return kSeg0 + i;
+  if (page_ == kPageBg)
+    for (int k = 0; k < (int)L.segs.size(); ++k)
+      if (L.segs[k].contains(x, y)) return kBg0 + k;
   return kNone;
 }
 
@@ -504,8 +534,9 @@ bool OnboardingView::is_background(int x, int y) const {
 
 std::vector<int> OnboardingView::focus_order() const {
   std::vector<int> o;
-  if (page_ == 1) o.push_back(kToggle);
-  if (page_ == 2) o.push_back(kSeg0 + std::clamp(scale_index(), 0, kUiSizes - 1));
+  if (page_ == kPageLight) o.push_back(kToggle);
+  if (page_ == kPageBg) o.push_back(controls_free ? kBg1 : kBg0);
+  if (page_ == kPageSize) o.push_back(kSeg0 + std::clamp(scale_index(), 0, kUiSizes - 1));
   o.push_back(page_ == 0 ? kSkip : kBack);
   o.push_back(kNext);
   return o;
@@ -532,7 +563,13 @@ ObAction OnboardingView::activate(int id, double now) {
       return {ObAct::Ambient, on ? 1 : 0};
     }
     case kSeg0: case kSeg1: case kSeg2: case kSeg3: case kSeg4: return pick_scale(id - kSeg0, now);
-    case kDot0: case kDot1: case kDot2: go(id - kDot0, now); return {};
+    case kBg0: case kBg1: {
+      const bool free = id == kBg1;
+      if (free == controls_free) return {};
+      set_controls_free(free, now);
+      return {ObAct::ControlsBg, free ? 1 : 0};
+    }
+    case kDot0: case kDot1: case kDot2: case kDot3: go(id - kDot0, now); return {};
     default: return {};
   }
 }
@@ -583,15 +620,20 @@ ObAction OnboardingView::key(const std::string& k, bool shift, double now) {
     focus_ = o[i];
     return {};
   }
-  if (page_ == 2 && (k == "left" || k == "right")) {
+  if (page_ == kPageBg && (k == "left" || k == "right")) {
+    kb_ = true;
+    focus_ = k == "right" ? kBg1 : kBg0;
+    return activate(focus_, now);
+  }
+  if (page_ == kPageSize && (k == "left" || k == "right")) {
     kb_ = true;
     focus_ = kSeg0 + std::clamp(scale_index() + (k == "right" ? 1 : -1), 0, kUiSizes - 1);
     return pick_scale(focus_ - kSeg0, now);
   }
-  if (k == "space" && page_ == 1 && (!kb_ || focus_ == kToggle || focus_ == kNone)) return activate(kToggle, now);
+  if (k == "space" && page_ == kPageLight && (!kb_ || focus_ == kToggle || focus_ == kNone)) return activate(kToggle, now);
   if (k == "enter" || k == "space") {
     // enter on a choice confirms it and moves on; on a button it presses that button
-    bool choice = focus_ == kToggle || (focus_ >= kSeg0 && focus_ <= kSeg4);
+    bool choice = focus_ == kToggle || (focus_ >= kSeg0 && focus_ <= kSeg4) || focus_ == kBg0 || focus_ == kBg1;
     if (kb_ && focus_ != kNone && !(k == "enter" && choice)) return activate(focus_, now);
     return activate(kNext, now);
   }
@@ -641,17 +683,68 @@ Rgb OnboardingView::scene_ink(double now) const {
   return mix(P().fg, col, 0.85);
 }
 
+// The player's cloud behind a bar without background, on the scene: the picture softened (two
+// box passes, about the shader's reach) and mixed in by the same falloff as the shader's
+// composition (0.35 at the middle, gone at the edge of an ellipse round the bar).
+void OnboardingView::soften_under(Canvas& c, const Rect& scene, const Rect& bar, double a) const {
+  const int rx = (int)std::lround(bar.w * 0.62), ry = (int)std::lround(bar.h * 1.25);
+  const int x0 = std::max(bar.cx() - rx, std::max(scene.x, 0)), y0 = std::max(bar.cy() - ry, std::max(scene.y, 0));
+  const int x1 = std::min(bar.cx() + rx, std::min(scene.r(), c.w)), y1 = std::min(bar.cy() + ry, std::min(scene.b(), c.h));
+  const Rect r(x0, y0, x1 - x0, y1 - y0);
+  if (r.w <= 2 || r.h <= 2) return;
+  const int R = std::max(1, (int)std::lround(3 * s));
+  std::vector<uint32_t> src((size_t)r.w * r.h), tmp(src.size());
+  for (int y = 0; y < r.h; ++y) std::copy_n(&c.px[(size_t)(r.y + y) * c.w + r.x], r.w, &src[(size_t)y * r.w]);
+  auto pass = [&](const std::vector<uint32_t>& in, std::vector<uint32_t>& out, bool horizontal) {
+    for (int y = 0; y < r.h; ++y)
+      for (int x = 0; x < r.w; ++x) {
+        unsigned sum[3] = {0, 0, 0}, n = 0;
+        for (int d = -R; d <= R; ++d) {
+          const int xx = horizontal ? std::clamp(x + d, 0, r.w - 1) : x, yy = horizontal ? y : std::clamp(y + d, 0, r.h - 1);
+          const uint32_t v = in[(size_t)yy * r.w + xx];
+          sum[0] += v >> 16 & 255; sum[1] += v >> 8 & 255; sum[2] += v & 255; ++n;
+        }
+        out[(size_t)y * r.w + x] = 0xFF000000u | (sum[0] / n) << 16 | (sum[1] / n) << 8 | sum[2] / n;
+      }
+  };
+  pass(src, tmp, true);
+  std::vector<uint32_t> soft(src.size());
+  pass(tmp, soft, false);
+  for (int y = 0; y < r.h; ++y)
+    for (int x = 0; x < r.w; ++x) {
+      const double qx = (r.x + x + 0.5 - bar.cx()) / rx, qy = (r.y + y + 0.5 - bar.cy()) / ry;
+      const double m = 0.35 * a * (1 - smoothstep(0.25, 1.0, std::sqrt(qx * qx + qy * qy)));
+      if (m < 0.0001) continue;
+      uint32_t& d = c.px[(size_t)(r.y + y) * c.w + r.x + x];
+      const uint32_t sv = soft[(size_t)y * r.w + x];
+      auto ch = [&](int sh) { const double o = d >> sh & 255, v = (sv >> sh & 255) * 0.95; return (uint32_t)std::lround(o + (v - o) * m); };
+      d = (d & 0xFF000000u) | ch(16) << 16 | ch(8) << 8 | ch(0);
+    }
+}
+
 // The player's controls over the scene, as the player draws them (the same icons, rows and
 // measures, at the size chosen), on the bar's own background.
-void OnboardingView::draw_controls(Canvas& c, const Rect& scene, double a, int size_index) const {
+void OnboardingView::draw_controls(Canvas& c0, const Rect& scene, double a, int size_index, bool free, double menu_a) const {
   if (a <= 0.003) return;
   const Palette& p = P();
   const double cs = ctrl_s_[std::clamp(size_index, 0, kUiSizes - 1)];
   auto px = [&](double v) { return (int)std::lround(v * cs); };
   const int dw = px(kDockW), dh = px(kDockH);
   const int x = scene.x + (scene.w - dw) / 2, y = scene.b() - px(kDockAir) - dh;
+  // (1.4.1) with its background, the bar's sheet; without it, the player's bar without background:
+  // the picture softened behind the buttons (its cloud, as the player's shader composes it) and
+  // white ink with the controls' soft shadow
+  Canvas ink;
+  if (free) {
+    soften_under(c0, scene, Rect(x, y, dw, dh), a);
+    ink.resize(c0.w, c0.h);
+    ink.clear_transparent();
+  }
+  Canvas& c = free ? ink : c0;
   c.set_clip(scene);
-  draw_panel(c, x, y, kDockW, kDockH, cs, {2, 1}, p.bg, 0.92 * a, p.edge, 0.95 * a);
+  if (!free) draw_panel(c, x, y, kDockW, kDockH, cs, {2, 1}, p.bg, 0.92 * a, p.edge, 0.95 * a);
+  // the bar without background: the play row and the times white, the others a quiet grey
+  const Rgb quiet = free ? Rgb{196, 196, 196} : p.dim, bright = free ? p.fg : p.dim;
   auto icon = [&](const char* name, double cx, Rgb ink) {
     const BitmapDef* b = bmp(name);
     if (!b) return;
@@ -659,33 +752,43 @@ void OnboardingView::draw_controls(Canvas& c, const Rect& scene, double a, int s
     c.bitmap(b, bx, by, cs, ink, a);
   };
   // the buttons' row: the volume and its line on the left, play in the middle, the rest on the right
-  icon("sound-on", 12, p.dim);
+  icon("sound-on", 12, quiet);
   {
     int bx = x + px(24), bw = px(40), by = y + px(11);
-    c.fill(bx, by, bw, px(2), p.faint, a);
-    c.fill(bx, by, px(28), px(2), p.dim, a);
-    c.fill(bx + px(28) - px(1), y + px(8), px(2), px(7), p.dim, a);
+    c.fill(bx, by, bw, px(2), free ? Rgb{70, 70, 70} : p.faint, a);
+    c.fill(bx, by, px(28), px(2), quiet, a);
+    c.fill(bx + px(28) - px(1), y + px(8), px(2), px(7), quiet, a);
   }
-  icon("rewind", kDockW / 2.0 - 22, p.dim);
+  icon("rewind", kDockW / 2.0 - 22, bright);
   icon("pause", kDockW / 2.0, p.fg);
-  icon("forward", kDockW / 2.0 + 22, p.dim);
-  icon("cc", kDockW - 54, p.dim);
-  icon("fs-enter", kDockW - 32, p.dim);
-  icon("dots", kDockW - 12, p.dim);
+  icon("forward", kDockW / 2.0 + 22, bright);
+  icon("cc", kDockW - 54, quiet);
+  icon("fs-enter", kDockW - 32, quiet);
+  icon("dots", kDockW - 12, quiet);
   // the timeline's row: the time, the line, the length
   const std::string t0 = "0:42:10", t1 = "1:23:20";
-  text(c, t0, x + px(8), y + px(22), cs, p.dim, a);
-  text(c, t1, x + dw - px(8) - text_w(t1, cs), y + px(22), cs, p.dim, a);
+  text(c, t0, x + px(8), y + px(22), cs, bright, a);
+  text(c, t1, x + dw - px(8) - text_w(t1, cs), y + px(22), cs, bright, a);
   int lx = x + px(8) + text_w(t0, cs) + px(7), lw = x + dw - px(8) - text_w(t1, cs) - px(7) - lx;
   if (lw > 0) {
     int ly = y + px(28);
-    c.fill(lx, ly, lw, px(1), p.faint, a);
+    c.fill(lx, ly, lw, px(1), free ? Rgb{60, 60, 60} : p.faint, a);
     int played = (int)std::lround(lw * 0.36 / cs) * (int)std::max(1.0, cs);
     c.fill(lx, ly, played, px(1), p.fg, a);
   }
+  if (free) {
+    c.reset_clip();
+    white_control_shadow(ink, 1);
+    c0.set_clip(scene);
+    c0.blit(ink, 0, 0, 1.0);
+  }
   // the "…" menu open above its button, as the player hangs it: words, rows and panel at the size
-  // chosen, so the choice reads at a glance (the bar alone changed little between two sizes)
-  {
+  // chosen, so the choice reads at a glance (the bar alone changed little between two sizes); only
+  // on the size's screen
+  if (menu_a * a > 0.003) {
+    Canvas& c = c0;
+    const double ka = a;
+    a = a * menu_a;
     static const str::Id items[] = {str::speed_title, str::more_chapters, str::more_mini_player};
     constexpr int kRow = 15, kPad = 4, kSide = 9;
     int tw = 0;
@@ -698,8 +801,10 @@ void OnboardingView::draw_controls(Canvas& c, const Rect& scene, double a, int s
       if (i == 0) c.cornered(Rect(mx + px(2), ry, px(mw - 4), px(kRow)), (int)std::max(1.0, std::floor(cs)), p.hover, a);
       text(c, tr(items[i]), mx + px(kSide), ry + px(2), cs, i == 0 ? p.fg : p.dim, a);
     }
+    a = ka;
   }
   c.reset_clip();
+  c0.reset_clip();
 }
 
 // The eyes on their line, with their reflection under it.
@@ -777,7 +882,7 @@ void OnboardingView::draw_words(Canvas& c, int pg, double ox, double a, double n
     center_text(tr(kTitles[pg]), title_y_, hs, p.pixel, a);
     paragraph(kLines[pg], line_y_, p.dim, a);
   }
-  if (pg == 1) {
+  if (pg == kPageLight) {
     Rect tgl = L.toggle;
     tgl.x += (int)std::lround(ox);
     draw_toggle(c, tgl, a, scene_ink(now));
@@ -786,7 +891,24 @@ void OnboardingView::draw_words(Canvas& c, int pg, double ox, double a, double n
     // the label crossfades with the knob
     text(c, tr(str::ob_on), lx, ly, s, p.fg, a * kc);
     text(c, tr(str::ob_off), lx, ly, s, mix(p.dim, p.fg, hov(kToggle)), a * (1 - kc));
-  } else if (pg == 2) {
+  } else if (pg == kPageBg && L.segs.size() == 2) {
+    // the background's two choices, the highlight sliding between them as the sizes' does
+    const double k = clamp01(bg_.x);
+    const Rect& r0 = L.segs[0];
+    const Rect& r1 = L.segs[1];
+    Rect hl{(int)std::lround(r0.x + (r1.x - r0.x) * k + ox), r0.y, (int)std::lround(r0.w + (r1.w - r0.w) * k), r0.h};
+    c.cornered(hl, (int)s, p.press, a);
+    for (int i = 0; i < 2; ++i) {
+      Rect r = L.segs[i];
+      r.x += (int)std::lround(ox);
+      const bool sel = (i == 1) == controls_free;
+      const double hv = hov(kBg0 + i);
+      if (!sel && hv > 0) c.cornered(r, (int)s, p.hover, a * hv);
+      const std::string name = tr(i == 0 ? str::more_with_bg : str::more_without_bg);
+      const int tw = text_w(name, s);
+      text(c, name, r.x + (r.w - tw) / 2, r.y + (int)std::lround(3 * s), s, sel ? p.pixel : mix(p.dim, p.fg, hv), a);
+    }
+  } else if (pg == kPageSize) {
     // the selector: a sliding highlight behind the chosen size
     Rect hl{(int)std::lround(seg_x_.x + ox), L.segs[0].y, (int)std::lround(seg_w_.x), L.segs[0].h};
     c.cornered(hl, (int)s, p.press, a);
@@ -874,15 +996,22 @@ void OnboardingView::render(Canvas& c, double now) {
       c.fill(lx0, ly, lw, std::max(1, cell / 2), p.pixel, pa * 0.25);
       c.fill(lx0, ly, played, std::max(1, cell / 2), p.pixel, pa * 0.85);
     }
-    // a new size: the controls crossfade from the one before (both at their own hard pixel)
-    const double ca = alpha_of(2) * fade;
+    // the controls come with the third screen (the background) and stay on the fourth (the size),
+    // where the "…" menu opens over them; a new size crossfades from the one before (both at their
+    // own hard pixel), a new background from the other
+    const double ca = (pos_.x <= kPageBg ? alpha_of(kPageBg) : 1.0) * fade, ma = alpha_of(kPageSize) * fade;
     const int cur = std::clamp(scale_index(), 0, kUiSizes - 1);
     const double sk = reduce_motion() ? 1.0 : ease_k((now - scale_t_) / kScaleFade);
+    const double fk = clamp01(bg_.x);
+    auto both = [&](double a, int size) {
+      if (fk < 0.999) draw_controls(c, box_, a * (1 - fk), size, false, ma);
+      if (fk > 0.001) draw_controls(c, box_, a * fk, size, true, ma);
+    };
     if (sk < 1 && prev_scale_idx_ >= 0 && prev_scale_idx_ != cur) {
-      draw_controls(c, box_, ca * (1 - sk), prev_scale_idx_);
-      draw_controls(c, box_, ca * sk, cur);
+      both(ca * (1 - sk), prev_scale_idx_);
+      both(ca * sk, cur);
     } else {
-      draw_controls(c, box_, ca, cur);
+      both(ca, cur);
     }
   }
   // 4 · the words, sliding a little with their page

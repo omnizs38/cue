@@ -69,7 +69,22 @@ int main() {
   assert(a.a == ObAct::Ambient && a.v == 1 && ob.ambient);
   ob.key("right", false, now);
   run(ob, now, 0.8);
-  assert(ob.page() == 2);
+  assert(ob.page() == OnboardingView::kPageBg);
+  // the controls' background (1.4.1): the arrows pick a screen, enter takes it and moves on
+  assert(!ob.controls_free);
+  a = ob.key("right", false, now);
+  assert(a.a == ObAct::ControlsBg && a.v == 1 && ob.controls_free);
+  assert(ob.key("right", false, now).a == ObAct::None);  // (already the one without)
+  a = ob.key("left", false, now);
+  assert(a.a == ObAct::ControlsBg && a.v == 0 && !ob.controls_free);
+  {
+    Canvas cc;
+    run(ob, now, 0.5);
+    ob.render(cc, now);
+  }
+  assert(ob.key("enter", false, now).a == ObAct::None);
+  run(ob, now, 0.8);
+  assert(ob.page() == OnboardingView::kPageSize);
   // arrows pick a size, in the interface's own order
   a = ob.key("right", false, now);
   assert(a.a == ObAct::UiScale && a.v == ui_size_choice(1));
@@ -98,6 +113,23 @@ int main() {
   ObAction none = m.mouse_down(m.next_rect().cx(), m.next_rect().cy(), t);  // "continuar"
   assert(none.a == ObAct::None && m.page() == 1);
   run(m, t, 0.8);
+  // a click on a screen of the third page picks it (the one already chosen asks nothing)
+  m.go(OnboardingView::kPageBg, t);
+  run(m, t, 0.8);
+  {
+    Canvas cc;
+    m.render(cc, t);
+    // its two choices stand under the picture: a click on the one without picks it, then back
+    bool picked = false, back = false;
+    for (int y = m.h / 2; y < m.h && !(picked && back); y += 4)
+      for (int x = 0; x < m.w && !(picked && back); x += 4) {
+        ObAction b = m.mouse_down(x, y, t);
+        if (b.a != ObAct::ControlsBg) continue;
+        if (b.v == 1) { assert(m.controls_free); picked = true; }
+        else if (picked) { assert(!m.controls_free); back = true; }
+      }
+    assert(picked && back);
+  }
   ObAction skip = m.key("esc", false, t);
   assert(skip.a == ObAct::Finish);
   // tiny windows still lay out without overlapping the footer
@@ -134,7 +166,7 @@ int main() {
     run(g, gt, 1.0);
     assert(g.window_light() < 0.01);
     g.set_ambient(true, gt);
-    g.go(2, gt);
+    g.go(OnboardingView::kPageSize, gt);
     run(g, gt, 1.5);
     assert(g.window_light() < 0.01);
     // its colours: every stretch lit, the sky's on top and the ground's below
@@ -152,5 +184,5 @@ int main() {
     assert(g.finished(gt));
   }
   std::puts("Welcome: analytic springs at 60/144 Hz and through hitches, Apple-like overshoot, eased exits, "
-            "three screens by keyboard and mouse, live light/size choices and the hand-off to the home passed");
+            "four screens by keyboard and mouse, live light/background/size choices and the hand-off to the home passed");
 }

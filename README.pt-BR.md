@@ -39,7 +39,7 @@
 
 ## Comece aqui
 
-Baixe `Cue-1.4-Setup.exe` na [última release](https://github.com/tinypeep/cue/releases/latest) e execute. **Windows x64.** Não exige administrador.
+Baixe `Cue-1.4.1-Setup.exe` na [última release](https://github.com/tinypeep/cue/releases/latest) e execute. **Windows x64.** Não exige administrador.
 
 Abra um arquivo, arraste para o Cue ou use **Abrir com** no Explorador de Arquivos.
 
@@ -76,6 +76,6 @@ A tradução em russo foi revisada com a ajuda de [omni38](https://github.com/om
 
 O código do Cue usa **GPL-3.0-or-later**. Fontes e componentes de terceiros mantêm suas próprias licenças. Veja [LICENSE](LICENSE), [autoria](COPYRIGHT.md) e [licenças dos componentes](docs/LICENSES.md).
 
-As fontes correspondentes ao motor estão em `Cue-1.4-Engine-Source.zip`, na [página da versão](https://github.com/tinypeep/cue/releases/tag/v1.4).
+As fontes correspondentes ao motor estão em `Cue-1.4.1-Engine-Source.zip`, na [página da versão](https://github.com/tinypeep/cue/releases/tag/v1.4.1).
 
 Forks e versões modificadas: [NOTICE](NOTICE.md) · [Identidade e branding](docs/BRANDING.md).

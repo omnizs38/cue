@@ -115,7 +115,7 @@ struct State {
   uint32_t cover = 0;  // music: changes with each song that has a cover; 0 = no cover
   bool has_subs = false, subs_on = false;
   double sub_delay = 0;
-  int sub_size = 44, sub_size_min = 28, sub_size_max = 72;
+  int sub_size = 36, sub_size_min = 28, sub_size_max = 72;
   double sub_pos = 93, sub_pos_default = 93, sub_pos_min = 12, sub_pos_max = 97;
   int audio_tracks = 0, audio_index = 0;  // index into the audio tracks (0-based); -1: several
   int audio_mix = 0;                      // how many play together (when audio_index is -1)

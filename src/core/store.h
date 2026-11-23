@@ -14,7 +14,7 @@
 #include "model.h"
 
 struct SettingsStore {
-  static constexpr int kSchema = 5;
+  static constexpr int kSchema = 7;  // 7: 1.4.1 (the default subtitle style 44 / letter spacing 0 became 36 / +1; 6 was a test build's 52)
 
   // ── prefs (global) ─────────────────────────────────────────────
   SubStyle default_style;
@@ -94,9 +94,14 @@ struct SettingsStore {
   // "unreadable" (the file is there but could not be read: never overwrite it)
   std::string load_status;
   bool save_blocked = false;
+  std::string blocked_base;  // (1.4.1) the settings this session started from while the file was held
 
   bool load(const std::filesystem::path& path);
   bool save(const std::filesystem::path& path) const;
+  std::string json() const;
+  // (1.4.1) a file held at start (save_blocked) and readable now: what this session changed goes
+  // over what the file says (the rest is the file's), and saving works again; false while it is held
+  bool unblock(const std::filesystem::path& path);
 
   RecentItem* find(const std::string& media_path);
   RecentItem& touch(const std::string& media_path, double dur, int64_t now);

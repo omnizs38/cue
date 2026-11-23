@@ -1,4 +1,5 @@
 #include "app.h"
+#include "../core/detached_thread.h"
 #include "../core/oom_guard.h"
 #include "sub_sample.h"
 #include "../core/light_timing.h"
@@ -202,7 +203,7 @@ bool audio_path(const std::string& path, int wait_ms) {
   if (k.asked.insert(w).second) {
     k.pending.push_back(w);
     if (!k.running) {
-      try { std::thread(ogg_worker).detach(); k.running = true; } catch (...) { k.pending.pop_back(); k.asked.erase(w); return true; }
+      try { start_detached(ogg_worker); k.running = true; } catch (...) { k.pending.pop_back(); k.asked.erase(w); return true; }
     }
     k.cv.notify_all();
   }
@@ -323,6 +324,7 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   cue_log_open(data_dir_);
   if (!moved) log("data folder: still the old one (it was in use); moved at the next start");
   for (auto& a : args) if (a == "--log") engine_log_ = true;
+  for (auto& a : args) if (a == "--low-memory-test") memory_low_test_ = true;
   // Prepare the worker now, but map the DLL only after the first paint. DLL
   // initialization holds Windows' loader lock and can stall window creation
   // on the UI thread even when LoadLibrary itself runs on a worker.
@@ -368,6 +370,7 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   }
   ob_.ambient = store_.ambient;
   ob_.ui_scale = store_.ui_scale;
+  ob_.controls_free = store_.controls_free;
   // a version found on an earlier run is offered right away; the details come with the next check
   // (the Store edition offers nothing: a GitHub edition's state.json may still name a release)
   if (CUE_GITHUB_UPDATES && !store_.update_available.empty() && compare_versions(store_.update_available, CUE_VERSION) > 0 &&
@@ -423,6 +426,15 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   int fw = ww, fh = wh;  // frameless: the client is the window
   int x = mi.rcWork.left + (aw - fw) / 2, y = mi.rcWork.top + (ah - fh) / 2;
 
+  // (1.4.1) the screen's DPI before the window exists: CreateWindowExW sends the first WM_SIZE
+  // from inside, and everything laid out there (the home, the welcome) took 96, the 100% screen.
+  // On a laptop at 125% or 150% the welcome kept that smaller first page. GetDpiForWindow below
+  // confirms it once the window is there.
+  {
+    RECT pr{x, y, x + fw, y + fh};
+    dpi_ = monitor_dpi(MonitorFromRect(&pr, MONITOR_DEFAULTTONEAREST));
+    if (dpi_ < 48) dpi_ = 96;
+  }
   hwnd_ = CreateWindowExW(0, wc.lpszClassName, L"Cue", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, x, y, fw, fh,
                           nullptr, nullptr, inst, this);
   if (hwnd_) SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER);
@@ -530,6 +542,7 @@ bool App::init(HINSTANCE inst, const std::vector<std::string>& args, int show) {
   engine_cfg_.muted = store_.muted;
   engine_cfg_.log = engine_log_;
   recent_thumbs_.start(hwnd_, WM_APP_HOME_THUMB, data_dir_ / "thumbs");
+  low_memory_ = CreateMemoryResourceNotification(LowMemoryResourceNotification);
   sound_finder_.init(data_dir_.wstring(), hwnd_, WM_APP_SOUND_PARTS);
   home_shown_at_ = now();  // (the helper's pictures wait a moment after the start too)
   // the list waits a moment for the pictures already on disk (read from now on, while the window
@@ -1032,6 +1045,7 @@ void App::end_mini_fx(bool apply) {
   mini_fx_.on = false;
   end_snap();
   set_cloak(false);
+  still_.end();
   ghost_.end();
   play_.end_viewport_transition(now());
   if (pending) { geom_.on = false; mini_switch(mini_fx_.entering); }
@@ -1048,6 +1062,9 @@ bool App::start_mini_fx(bool entering) {
   // (the picture breaks into pixels where it is, then flies: shrinking into the corner on a spring
   // with a little life, or opening out to the old place and size)
   mini_fx_.rise = 0.12;
+  // (1.4.1) a song on its way in: its pixels at 4K are small enough to read as a stop before the
+  // flight, the author's recording of 23/11 (100 ms with the bar gone and nothing moving)
+  if (entering && audio_only_ && cover_scene_) mini_fx_.rise = 0.08;
   mini_fx_.dur = entering ? 0.46 : 0.40;
   snap_subtitles(true);  // drawn after the mosaic: they step out with the controls
   play_.begin_viewport_transition(now(), true);
@@ -1101,6 +1118,37 @@ void App::mini_switch(bool entering) {
   }
 }
 
+// (1.4.1) The engine's picture of the window for the still layer (a song on its way into the mini
+// player): kept and shown over the window at once, the same pixels it shows (the switch follows).
+void App::mini_still(const mpv_event* e) {
+  auto* r = static_cast<mpv_event_command*>(e->data);
+  if (e->error < 0 || !r || r->result.format != MPV_FORMAT_NODE_MAP || !r->result.u.list || mini_fx_.stage != 0) return;
+  int64_t w = 0, h = 0, stride = 0;
+  const mpv_byte_array* data = nullptr;
+  const mpv_node_list* m = r->result.u.list;
+  for (int i = 0; i < m->num; ++i) {
+    const std::string k = m->keys[i] ? m->keys[i] : "";
+    const mpv_node& v = m->values[i];
+    if (k == "w" && v.format == MPV_FORMAT_INT64) w = v.u.int64;
+    else if (k == "h" && v.format == MPV_FORMAT_INT64) h = v.u.int64;
+    else if (k == "stride" && v.format == MPV_FORMAT_INT64) stride = v.u.int64;
+    else if (k == "data" && v.format == MPV_FORMAT_BYTE_ARRAY) data = static_cast<const mpv_byte_array*>(v.u.ba);
+    else if (k == "format" && v.format == MPV_FORMAT_STRING && v.u.string && std::string(v.u.string) != "bgr0") return;
+  }
+  if (!data || !data->data || w < 2 || h < 2 || w > 16384 || h > 16384 || stride < w * 4 || data->size < (size_t)(stride * h)) return;
+  // (its size is the window's: anything else is an older or a newer window, not this one)
+  if (std::abs((int)w - cw_) > 2 || std::abs((int)h - ch_) > 2) return;
+  const RECT here = client_screen();
+  const int radius = corners_round_ ? MulDiv(8, (int)dpi_, 96) : 0;  // (Windows 11's own corners)
+  const double t0 = now();
+  if (!still_.adopt(inst_, here, static_cast<const uint8_t*>(data->data), (int)w, (int)h, (int)stride, radius) || !still_.show(here, 1.0))
+    still_.end();
+  // (cue.log: how long the engine took to answer, and the layer to be made)
+  log("mini player: the still picture " + std::to_string(w) + "x" + std::to_string(h) + " came in " +
+      std::to_string((int)std::lround((t0 - mini_fx_.still_asked) * 1000)) + "ms, kept in " + std::to_string((int)std::lround((now() - t0) * 1000)) +
+      "ms" + (still_.on() ? "" : " (not shown)"));
+}
+
 bool App::step_mini_fx(double t) {
   if (!mini_fx_.on) return false;
   if (in_sizemove_) { end_mini_fx(); return true; }  // the person took the window: it ends now
@@ -1108,6 +1156,19 @@ bool App::step_mini_fx(double t) {
     const double k = (t - mini_fx_.t0) / std::max(0.01, mini_fx_.rise);
     const double a = smoothstep(0.0, 1.0, std::min(1.0, k));
     set_snap(0.12 * a, snap_px(0.6 * a, ch_), 0.0);
+    // (1.4.1) a song on its way in: the engine asked for its picture of the window once the
+    // pixels are at their size (the still layer's, see StillLayer), and the switch waits for it
+    // (a frame or two; never more than 0.12 s, then the flight goes without it)
+    if (mini_fx_.entering && audio_only_ && cover_scene_ && mpv_ok_) {
+      if (k >= 0.85 && !mini_fx_.still_tried) {
+        mini_fx_.still_tried = true;
+        mini_fx_.still_asked = t;
+        mini_fx_.still_id = (1ull << 44) + (++still_seq_ & 0xFFFFFFull);
+        if (mpv_.cmd({"screenshot-raw", "window"}, mini_fx_.still_id) < 0) mini_fx_.still_back = true;
+        return true;
+      }
+      if (k >= 1 && mini_fx_.still_tried && !mini_fx_.still_back && t - mini_fx_.still_asked < 0.12) return true;
+    }
     if (k < 1) return true;
     // The ghost: the window's live picture where the window is (for the way in, the part the
     // mini player keeps: the picture in the mini player's shape), shown over it; the window goes
@@ -1124,7 +1185,15 @@ bool App::step_mini_fx(double t) {
       double ccx = 0, ccy = 0, cside = 0;
       const bool music = audio_only_ && cover_scene_ && music_cover_on_screen(play_.in.music_view, ccx, ccy, cside);
       const RECT from = music || !mini_fx_.entering ? here : contain_rect(here, mini_aspect());
-      if (ghost_.begin(inst_, hwnd_, from)) {
+      // (1.4.1) a song on its way in: the full player held still over the start of the flight (the
+      // engine's picture of the window, taken just before), the live picture flying under it
+      // (see StillLayer). Without it the card's composition comes a frame or two after the window's
+      // new size, and the full player's room vanished at once around the card.
+      const bool room = music && mini_fx_.entering && still_.on();
+      if (!room) still_.end();
+      mini_fx_.here = here;
+      mini_fx_.cell0 = snap_px(0.6, ch_);
+      if (ghost_.begin(inst_, hwnd_, from, room ? still_.hwnd() : nullptr)) {
         set_cloak(true);
         mini_fx_.cloaked = true;
         mini_fx_.ghost = true;
@@ -1153,6 +1222,7 @@ bool App::step_mini_fx(double t) {
         return true;
       }
     }
+    still_.end();  // (no live picture to fly: the plain flight)
     // out of sight for 80 ms while the window changes size: the engine draws at the new size
     // (two or three frames, even in 4K) before anyone sees it
     set_cloak(true);
@@ -1178,6 +1248,7 @@ bool App::step_mini_fx(double t) {
   }
   if (mini_fx_.ghost) {
     if (mini_fx_.stage == 3) {  // landed: the window was shown last frame, the picture goes now
+      still_.end();
       ghost_.end();
       mini_fx_.on = false;
       play_.end_viewport_transition(now());
@@ -1192,10 +1263,31 @@ bool App::step_mini_fx(double t) {
     } else {  // out to the old place (often the whole screen): opening, no overshoot past it
       e = 1 - std::pow(1 - k, 3);
     }
-    ghost_.place(mix_rect(mini_fx_.from, mini_fx_.gto, e));
+    const RECT r = mix_rect(mini_fx_.from, mini_fx_.gto, e);
+    ghost_.place(r);
     const double px = 1 - smoothstep(0.0, 0.9, k);  // sharp just before it lands
-    set_snap(0.12 * px, snap_px(0.6 * px, ch_), 0.0);
+    if (still_.on() || (mini_fx_.entering && mini_fx_.cell0 > 0 && audio_only_ && cover_scene_)) {
+      // (1.4.1) a song on its way in: the full player over it, scaled with it so the two covers stay
+      // one, opaque for the first frames (the card's own composition comes a frame or two late)
+      // and gone by a fifth of a second: the room gathers into the card
+      const double fw = std::max(1.0, (double)(mini_fx_.from.right - mini_fx_.from.left));
+      const double sg = (r.right - r.left) / fw;
+      const RECT& h = mini_fx_.here;
+      const double hx = r.left + (h.left - mini_fx_.from.left) * sg, hy = r.top + (h.top - mini_fx_.from.top) * sg;
+      const RECT at{(LONG)std::lround(hx), (LONG)std::lround(hy), (LONG)std::lround(hx + (h.right - h.left) * sg),
+                    (LONG)std::lround(hy + (h.bottom - h.top) * sg)};
+      const double a = 1 - smoothstep(0.04, 0.22, t - mini_fx_.t0);
+      if (still_.on()) { if (a > 0.004) still_.show(at, a); else still_.end(); }
+      // the card's pixels the size the full player's were on screen, getting smaller as it comes
+      // sharp (they were the card's own size, magnified with it: blocks three times as big as the
+      // full player's at the start of the flight)
+      const double mag = std::max(1.0, (r.right - r.left) / std::max(1.0, (double)(mini_fx_.gto.right - mini_fx_.gto.left)));
+      set_snap(0.12 * px, std::max(1.0, std::round(mini_fx_.cell0 * px / mag)), 0.0);
+    } else {
+      set_snap(0.12 * px, snap_px(0.6 * px, ch_), 0.0);
+    }
     if (k >= 1) {
+      still_.end();
       ghost_.place(mini_fx_.gto);
       end_snap();
       set_cloak(false);  // the window shows where the picture is; the picture goes next frame
@@ -1277,8 +1369,37 @@ void App::say_ui_size() {
 void App::say(const std::string& text) {
   double t = now();
   if (mode_ == Mode::Play) play_.toast(text, nullptr, t);
+  // (1.4.1) Settings open over the home: the answer comes at the top, as in the player. On the
+  // home's own line it took the place of "abra um arquivo" and "configurações" (both went away)
+  // and stood under the panel, unreadable ("procurar atualizações": "você já tem a versão mais
+  // recente" was never seen)
+  else if (home_settings_ && play_.over_home()) {
+    // (centred on the window: the player's view could still have an older window's width, and the
+    // toast stood to the left of a maximised home)
+    if (play_.in.w != cw_ || play_.in.h != ch_) {
+      play_.set_base_scale(s_); play_.resize(cw_, ch_, play_scale(store_.ui_scale));
+      play_.move_over_home(home_.settings_anchor());
+    }
+    play_.toast(text, nullptr, t);
+  }
   else home_.show_notice(text, t);
   ensure_anim();
+}
+
+// (1.4.1) Settings open over the home: the answer replaces "check for updates" in its row for 3.5 s
+// (the row had just said "checking for updates…": the question, then its answer, in one place).
+// Elsewhere it is said as before. A newer version is said by the row itself ("update to 1.5").
+void App::update_reply(const std::string& text, bool ok) {
+  if (mode_ == Mode::Home && home_settings_ && play_.over_home()) {
+    if (upd_ == Upd::Available) return;
+    play_.in.update_reply = text;
+    play_.in.update_reply_ok = ok;
+    upd_reply_until_ = now() + 3.5;
+    play_.changed(now());
+    ensure_anim();
+    return;
+  }
+  say(text);
 }
 
 void App::show_update_state() {
@@ -1321,6 +1442,7 @@ void App::check_updates(bool manual) {
   if(!manual&&update_auto_attempted_)return;
   if (update_check_pending_ || upd_ == Upd::Checking || upd_ == Upd::Downloading || upd_ == Upd::Launching) return;
   update_check_pending_=true;
+  if (manual && !play_.in.update_reply.empty()) { play_.in.update_reply.clear(); upd_reply_until_ = -1; }
   if(!manual)update_auto_attempted_=true;
   upd_manual_ = manual;
   Upd before = upd_;
@@ -1364,13 +1486,14 @@ void App::on_update(UpdateMsg* m) {
         upd_ = skipped ? Upd::Idle : Upd::Available;
         save_state();
         if (upd_install_after_check_) { upd_install_after_check_ = false; start_update(); break; }
-        if (m->manual) say(i18n::format(str::update_available, {{"version", short_version(m->rel.version)}}));
+        // (over the home the row itself already says "update to x")
+        if (m->manual) update_reply(i18n::format(str::update_available, {{"version", short_version(m->rel.version)}}));
       } else {
         upd_ = Upd::Idle;
         upd_install_after_check_ = false;
         store_.update_available.clear();
         save_state();
-        if (m->manual) say(tr(m->found ? str::update_latest : str::update_no_installer));
+        if (m->manual) update_reply(tr(m->found ? str::update_latest : str::update_no_installer), m->found);
       }
       break;
     }
@@ -1400,11 +1523,11 @@ void App::on_update(UpdateMsg* m) {
         if (m->manual || upd_install_after_check_) {
           // say what actually happened: no release yet is not the same as no internet
           const std::string& e = m->error;
-          if (e.find("http 404") != std::string::npos) say(tr(str::update_none_published));
+          if (e.find("http 404") != std::string::npos) update_reply(tr(str::update_none_published));
           else if (e.find("http 403") != std::string::npos || e.find("http 429") != std::string::npos)
-            say(tr(str::update_rate_limited));
-          else if (e.find("http ") != std::string::npos) say(tr(str::update_bad_response));
-          else say(tr(str::update_offline));
+            update_reply(tr(str::update_rate_limited));
+          else if (e.find("http ") != std::string::npos) update_reply(tr(str::update_bad_response));
+          else update_reply(tr(str::update_offline));
         }
         upd_install_after_check_ = false;
       }
@@ -1723,6 +1846,11 @@ void App::drain_mpv() {
           } else adopt_added_audio();  // (its track may already be in the list)
         }
         if (e->reply_userdata > (1ull << 45) && e->reply_userdata < (1ull << 46)) frame_written(e->reply_userdata, e->error >= 0);
+        if (mini_fx_.on && mini_fx_.still_tried && !mini_fx_.still_back && e->reply_userdata == mini_fx_.still_id) {
+          mini_fx_.still_back = true;
+          mini_still(e);
+          ensure_anim();
+        }
         if (e->reply_userdata == media_still_request_) {
           // the film's still for Windows' media card: a small copy now (the engine frees its
           // frame when this event returns), the check and the JPEG on a worker
@@ -1821,7 +1949,9 @@ void App::drain_mpv() {
       int seconds = wall_left <= 10 ? std::max(0, (int)std::ceil(wall_left)) : -1;
       if (seconds != next_count_ && !audio_only_) {  // music says it at the top instead
         next_count_ = seconds;
-        play_.next_notice(seconds < 0 ? "" : (next_auto_ ? std::string(tr(str::player_up_next)) + " " + std::to_string(seconds) + "s" : std::string(tr(str::player_up_next_manual))), now());
+        // (1.4.1) "up next" without a number: when the next file starts by itself, a line along the
+        // notice's foot counts the seconds down, as "skip intro"'s does (the author's choice, 2)
+        play_.next_notice(seconds < 0 ? "" : std::string(tr(str::player_up_next_manual)), now(), next_auto_);
       }
     }
     play_.changed(now());
@@ -1945,6 +2075,8 @@ void App::on_property(uint64_t id, const mpv_event_property* p) {
         in.sub_text.push_back(t.substr(st, en - st));
         st = en + 1;
       }
+      // (1.4.1) under the picture, a subtitle of three rows or more hangs from the same place as two
+      if (loaded_ && !in.sub_text.empty()) apply_style(true);
       return;  // no dock refresh needed
     }
     case O_AO: {
@@ -2748,8 +2880,46 @@ void App::set_hidden(bool h) {
   music_light_.discard_readings();
   trace(h ? "covered by a full-screen window: drawing paused" : "in view again");
   update_music_idle();  // a film: frames timed by the sound while covered
+  update_music_rest();
   update_blur_cloud();
   if (!h) { play_.changed(now()); ensure_anim(); }
+}
+
+// (1.4.1) A song minimized or under a full-screen window: nobody sees its picture, and the engine
+// went on drawing all of it, 60 times a second, as if on screen. The picture's chain is not touched
+// (rebuilding it, or adding a step after it, makes the engine hold the sound until the picture
+// catches up: the song paused and came back on minimizing, the author's look of 23/11 00:26, and
+// the spectrum came back broken): the pictures keep coming as they are, and only how they are drawn
+// changes, as any change of the interface's options does: scaled the plainest way (`bilinear`), and
+// the light show stays out (it already fades out while nobody sees it, and back in once the window
+// is home). The room's light, the cover's shadow, the edges, the list's veil and black and white
+// stay as they were: they are what the window shows the moment it comes back (Windows brings it
+// home with the last picture drawn), so nothing pops in (a first version left the shadow out too:
+// it appeared at once on coming back, seen in a preview of 23/11).
+void App::send_music_scale(bool cover, bool sync) {
+  music_scale_cover_ = cover;
+  const std::string sc = music_rest_ ? "bilinear" : music_scale(device_.gpu, cover);
+  const std::string dsc = music_rest_ ? "bilinear" : music_dscale(device_.gpu, cover);
+  if (sync) {
+    mpv_.set("file-local-options/scale", sc);
+    mpv_.set("file-local-options/dscale", dsc);
+  } else {
+    mpv_.set_async("file-local-options/scale", sc);
+    mpv_.set_async("file-local-options/dscale", dsc);
+  }
+}
+
+void App::update_music_rest() {
+  // (between two songs, still unseen: it stays for the next one, which is scaled as it says)
+  if (!loaded_ && music_rest_ && mode_ == Mode::Play && !closing_app_ && hidden_now()) return;
+  const bool want = mpv_ok_ && loaded_ && audio_only_ && waveform_active_ && mode_ == Mode::Play && !closing_app_ && !home_closing_ &&
+                    hidden_now();
+  if (want == music_rest_) return;
+  music_rest_ = want;
+  // (a film, or the home: its own file has its own options; nothing to give back)
+  if (mpv_ok_ && loaded_ && audio_only_ && mode_ == Mode::Play) send_music_scale(music_scale_cover_, false);
+  update_blur_cloud();
+  trace(want ? "music unseen: drawn the plainest way" : "music in view: drawn in full");
 }
 
 // (19f, 17/11, varredura) The engine's clock, as often as it moves (a film: ~20-25 times a second,
@@ -3309,8 +3479,7 @@ void App::reopen_music() {
     cover_art_ = look != 1;
     music_look_on_ = look;
     play_.in.cover_art = cover_art_;
-    mpv_.set("file-local-options/scale", music_scale(device_.gpu, cover_art_));
-    mpv_.set("file-local-options/dscale", music_dscale(device_.gpu, cover_art_));
+    send_music_scale(cover_art_, true);
     change_audio_graph(audio_mix_graph(play_.in.amix_ids, true, visual_cover(), music_scene_, music_look_on_, device_.music_fps()), 0);
     update_blur_cloud();
     return;
@@ -3408,6 +3577,18 @@ void App::configure_audio_mode() {
                                   recent && !recent->aid_lang.empty() ? recent->aid_lang : store_.alang);
   audio_only_ = id > 0;
   play_.in.audio_only = audio_only_;
+  if (!audio_only_) music_rest_ = false;  // (a film's options are its own)
+  // (1.4.1) a song has no timeline pictures and its light comes from its cover: the preview helper
+  // kept from a film (or from the home's pictures) has nothing to do while music plays, and it
+  // stayed for the whole of it with its own engine in memory (92 to 111 MB under Wine, 22/11).
+  // It ends here; the next film starts it again, as the first film does.
+  if (audio_only_ && thumbs_.running() && !home_shot_busy_) {
+    thumbs_.shutdown();
+    thumb_path_.clear();
+    home_started_helper_ = false;
+    preview_.loaded = preview_.busy = false;
+    trace("preview helper ended: music has no timeline pictures");
+  }
   waveform_active_ = false;
   cover_vid_ = audio_only_ ? audio_cover_track(tracks) : 0;
   cover_scene_ = cover_art_ = false;
@@ -3535,8 +3716,7 @@ void App::configure_audio_mode() {
     // song picked in the open list used to be framed centred, the list over it, and stay so)
     play_.in.music_view = {};
     play_.in.music_view.frame = music_frame_;
-    mpv_.set("file-local-options/scale", music_scale(device_.gpu, cover));
-    mpv_.set("file-local-options/dscale", music_dscale(device_.gpu, cover));
+    send_music_scale(cover, true);
     // several tracks heard at once (remembered for this file, or a recording in parts): the mix is
     // part of the graph from the start, so the song never has to rebuild it while it plays
     std::vector<int64_t> mix;
@@ -3910,6 +4090,9 @@ void App::save_now(bool synchronous) {
     save_thread_ = nullptr;
     if (result) log("could not save previous state");
   }
+  // (1.4.1) state.json was held when Cue started (an antivirus, a sync client): once it can be read
+  // again, this session's changes go over it and saving works again, instead of nothing being saved
+  if (store_.save_blocked && store_.unblock(state_path_)) log("settings: state.json readable again, this session's changes kept");
   if (!synchronous) {
     auto* job = new SaveJob{store_, state_path_}; // worker owns an immutable snapshot
     save_thread_ = CreateThread(nullptr, 0, save_worker, job, 0, nullptr);
@@ -3965,6 +4148,11 @@ void App::open(std::string path, std::vector<std::string> subs) {
   // another file while a film plays (the next episode, the queue, the phone): the frame it was
   // left at, for the home's list (the engine answers before it lets this film go)
   if (mode_ == Mode::Play && loaded_ && !home_closing_) film_left();
+  // (1.4.1) from the home, the film's window grows from the middle of the screen (the one the
+  // window is on), as the home opens and comes back: the home is a place, in the middle, however
+  // it was sized or moved (an edge dragged there moved the film off centre). Files after the first
+  // grow from where the window is.
+  film_centre_ = mode_ == Mode::Home;
   recent_thumbs_.pause_loads();  // the home's pictures wait: the film comes first
   release_engine();              // (a file opened in the first moments: the engine goes now)
   stop_home_shots();
@@ -4092,7 +4280,7 @@ bool App::ask_attributes(const std::vector<std::wstring>& paths, std::vector<DWO
   job->hwnd = hwnd_;
   try {
     ++g_attribute_askers;
-    std::thread([job] {
+    start_detached([job] {
       std::vector<DWORD> a(job->paths.size(), INVALID_FILE_ATTRIBUTES);
       for (size_t i = 0; i < job->paths.size(); ++i) a[i] = GetFileAttributesW(job->paths[i].c_str());
       bool late;
@@ -4109,7 +4297,7 @@ bool App::ask_attributes(const std::vector<std::wstring>& paths, std::vector<DWO
         auto* f = new std::function<void()>([job] { job->then(job->attrs); });
         if (!PostMessageW(job->hwnd, WM_APP + 21 /* WM_APP_FILE_KINDS */, 0, (LPARAM)f)) delete f;
       }
-    }).detach();
+    });
   } catch (...) {
     --g_attribute_askers;
     attrs.clear();  // (no thread: no answer at all, never "the file is missing")
@@ -4570,6 +4758,14 @@ void App::on_home_shot_check(unsigned seq, bool reachable) {
 
 void App::begin_home_shot() {
   if (!thumbs_.running()) {
+    if (helper_memory_rest_) check_memory();  // (1.4.1) asked again here: the player's poll no longer runs
+    if (helper_memory_rest_) {
+      // (1.4.1) the helper rests for memory (a film left while Windows said it was short): the
+      // pictures wait and are asked for again when it may come back, instead of never on this home
+      home_shot_queue_.push_front(home_shot_now_);
+      SetTimer(hwnd_, T_MEMORY_BACK, 5000, nullptr);
+      return;
+    }
     if (!thumbs_.start(hwnd_, WM_APP_THUMB)) { home_shot_queue_.clear(); return; }
     home_started_helper_ = true;
   }
@@ -4673,8 +4869,18 @@ void App::resolve_props() {
 
 void App::apply_style(bool live) {
   if (!mpv_ok_) return;
-  for (auto& ps : sub_style_props(play_.in.style, play_.in.kind, subtitle_typography_scale(cw_, ch_), sub_dim_)) {
+  play_.in.sub_ref_h = sub_ref_h();
+  {
+    char mx[24];
+    std::snprintf(mx, sizeof mx, "%.2f", subtitle_margin_x(cw_, ch_, video_aspect(), play_.in.sub_ref_h));
+    if (applied_["sub-margin-x"] != mx) { mpv_.set_async("sub-margin-x", mx); applied_["sub-margin-x"] = mx; }
+  }
+  const double typo = subtitle_typography_scale(cw_, ch_, video_aspect(), play_.in.sub_ref_h, play_.in.style.size, play_.in.style.tracking);
+  // (1.4.1) the letters' size on screen, for the line spacing (a share of it)
+  const double line_px = play_.in.style.size * ch_ / 720.0 * typo * sub_q_;
+  for (auto& ps : sub_style_props(play_.in.style, play_.in.kind, typo, sub_dim_, line_px)) {
     if (ps.names[0] == "sub-pos") continue;
+    if (ps.names[0] == "sub-scale") { sub_font_factor_ = std::atof(ps.value.c_str()); send_sub_scale(); continue; }
     std::string key = ps.names[0];
     auto known = prop_name_.find(key);
     if (live && known != prop_name_.end()) {
@@ -5038,7 +5244,7 @@ void App::update_blur_cloud() {
     mus += ",cov_on=0";
   }
   // music's light show, around the cover (or the spectrum standing in its place)
-  bool lit = audio_only_ && cover_scene_ && music_look_on_ != 2 && mode_ == Mode::Play && first_frame_ && !hidden_ && light_k_ > 0.002;
+  bool lit = audio_only_ && cover_scene_ && music_look_on_ != 2 && mode_ == Mode::Play && first_frame_ && !hidden_ && !music_rest_ && light_k_ > 0.002;
   if (lit) {
     const MusicScene& S = music_scene_;
     MusicView v = play_.in.music_view.f > 0 ? play_.in.music_view : music_view(S, MusicFrame::Scene, cw_, ch_, ch_);
@@ -5485,12 +5691,21 @@ void App::frame() {
     home_.survey = survey_wanted();
     if (home_settings_) {
       // the panel over the home moves with the player's own clock; it is gone once it has faded out
+      if (upd_reply_until_ > 0 && (t >= upd_reply_until_ || !play_.over_home())) {
+        upd_reply_until_ = -1; play_.in.update_reply.clear(); play_.changed(t);
+      }
       moving |= play_.tick(t, dt);
       run_actions();
       home_.settings_lit = play_.over_home();
-      if (!play_.over_home() && !play_.layers[PlayView::L_PANEL].visible && !play_.layers[PlayView::L_HINT].visible) {
+      if (!play_.over_home() && !play_.layers[PlayView::L_PANEL].visible && !play_.layers[PlayView::L_HINT].visible &&
+          !play_.layers[PlayView::L_TOAST].visible) {  // (an answer still on screen fades out first)
         home_settings_ = false; home_.settings_lit = false;
       } else moving = true;
+    }
+    // (1.4.1) the list steps out while the panel stands over any of it (see HomeView::cover_list)
+    {
+      const Rect pr = home_settings_ ? play_.over_home_rect() : Rect{}, lr = home_.list_area();
+      home_.cover_list(pr.w > 0 && lr.w > 0 && pr.x < lr.r() && lr.x < pr.r() && pr.y < lr.b() && lr.y < pr.b());
     }
     moving |= home_.tick(t, dt);
     // Rasterize once per display frame; very large canvases (4K and up) stay at 60 Hz,
@@ -5548,7 +5763,7 @@ void App::open_home_settings() {
 
 void App::draw_home_settings(Canvas& c) {
   if (!home_settings_) return;
-  for (int i : {PlayView::L_HINT, PlayView::L_PANEL, PlayView::L_TIP}) {
+  for (int i : {PlayView::L_HINT, PlayView::L_PANEL, PlayView::L_TIP, PlayView::L_TOAST}) {
     const Layer& L = play_.layers[i];
     if (L.visible && L.c.w > 0) c.blit(L.c, L.x, L.y);
   }
@@ -5768,6 +5983,12 @@ std::pair<double, double> App::sub_center_out() const {
   return output_point(r.x + r.w / 2.0, r.y + r.h / 2.0, cw_, ch_, vid_w_, vid_h_, vid_rot_);
 }
 
+void App::send_sub_scale() {
+  char b[24];
+  std::snprintf(b, sizeof b, "%.4f", sub_q_ * (sub_font_factor_ > 0 && std::isfinite(sub_font_factor_) ? sub_font_factor_ : 1.0));
+  if (mpv_ok_ && sub_scale_sent_ != b) { sub_scale_sent_ = b; mpv_.set_async("sub-scale", b); }
+}
+
 // Subtitle edit: advances the rings and the lift; true while something still moves.
 bool App::step_sub_fx(double t, double dt) {
   bool moving = false;
@@ -5785,7 +6006,7 @@ bool App::step_sub_fx(double t, double dt) {
   // the mini player: the subtitles keep a readable size (about 19 px at 100%) however small the
   // window, in a few steps (each new size makes libass draw the lines again)
   if (mini_player_ && ch_ > 0 && cw_ > 0) {
-    const double px = play_.in.style.size * ch_ / 720.0 * subtitle_typography_scale(cw_, ch_);
+    const double px = play_.in.style.size * ch_ / 720.0 * subtitle_typography_scale(cw_, ch_, video_aspect(), 0);
     const double want = 19.0 * dpi_ / 96.0;
     if (px > 0 && px < want) q *= std::round(std::min(2.5, want / px) * 10) / 10;
     // and the size chosen there (the mini player's subtitles panel): as it is, a size up, two up;
@@ -5793,9 +6014,11 @@ bool App::step_sub_fx(double t, double dt) {
     static const double kMiniSub[3] = {1.0, 1.25, 1.5};
     q *= kMiniSub[std::clamp(store_.mini_sub_size, 0, 2)];
   }
-  char b[16];
-  std::snprintf(b, sizeof b, "%.3f", q);
-  if (mpv_ok_ && sub_scale_sent_ != b) { sub_scale_sent_ = b; mpv_.set_async("sub-scale", b); }
+  if (std::fabs(q - sub_q_) > 1e-9) {
+    sub_q_ = q;
+    send_sub_scale();
+    apply_style(true);  // (1.4.1) the line spacing keeps its share of the letters
+  }
   return moving;
 }
 
@@ -6017,7 +6240,7 @@ bool App::thumb_show(int key, uint64_t epoch, bool cache_hit) {
 }
 
 void App::thumb_request(double t, bool local) {
-  if (audio_only_ || !mpv_ok_ || path_.empty() || preview_.failed) return;
+  if (audio_only_ || !mpv_ok_ || path_.empty() || preview_.failed || helper_memory_rest_) return;
   if (t >= 0) {
     thumb_interaction_at_ = now();
     if (local) {
@@ -6166,6 +6389,42 @@ void App::on_thumb(ThumbMsg* m) {
   if (!preview_.failed && preview_.loaded && thumb_path_ == path_) thumb_next();
 }
 
+// (1.4.1) Once a second while something plays. Windows raises its low-memory signal only when
+// memory is really short; then the helper ends (its own engine and the decoder's frames, ~100 MB
+// with a 4K film), the previews and the light's sampling stop where they are (the light keeps its
+// colours, the timeline's tip shows the time alone), and the film plays on with the memory back.
+// 30 s after the signal ends, the helper comes back as for a new file. Nothing else changes: with
+// memory to spare this never acts.
+void App::check_memory() {
+  const double t = now();
+  if (t - memory_checked_t_ < 1) return;
+  memory_checked_t_ = t;
+  BOOL low = FALSE;
+  if (memory_low_test_) {
+    // (checks: the signal on for 20 s, from 10 s after the first film's first poll)
+    static double from = -1;
+    if (from < 0) from = t;
+    low = t - from >= 10 && t - from < 30;
+  } else if (!low_memory_ || !QueryMemoryResourceNotification(low_memory_, &low)) return;
+  if (low) {
+    memory_low_t_ = t;
+    if (helper_memory_rest_) return;
+    helper_memory_rest_ = true;
+    if (thumbs_.running()) thumbs_.shutdown();
+    thumb_path_.clear();
+    preview_.loaded = preview_.busy = false;
+    accent_want_ = -1; thumb_for_accent_ = false;
+    play_.set_thumb({}, 0, 0, -1);
+    log("memory low: preview helper rested");
+    ensure_anim();
+  } else if (helper_memory_rest_ && t - memory_low_t_ >= 30) {
+    helper_memory_rest_ = false;
+    log("memory back: preview helper may start again");
+    if (mode_ == Mode::Play && loaded_ && !audio_only_ && !preview_.failed) thumb_request(-1);
+    ensure_anim();
+  }
+}
+
 void App::thumb_stop() {
   KillTimer(hwnd_, T_THUMB);
   KillTimer(hwnd_, T_PREVIEW);
@@ -6200,6 +6459,11 @@ void App::on_onboarding(ObAction a) {
     case ObAct::Ambient:
       store_.ambient = a.v != 0;
       play_.in.ambient = store_.ambient;
+      save_state();
+      break;
+    case ObAct::ControlsBg:  // (the third screen: the bar with its background or without, as in the settings)
+      store_.controls_free = a.v != 0;
+      play_.in.controls_free = store_.controls_free;
       save_state();
       break;
     case ObAct::UiScale: set_ui_scale(a.v); break;
@@ -6437,7 +6701,7 @@ bool App::frame_written(uint64_t request, bool ok) {
 void App::place_frame_shot(FrameShot shot) {
   ++g_frames_placing;
   try {
-    std::thread([shot = std::move(shot), hwnd = hwnd_, this] {
+    start_detached([shot = std::move(shot), hwnd = hwnd_, this] {
       HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
       std::wstring file;
       try { file = put_frame_in_pictures(shot.temp, shot.pictures, shot.name); } catch (...) { DeleteFileW(shot.temp.c_str()); }
@@ -6450,7 +6714,7 @@ void App::place_frame_shot(FrameShot shot) {
       });
       --g_frames_placing;
       if (!PostMessageW(hwnd, WM_APP_FILE_KINDS, 0, (LPARAM)f)) delete f;
-    }).detach();
+    });
   } catch (...) {
     --g_frames_placing;
     DeleteFileW(shot.temp.c_str());
@@ -6466,12 +6730,12 @@ void App::finish_frame_shots() {
     if (GetFileAttributesW(shot.temp.c_str()) != INVALID_FILE_ATTRIBUTES) {
       ++g_frames_placing;
       try {
-        std::thread([shot] {
+        start_detached([shot] {
           HRESULT co = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
           try { put_frame_in_pictures(shot.temp, shot.pictures, shot.name); } catch (...) {}
           if (SUCCEEDED(co)) CoUninitialize();
           --g_frames_placing;
-        }).detach();
+        });
       } catch (...) { --g_frames_placing; }
     }
   frame_shots_.clear();
@@ -6521,6 +6785,7 @@ void App::video_geometry_reply(const mpv_event* event) {
   if(!media_geometry_.accept(event->reply_userdata,shape)) return;
   vid_w_=shape.width; vid_h_=shape.height; vid_rot_=shape.rotation;
   play_.in.preview_aspect=shape.aspect();
+  apply_style(true);  // (1.4.1: the subtitles' size follows the picture's shape in a tall window)
   if(user_sized_) return; // only respected until the next file is opened
   // (the same shape, within rounding: a film whose shape was read from its file at load keeps it)
   if(geom_done_ && previous>0 && std::fabs(previous-shape.aspect())<=previous*0.004) return;
@@ -6597,7 +6862,7 @@ void App::adapt_window(double ar) {
     RECT n = wp.rcNormalPosition;
     WinRect from{n.left + dx, n.top + dy, n.right + dx, n.bottom + dy};
     // the remembered place may be on another monitor: it is kept there only if it touches this one
-    if (from.right <= wa.left || from.left >= wa.right || from.bottom <= wa.top || from.top >= wa.bottom)
+    if (film_centre_ || from.right <= wa.left || from.left >= wa.right || from.bottom <= wa.top || from.top >= wa.bottom)
       from = {wa.left, wa.top, wa.right, wa.bottom};
     auto r = video_window_rect(from, {wa.left, wa.top, wa.right, wa.bottom}, video_window_size(ar, aw, ah, dpi_, s_), 0, 0);
     wp.rcNormalPosition = {r.left - dx, r.top - dy, r.right - dx, r.bottom - dy};
@@ -6624,6 +6889,12 @@ RECT App::home_default_rect() const {
   return RECT{x, y, x + ww, y + wh};
 }
 
+double App::sub_ref_h() const {
+  if (mini_player_) return 0;
+  const RECT r = home_default_rect();  // a 16:9 window: its height is its picture's
+  return std::max(0L, (long)(r.bottom - r.top));
+}
+
 // Back home while minimised or maximised: the window it restores to is the home's (it was a 16:9
 // window grown from the film's place). Set in the placement itself, so the restore lands there
 // at once instead of gliding after it. The placement is in workspace coordinates (see adapt_window).
@@ -6637,8 +6908,7 @@ void App::home_restore_place() {
   wp.rcNormalPosition = {r.left - dx, r.top - dy, r.right - dx, r.bottom - dy};
   wp.showCmd = IsIconic(hwnd_) ? SW_SHOWMINNOACTIVE : SW_SHOWMAXIMIZED;
   wp.flags &= ~WPF_SETMINPOSITION;
-  SetWindowPlacement(hwnd_, &wp);
-}
+  SetWindowPlacement(hwnd_, &wp);}
 
 // Back home, the window glides to the home's size, growing or shrinking.
 // (15/11, 21:10: the jump straight to the size when it grew (20:59) is undone: the transparent
@@ -6700,7 +6970,8 @@ RECT App::film_window_rect(double ar) const {
   GetClientRect(hwnd_, &cr);
   int cw = cr.right, ch = cr.bottom;
   int fx = (wr.right - wr.left) - cw, fy = (wr.bottom - wr.top) - ch;  // invisible resize borders
-  auto r = video_window_rect({wr.left, wr.top, wr.right, wr.bottom}, {wa.left, wa.top, wa.right, wa.bottom},
+  const WinRect from = film_centre_ ? WinRect{wa.left, wa.top, wa.right, wa.bottom} : WinRect{wr.left, wr.top, wr.right, wr.bottom};
+  auto r = video_window_rect(from, {wa.left, wa.top, wa.right, wa.bottom},
                              video_window_size(ar, aw - fx, ah - fy, dpi_, s_), fx, fy);
   return RECT{r.left, r.top, r.right, r.bottom};
 }
@@ -6766,7 +7037,7 @@ static VideoShape header_shape_within(const std::string& path, unsigned ms, bool
   job->path = path;
   if (!job->done) return header_shape(path);  // (no event: as before)
   try {
-    std::thread([job] { job->shape = header_shape(job->path); SetEvent(job->done); }).detach();
+    start_detached([job] { job->shape = header_shape(job->path); SetEvent(job->done); });
   } catch (...) { return {}; }
   if (WaitForSingleObject(job->done, ms) == WAIT_OBJECT_0) return job->shape;
   if (late) *late = true;
@@ -7328,7 +7599,7 @@ void App::quit_now() {
   folder_scan_.reset();
   folder_reader_.reset(); folder_list_.reset();
   remote_path_worker_.reset(); remote_path_jobs_.clear(); ++remote_path_epoch_;
-  for (UINT_PTR t : {T_ANIM, T_POLL, T_WAKE, T_SAVE, T_THUMB, T_PERSIST, T_GEOM, T_PREVIEW, T_FINE, T_MAINTENANCE, T_REMOTE, T_REMOTE_START, T_NEXT, T_NEWS, T_FOLDER, T_QUEUE, T_VOLUME, T_REMOTE_PATH, T_SEEK_FADE, T_HOME_SHOT, T_HELPER_REST, T_SKIP_DIP, T_AUDIO_DEVICE}) KillTimer(hwnd_, t);
+  for (UINT_PTR t : {T_ANIM, T_POLL, T_WAKE, T_SAVE, T_THUMB, T_PERSIST, T_GEOM, T_PREVIEW, T_FINE, T_MAINTENANCE, T_REMOTE, T_REMOTE_START, T_NEXT, T_NEWS, T_FOLDER, T_QUEUE, T_VOLUME, T_REMOTE_PATH, T_SEEK_FADE, T_HOME_SHOT, T_HELPER_REST, T_SKIP_DIP, T_AUDIO_DEVICE, T_MEMORY_BACK}) KillTimer(hwnd_, t);
   if (mpv_ok_) release_video_window();  // focus and mouse leave the engine's window first, as before
   // gone from the screen and the taskbar now, with Windows' own closing animation; the work
   // below happens behind it
@@ -7353,6 +7624,7 @@ void App::quit_now() {
   log("bye");
   if (drop_) { RevokeDragDrop(hwnd_); drop_->Release(); drop_ = nullptr; }
   thumbs_.kill();  // the preview helper keeps nothing: ended, not asked
+  if (low_memory_) { CloseHandle(low_memory_); low_memory_ = nullptr; }
   recent_thumbs_.stop();  // (its worker is let go: a frame being written is finished or dropped)
   // a short grace so the engine can close the audio device and finish a frame being saved;
   // the window is already gone, so nobody waits for it
@@ -7834,8 +8106,10 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       if (w == SIZE_MINIMIZED) {
         was_iconic_ = true;
         step_hidden_playback(now());
+        update_music_rest();
         return 0;
       }
+      update_music_rest();
       const bool restoring = was_iconic_;
       // back from the taskbar: the light waits for Windows' animation to bring the window home, then
       // comes in (it used to start at once, around a window still on its way up)
@@ -8024,6 +8298,7 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       settle_fullscreen_motion();
       geom_.on = false;  // the person takes over: our animation stops right there
       { RECT r; GetClientRect(hwnd_, &r); sizemove_start_ = {r.right, r.bottom}; }
+      film_centre_ = false;  // (the person places it now: a late measure grows from where they left it)
       break;
     case WM_EXITSIZEMOVE: {
       in_sizemove_ = false;
@@ -8122,6 +8397,14 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         release_engine();
         if (mode_ == Mode::Home) { InvalidateRect(hwnd_, nullptr, FALSE); ensure_anim(); }
       }
+      else if (w == T_MEMORY_BACK) {
+        // (1.4.1) the home's pictures waiting for the helper to come back after a low-memory rest
+        check_memory();
+        if (mode_ != Mode::Home || closing_app_ || !helper_memory_rest_) {
+          KillTimer(hwnd_, T_MEMORY_BACK);
+          if (mode_ == Mode::Home && !helper_memory_rest_) next_home_shot();
+        }
+      }
       else if (w == T_HELPER_REST) {
         // the preview helper kept from a film, idle on the home for a minute: it goes (its own
         // engine, decoder and memory); the next film starts it again, as the first one does
@@ -8186,6 +8469,8 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
       }
       else if (w == T_POLL && mode_ == Mode::Play) {
         sync_time_watch();
+        update_music_rest();
+        if (music_rest_ && cloud_pending_ && !cloud_inflight_) update_blur_cloud();  // (no frames run while minimized)
         // (a song opening, with --log: which part of the poll took the time)
         double step_t = song_watch_until_ > 0 ? now() : -1;
         auto step = [&](const char* what) {
@@ -8211,6 +8496,8 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         hidden_poll_ += poll_ms_ == poll_pace::kStill ? 3 : 1;
         if (hidden_poll_ >= 15) { hidden_poll_ = 0; set_hidden(covered()); }
         step("covered check");
+        check_memory();
+        play_.in.previews_off = preview_.failed || helper_memory_rest_;
         sound_tick();
         if (!audio_only_ && !next_ep_.empty() && play_.in.dur > 0 &&  // music's "up next" has no picture
             (play_.in.dur - play_.in.time) / std::max(.1, play_.in.speed) <= 90 && !next_thumb_requested_) {

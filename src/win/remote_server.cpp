@@ -1,4 +1,5 @@
 #include <winsock2.h>
+#include "../core/detached_thread.h"
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 
@@ -555,7 +556,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
     WSADATA wd{};
     if (WSAStartup(MAKEWORD(2, 2), &wd) != 0) { closesocket(s); return; }
     ++*workers_ref;
-    try { std::thread([s, path, list, cover, queue_song, roots_copy, progress_copy, workers_ref, thumbs_ref, gate_ref, generation_ref, epoch] {
+    try { start_detached([s, path, list, cover, queue_song, roots_copy, progress_copy, workers_ref, thumbs_ref, gate_ref, generation_ref, epoch] {
       struct Cleanup {
         SOCKET socket;
         std::shared_ptr<std::atomic<int>> workers;
@@ -600,7 +601,7 @@ void RemoteServer::Impl::handle_http(size_t idx, const remote::Request& r) {
       if (*generation_ref == epoch) send_all(s, resp);
       shutdown(s, SD_SEND);
       } catch (...) { /* resource/shell failures close only this HTTP request */ }
-    }).detach(); } catch (...) {
+    }); } catch (...) {
       closesocket(s);
       --*workers_ref;
       WSACleanup();

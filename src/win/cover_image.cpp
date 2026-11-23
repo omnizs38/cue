@@ -1,4 +1,5 @@
 #include "cover_image.h"
+#include "../core/detached_thread.h"
 #include "../core/image_trim.h"
 #include "../core/bounded_worker.h"
 #include "../core/cover_cache.h"
@@ -402,7 +403,7 @@ std::shared_ptr<CardStillJob> request_card_still(std::vector<uint32_t> px, int w
   if (px.empty() || w <= 0 || h <= 0 || px.size() != (size_t)w * h) return {};
   try {
     auto job = std::make_shared<CardStillJob>();
-    std::thread([job, px = std::move(px), w, h] {
+    start_detached([job, px = std::move(px), w, h] {
       SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
       HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
       try {
@@ -412,7 +413,7 @@ std::shared_ptr<CardStillJob> request_card_still(std::vector<uint32_t> px, int w
       } catch (...) {}
       if (SUCCEEDED(co)) CoUninitialize();
       job->done.store(true);
-    }).detach();
+    });
     return job;
   } catch (...) { return {}; }
 }

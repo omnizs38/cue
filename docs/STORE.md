@@ -10,6 +10,7 @@ Center product: **Cue by .tinypeep**, Store ID `9PJS1Q8KH61S`.
 | Installed by | `Cue-<version>-Setup.exe`, in `C:\Cue` | the Microsoft Store (MSIX), in `WindowsApps` |
 | Updates | GitHub releases, every 3 days or from About | the Microsoft Store only: no GitHub check, no update offer on the home, in More or About, no `Cue-Setup.exe` |
 | File types, "Open with" | written to HKCU by Cue (`register_open_with`) | declared in `AppxManifest.xml` (`windows.fileTypeAssociation`); Cue writes nothing |
+| Explorer's pictures of the files Cue opens | Cue's types name Windows' handler `{9DBD2C50…}` (`register_open_with`) | the manifest's types name it (`desktop2:ThumbnailHandler`, 1.4.1) |
 | Subtitle fonts | also registered for the user | read from the package's `fonts\` (`sub-fonts-dir`) only |
 | Data | `%APPDATA%\tinypeep\Cue` (moved once from `tinyoffice\Cue`) | `%APPDATA%\tinypeep\Cue`, kept by Windows in the package's per-user folder and removed with the app; no migration (a Store install starts with default settings) |
 

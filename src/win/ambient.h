@@ -48,7 +48,8 @@ class Ambient {
   // four thin strips around the player (top and bottom include the corners): only pixels that
   // can glow are ever stored or sent, never the big transparent middle. The shape is the whole
   // strip's, made once per size; the surface sent to Windows is only the part on a screen.
-  struct Px { uint16_t x, y; uint16_t lut; uint8_t a; };  // x, y: in the whole strip
+  // n pixels of one colour from `off` (row-major in the whole strip), going right, or down when `down`
+  struct Run { uint32_t off; uint16_t n; uint16_t lut; uint8_t a; uint8_t down; };
   struct Strip {
     HWND wnd = nullptr;
     HDC mem = nullptr;
@@ -56,7 +57,8 @@ class Ambient {
     uint32_t* bits = nullptr;
     int fx = 0, fy = 0, fw = 0, fh = 0;  // the whole strip, relative to the halo's top-left
     int x = 0, y = 0, w = 0, h = 0;      // its surface (the part on a screen), same coordinates
-    std::vector<Px> shape;
+    std::vector<Run> runs;  // the strip's shape
+    std::vector<uint32_t> held;  // the colour each run holds on the surface now (see paint)
   };
   Strip st_[4];
   bool want_ = false, failed_ = false;

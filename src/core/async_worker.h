@@ -1,5 +1,6 @@
 #pragma once
 #include <condition_variable>
+#include "detached_thread.h"
 #include <deque>
 #include <functional>
 #include <memory>
@@ -14,7 +15,7 @@ class AsyncWorker {
  public:
   struct Task { std::function<void()> run, cancel; std::function<bool()> obsolete; };
   explicit AsyncWorker(size_t limit) : state_(std::make_shared<State>(limit ? limit : 1)) {
-    std::thread([s = state_] {
+    start_detached([s = state_] {
       for (;;) {
         Task task;
         {
@@ -25,7 +26,7 @@ class AsyncWorker {
         }
         task.run();
       }
-    }).detach();
+    });
   }
   AsyncWorker(const AsyncWorker&) = delete;
   AsyncWorker& operator=(const AsyncWorker&) = delete;

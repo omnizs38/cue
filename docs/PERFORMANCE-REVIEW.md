@@ -1,3 +1,26 @@
+# Heavy films · Cue 1.4.1, third round
+
+Review date: 2026-11-23. The author's list: 4K HEVC and VP9, high bitrates, HDR, large MKVs with many
+tracks, 60 fps, long OBS recordings: opening, playing, seeking, processor, graphics card and memory,
+nothing visible changed. Measured under Wine 9.0 (two cores, no graphics card, no video decoder) with
+the real Cue, a measurement build (not shipped) and the real preview helper; the films and numbers
+are in VALIDATION.md.
+
+| Where | What was measured | Done |
+|---|---|---|
+| the halo around the window | nearly all of the window thread's work while a film plays (a 1080p film: 501 ms a second, 18 with the light off); a 14.3 MB pixel list at the 4K opening window, every strip sent whole at every paint | runs of one colour, only changed runs written, only changed parts sent: the same light, 501 → 159 ms a second in the real Cue under Wine; 14.3 → 2.4 MB |
+| layers sent to the engine | 0.2 to 1.2 MB in every moment of every film; no window-sized layer while a film plays | nothing to gain |
+| colour samples (the helper) | an exact seek decodes from the keyframe before it: 5 s of a 4K film with a keyframe every 10 s on one thread; `ColourPace` already spaces them | unchanged (see below) |
+| the helper's memory | 112 MB (1080p) to 266 MB (4K HEVC 10-bit): its decoder's own frames | unchanged |
+| opening, seeking, full screen | the engine's own decoding and drawing; under Wine also a Wine-only stall (no `atan2`) | unchanged |
+| engine options | hardware decoding, buffers, extra surfaces, HDR peak detection and the frame cache for repeated frames were already set (1.3.2, 1.4) | unchanged |
+
+Considered and left, with the reason:
+
+- **colour samples decoded forward from the last one** instead of from the keyframe: the same pictures, but only cheaper while samples are closer together than keyframes, and on films with far-apart keyframes the pace already spaces them more widely than that. No gain where it matters.
+- **colour samples decoded by the graphics card** (`hwdec`, the helper's diagnostic switch): far less processor on 4K films, but the helper skips the loop filter today (lighter), so its colours differ from a full decode: on the HEVC test film by up to 17 levels in an edge zone's average (VP9: none). A visible change and a native measurement (the card's video engine is shared with the film): left as a suggestion.
+- **the arrows' exact seeks** (decoding from the keyframe up to the place): keyframe seeks would land elsewhere. Unchanged.
+
 # Performance and bug review · Cue 1.4, second round
 
 Review date: 2026-11-12. Priorities: playback first (opening, the first frame, nothing stalling,

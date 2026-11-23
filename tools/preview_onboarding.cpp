@@ -58,6 +58,8 @@ int main(int argc, char** argv) {
     ob.set_ambient(false, now); run(1.2, "toggle-off");
     ob.set_ambient(true, now); run(1.0, "toggle-on");
     ob.go(2, now); run(1.0, "page2");
+    ob.set_controls_free(true, now); run(0.8, "background");
+    ob.go(3, now); run(1.0, "page3");
     ob.set_scale_choice(2, now); run(0.8, "size");
     return 0;
   }
@@ -69,7 +71,11 @@ int main(int argc, char** argv) {
   ob.light_inside = true; run(0.1); ob.render(c, now); save_canvas(c, out + "/ob-ambient-inside.png"); ob.light_inside = false;
   ob.set_ambient(false, now); run(1.2); ob.render(c, now); save_canvas(c, out + "/ob-ambient-off.png");
   ob.set_ambient(true, now);
-  ob.go(2, now); run(1.2); ob.render(c, now); save_canvas(c, out + "/ob-size.png");
+  ob.go(2, now); run(1.2); ob.render(c, now); save_canvas(c, out + "/ob-background.png");
+  ob.set_controls_free(true, now); run(0.8); ob.render(c, now); save_canvas(c, out + "/ob-background-without.png");
+  ob.go(3, now); run(1.2); ob.render(c, now); save_canvas(c, out + "/ob-size-without.png");
+  ob.go(2, now); run(1.0); ob.set_controls_free(false, now); run(0.8);
+  ob.go(3, now); run(1.2); ob.render(c, now); save_canvas(c, out + "/ob-size.png");
   const char* names[4] = {"pequena", "media", "grande", "maior"};
   for (int i = 0; i < 4; ++i) { ob.set_scale_choice(ui_size_choice(i), now); run(0.5); ob.render(c, now); save_canvas(c, out + "/ob-size-" + names[i] + ".png"); }
   ob.set_scale_choice(ui_size_choice(1), now); run(0.5);

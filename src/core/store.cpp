@@ -1,3 +1,4 @@
+#include "subtitle_geometry.h"
 #include <chrono>
 #include <thread>
 #ifdef _WIN32
@@ -16,6 +17,16 @@
 
 #include "json.h"
 #include "i18n.h"
+
+// (1.4.1) the former default subtitle style moves with the new one (36, letter spacing +1): 44 from
+// 1.4 and before, 52 from 1.4.1's test builds (schema 6); a letter spacing other than 0 was chosen and
+// stays, and so does any other size, and from schema 7 on every value is a choice
+static void migrate_style(SubStyle& st, int schema) {
+  const bool former = (schema < 6 && st.size == 44) || (schema == 6 && st.size == 52);
+  if (!former) return;
+  st.size = SubStyle{}.size;
+  if (st.tracking == 0) st.tracking = SubStyle{}.tracking;
+}
 
 int SettingsStore::unseal_remote() {
   if (remote_unsealed) return 0;
@@ -73,7 +84,7 @@ static SubStyle style_from(const JVal& j, const SubStyle& def) {
   s.size = std::clamp(j["size"].integer(def.size), 24, 80);
   s.text_op = std::clamp(j["text"].integer(def.text_op), 10, 100);
   s.bg_op = std::clamp(j["bg"].integer(def.bg_op), 0, 100);
-  s.pos = std::clamp(j["pos"].num(def.pos), kSubPosMin, kSubPosMax);
+  s.pos = std::clamp(j["pos"].num(def.pos), kSubPosMin, kSubPosPictureMax);
   s.ass_mode = std::clamp(j["ass"].integer(def.ass_mode), 0, 1);
   s.outline = std::clamp(j["outline"].integer(def.outline), 0, 6);
   s.line_gap = std::clamp(j["lgap"].integer(def.line_gap), kLineGapMin, kLineGapMax);
@@ -115,6 +126,7 @@ bool SettingsStore::parse(const std::string& text) {
   const JVal& pf = schema >= 2 ? j["prefs"] : j;
   const JVal& ss = schema >= 2 ? j["session"] : j;
   default_style = style_from(pf["style"], SubStyle{});
+  migrate_style(default_style, schema);
   volume = std::clamp(pf["volume"].num(100), 0.0, kVolMax);
   muted = pf["muted"].boolean(false);
   ui_scale = std::clamp(pf["ui_scale"].integer(2), -1, 3);
@@ -193,6 +205,7 @@ bool SettingsStore::parse(const std::string& text) {
   for (auto& r : (schema >= 2 ? j["media"] : j["recents"]).a) {
     RecentItem it;
     read_media(r, it, default_style);
+    if (it.has_style) migrate_style(it.style, schema);
     if (it.path.empty()) continue;
     recents.push_back(it);
     if (recents.size() >= kMaxRecents) break;
@@ -206,21 +219,34 @@ bool SettingsStore::load(const std::filesystem::path& path) {
   std::string text;
   std::filesystem::path bak = path;
   bak += ".bak";
-  if (!read_state_file(path, text)) {
+  bool got = read_state_file(path, text);
+  if (!got) {
     // A file too large to be one of ours is corrupt: recover from the backup as before. One that
-    // exists and is small but cannot be read (a lock, a disconnected profile) is protected: the
-    // backup/defaults may be shown, but they must never be written over the real file.
-    std::error_code ec;
-    const bool exists = std::filesystem::exists(path, ec);
-    if (ec || exists) {
+    // exists and is small but cannot be read (a lock, a disconnected profile) is protected: what
+    // the backup kept is shown, but nothing is ever written over the real file.
+    auto unreadable = [&] {
+      std::error_code ec;
+      const bool exists = std::filesystem::exists(path, ec);
+      if (!ec && !exists) return false;
       std::error_code size_ec;
       const uintmax_t size = exists ? std::filesystem::file_size(path, size_ec) : 0;
-      if (ec || size_ec || size <= kMaxStateBytes) {
-        load_status = "unreadable";
-        save_blocked = true;
-        return false;
-      }
+      return ec || size_ec || size <= kMaxStateBytes;
+    };
+    // (1.4.1) an antivirus or a sync client holds a file for a moment: ask again a few times first
+    for (int tries = 0; !got && tries < 3 && unreadable(); ++tries) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(80));
+      got = read_state_file(path, text);
     }
+    if (!got && unreadable()) {
+      // still held: the backup's settings (not the welcome and the defaults), and no saves
+      if (!(read_state_file(bak, text) && parse(text))) *this = SettingsStore{};
+      load_status = "unreadable";
+      save_blocked = true;
+      blocked_base = json();  // (1.4.1) what this session starts from: unblock() keeps only what it changes
+      return false;
+    }
+  }
+  if (!got) {
     // no file yet (first run), or only the backup survived an interrupted write
     if (read_state_file(bak, text) && parse(text)) { load_status = "recovered"; return true; }
     load_status = "missing";
@@ -244,8 +270,7 @@ bool SettingsStore::load(const std::filesystem::path& path) {
   return false;
 }
 
-bool SettingsStore::save(const std::filesystem::path& path) const {
-  if (save_blocked) return false;
+std::string SettingsStore::json() const {
   char b[320];
   std::string o = "{\n  \"schema\": " + std::to_string(kSchema) + ",\n";
   // prefs
@@ -326,6 +351,104 @@ bool SettingsStore::save(const std::filesystem::path& path) const {
     o += "}";
   }
   o += recents.empty() ? "]\n}\n" : "\n  ]\n}\n";
+  return o;
+}
+
+// ── (1.4.1) a state.json held at start, readable again ─────────────
+namespace {
+bool same_json(const JVal& x, const JVal& y) {
+  if (x.t != y.t) return false;
+  switch (x.t) {
+    case JVal::Null: return true;
+    case JVal::Bool: return x.b == y.b;
+    case JVal::Num: return x.n == y.n;
+    case JVal::Str: return x.s == y.s;
+    case JVal::Arr:
+      if (x.a.size() != y.a.size()) return false;
+      for (size_t i = 0; i < x.a.size(); ++i) if (!same_json(x.a[i], y.a[i])) return false;
+      return true;
+    case JVal::Obj:
+      if (x.o.size() != y.o.size()) return false;
+      for (auto& [k, v] : x.o) { auto it = y.o.find(k); if (it == y.o.end() || !same_json(v, it->second)) return false; }
+      return true;
+  }
+  return false;
+}
+void dump_json(const JVal& v, std::string& o) {
+  char b[40];
+  switch (v.t) {
+    case JVal::Null: o += "null"; break;
+    case JVal::Bool: o += v.b ? "true" : "false"; break;
+    case JVal::Num: std::snprintf(b, sizeof b, "%.17g", std::isfinite(v.n) ? v.n : 0.0); o += b; break;
+    case JVal::Str: o += json_quote(v.s); break;
+    case JVal::Arr:
+      o += '[';
+      for (size_t i = 0; i < v.a.size(); ++i) { if (i) o += ", "; dump_json(v.a[i], o); }
+      o += ']';
+      break;
+    case JVal::Obj: {
+      o += '{';
+      bool first = true;
+      for (auto& [k, x] : v.o) { if (!first) o += ", "; first = false; o += json_quote(k) + ": "; dump_json(x, o); }
+      o += '}';
+      break;
+    }
+  }
+}
+const JVal& member(const JVal& v, const std::string& k) { static const JVal none; auto it = v.o.find(k); return it == v.o.end() ? none : it->second; }
+// What this session changed since `base` (what it started from) over `file` (the real file, as it
+// is now): a value the session left as it found it takes the file's; a list of files ("media") goes
+// by path, newest first.
+JVal merge_json(const JVal& base, const JVal& mine, const JVal& file) {
+  if (same_json(mine, base)) return file;
+  if (mine.t == JVal::Obj && base.t == JVal::Obj && file.t == JVal::Obj) {
+    JVal out = file;
+    for (auto& [k, v] : mine.o) out.o[k] = merge_json(member(base, k), v, member(file, k));
+    for (auto& [k, v] : base.o) if (!mine.o.count(k)) out.o.erase(k);  // (the session took it out)
+    return out;
+  }
+  const auto by_path = [](const JVal& list) {
+    std::map<std::string, const JVal*> m;
+    for (auto& e : list.a) if (e.t == JVal::Obj) m[member(e, "path").str()] = &e;
+    return m;
+  };
+  if (mine.t == JVal::Arr && file.t == JVal::Arr && !mine.a.empty() && mine.a.front().t == JVal::Obj && member(mine.a.front(), "path").t == JVal::Str) {
+    const auto b = by_path(base), f = by_path(file), m = by_path(mine);
+    std::vector<JVal> out;
+    for (auto& e : mine.a) {
+      const std::string p = member(e, "path").str();
+      auto bi = b.find(p), fi = f.find(p);
+      if (bi != b.end() && same_json(*bi->second, e)) { if (fi != f.end()) out.push_back(*fi->second); }  // untouched here: the file's
+      else out.push_back(e);  // played or changed in this session
+    }
+    for (auto& e : file.a)  // what the file has that this session never knew of
+      if (e.t == JVal::Obj && !m.count(member(e, "path").str()) && !b.count(member(e, "path").str())) out.push_back(e);
+    std::stable_sort(out.begin(), out.end(), [](const JVal& x, const JVal& y) { return member(x, "last").num(0) > member(y, "last").num(0); });
+    JVal r; r.t = JVal::Arr; r.a = std::move(out);
+    return r;
+  }
+  return mine;
+}
+}  // namespace
+
+bool SettingsStore::unblock(const std::filesystem::path& path) {
+  if (!save_blocked) return true;
+  std::string text;
+  JVal file, base, mine;
+  if (!read_state_file(path, text) || !json_parse(text, file) || file.t != JVal::Obj) return false;  // still held (or not ours: left alone)
+  if (!json_parse(blocked_base, base) || !json_parse(json(), mine)) return false;
+  std::string merged;
+  dump_json(merge_json(base, mine, file), merged);
+  SettingsStore next;
+  if (!next.parse(merged)) return false;
+  next.load_status = "unblocked";
+  *this = std::move(next);
+  return true;
+}
+
+bool SettingsStore::save(const std::filesystem::path& path) const {
+  if (save_blocked) return false;
+  const std::string o = json();
   std::filesystem::path tmp = path, bak = path;
   tmp += ".tmp";
   bak += ".bak";

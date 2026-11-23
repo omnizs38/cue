@@ -46,7 +46,7 @@ int main(){
    if(start<0&&y>raised+.0001)start=t;
    if(start>0&&finish<0&&std::abs(y-100)<.00001)finish=t;
   }
-  assert(start>0&&finish-start>.20&&finish-start<.50);
+  assert(start>0&&finish-start>.19&&finish-start<.50);  // (1.4.1) the measured placement: a shorter way down, the dock's own 0.2 s
  }
  {
   PlayView p;p.resize(1280,720,2);p.in.dur=120;double t=1;p.reset(t);

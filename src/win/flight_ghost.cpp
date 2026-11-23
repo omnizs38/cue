@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <vector>
 
 #ifndef DWMWA_WINDOW_CORNER_PREFERENCE
 #define DWMWA_WINDOW_CORNER_PREFERENCE 33
@@ -25,8 +26,9 @@ static LRESULT CALLBACK ghost_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
   return DefWindowProcW(h, m, w, l);
 }
 
-bool FlightGhost::begin(HINSTANCE inst, HWND source, const RECT& screen) {
+bool FlightGhost::begin(HINSTANCE inst, HWND source, const RECT& screen, HWND below) {
   end();
+  below_ = below && IsWindow(below) ? below : nullptr;
   if (!source || screen.right <= screen.left || screen.bottom <= screen.top) return false;
   static bool registered = false;
   if (!registered) {
@@ -52,8 +54,8 @@ bool FlightGhost::begin(HINSTANCE inst, HWND source, const RECT& screen) {
   if (FAILED(DwmRegisterThumbnail(wnd_, src_, &thumb_)) || !thumb_) { thumb_ = nullptr; end(); return false; }
   last_ = {};
   if (!update(screen)) { end(); return false; }
-  SetWindowPos(wnd_, HWND_TOPMOST, screen.left, screen.top, screen.right - screen.left, screen.bottom - screen.top,
-               SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  SetWindowPos(wnd_, below_ ? below_ : HWND_TOPMOST, screen.left, screen.top, screen.right - screen.left,
+               screen.bottom - screen.top, SWP_NOACTIVATE | SWP_SHOWWINDOW);
   last_ = screen;
   return true;
 }
@@ -88,7 +90,9 @@ void FlightGhost::place(const RECT& screen) {
   // a frame where the two disagree crops the picture, never shows the black under it: growing,
   // the picture first; shrinking, the window first
   if (grows) update(screen);
-  SetWindowPos(wnd_, HWND_TOPMOST, screen.left, screen.top, screen.right - screen.left, screen.bottom - screen.top,
+  // (under the still layer while it is there: raising itself to the top would cover it)
+  const bool keep = below_ && IsWindow(below_);
+  SetWindowPos(wnd_, keep ? below_ : HWND_TOPMOST, screen.left, screen.top, screen.right - screen.left, screen.bottom - screen.top,
                SWP_NOACTIVATE | SWP_NOCOPYBITS);
   if (!grows) update(screen);
   last_ = screen;
@@ -98,7 +102,120 @@ void FlightGhost::end() {
   if (thumb_) { DwmUnregisterThumbnail(thumb_); thumb_ = nullptr; }
   if (wnd_) { DestroyWindow(wnd_); wnd_ = nullptr; }
   src_ = nullptr;
+  below_ = nullptr;
   last_ = {};
+}
+
+// ── the still layer ─────────────────────────────────────────────────
+static LRESULT CALLBACK still_proc(HWND h, UINT m, WPARAM w, LPARAM l) {
+  switch (m) {
+    case WM_NCHITTEST: return HTTRANSPARENT;
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+  }
+  return DefWindowProcW(h, m, w, l);
+}
+
+static bool make_dib(HDC& dc, HBITMAP& bmp, HBITMAP& old, int w, int h, uint32_t** px) {
+  if (!dc) dc = CreateCompatibleDC(nullptr);
+  if (!dc) return false;
+  BITMAPINFO bi{};
+  bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+  bi.bmiHeader.biWidth = w;
+  bi.bmiHeader.biHeight = -h;  // top-down
+  bi.bmiHeader.biPlanes = 1;
+  bi.bmiHeader.biBitCount = 32;
+  bi.bmiHeader.biCompression = BI_RGB;
+  void* bits = nullptr;
+  HBITMAP b = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+  if (!b || !bits) { if (b) DeleteObject(b); return false; }
+  if (bmp) { SelectObject(dc, old); DeleteObject(bmp); }
+  old = (HBITMAP)SelectObject(dc, b);
+  bmp = b;
+  *px = static_cast<uint32_t*>(bits);
+  return true;
+}
+
+bool StillLayer::adopt(HINSTANCE inst, const RECT& screen, const uint8_t* bgr0, int w, int h, int stride, int radius) {
+  end();
+  if (!bgr0 || w <= 1 || h <= 1 || stride < w * 4 || screen.right <= screen.left || screen.bottom <= screen.top) return false;
+  if (!make_dib(src_, sbmp_, sold_, w, h, &spx_)) { end(); return false; }
+  if (!make_dib(dst_, dbmp_, dold_, w, h, &dpx_)) { end(); return false; }
+  GdiFlush();
+  // opaque (bgr0's fourth byte is not an alpha), the corners cut as the window's own
+  for (int y = 0; y < h; ++y) {
+    const uint32_t* in = reinterpret_cast<const uint32_t*>(bgr0 + (size_t)y * stride);
+    uint32_t* out = spx_ + (size_t)y * w;
+    for (int x = 0; x < w; ++x) out[x] = in[x] | 0xFF000000u;
+  }
+  const int r = std::min({radius, w / 2, h / 2});
+  for (int y = 0; y < r; ++y)
+    for (int x = 0; x < r; ++x) {
+      const double dx = r - (x + 0.5), dy = r - (y + 0.5);
+      if (dx * dx + dy * dy <= (r - 0.5) * (r - 0.5)) continue;
+      spx_[(size_t)y * w + x] = spx_[(size_t)y * w + (w - 1 - x)] = 0;
+      spx_[(size_t)(h - 1 - y) * w + x] = spx_[(size_t)(h - 1 - y) * w + (w - 1 - x)] = 0;
+    }
+  sw_ = dw_ = w; sh_ = dh_ = h;
+  static bool registered = false;
+  if (!registered) {
+    WNDCLASSEXW wc{sizeof(wc)};
+    wc.lpfnWndProc = still_proc;
+    wc.hInstance = inst;
+    wc.lpszClassName = L"tinyoffice.Cue.still";
+    registered = RegisterClassExW(&wc) != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+  }
+  wnd_ = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, L"tinyoffice.Cue.still",
+                         L"", WS_POPUP, screen.left, screen.top, screen.right - screen.left, screen.bottom - screen.top, nullptr,
+                         nullptr, inst, nullptr);
+  if (!wnd_) { end(); return false; }
+  BOOL off = TRUE;  // there and gone at once (Windows' own fade would double the layer's)
+  DwmSetWindowAttribute(wnd_, DWMWA_TRANSITIONS_FORCEDISABLED, &off, sizeof off);
+  int square = 1;   // its corners are its pixels' own
+  DwmSetWindowAttribute(wnd_, DWMWA_WINDOW_CORNER_PREFERENCE, &square, sizeof square);
+  shown_ = false;
+  return true;
+}
+
+bool StillLayer::show(const RECT& at, double alpha) {
+  if (!wnd_) return false;
+  const int w = std::max(1, (int)(at.right - at.left)), h = std::max(1, (int)(at.bottom - at.top));
+  if (w > dw_ || h > dh_) {  // (larger than the copy: never on the way in; kept whole if it happens)
+    if (!make_dib(dst_, dbmp_, dold_, std::max(w, dw_), std::max(h, dh_), &dpx_)) { end(); return false; }
+    dw_ = std::max(w, dw_); dh_ = std::max(h, dh_);
+  }
+  // the copy scaled to the layer's size: whole pixels, no smoothing (the picture is in Cue's pixels
+  // at that moment), one pass. The layer's rows are dw_ wide; Windows reads its top-left w x h.
+  GdiFlush();
+  static std::vector<int> xs;
+  xs.resize(w);
+  for (int x = 0; x < w; ++x) xs[x] = std::min(sw_ - 1, (int)(((int64_t)x * sw_ + sw_ / 2) / w));
+  for (int y = 0; y < h; ++y) {
+    const uint32_t* srow = spx_ + (size_t)std::min(sh_ - 1, (int)(((int64_t)y * sh_ + sh_ / 2) / h)) * sw_;
+    uint32_t* drow = dpx_ + (size_t)y * dw_;
+    if (w == sw_) std::copy(srow, srow + w, drow);
+    else for (int x = 0; x < w; ++x) drow[x] = srow[xs[x]];
+  }
+  POINT pt{at.left, at.top}, from{0, 0};
+  SIZE size{w, h};
+  // its pixels (opaque, the corners clear) under one alpha for the whole layer
+  BLENDFUNCTION blend{AC_SRC_OVER, 0, (BYTE)std::clamp((int)std::lround(alpha * 255), 0, 255), AC_SRC_ALPHA};
+  if (!UpdateLayeredWindow(wnd_, nullptr, &pt, &size, dst_, &from, 0, &blend, ULW_ALPHA)) { end(); return false; }
+  if (!shown_) {
+    SetWindowPos(wnd_, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    shown_ = true;
+  }
+  return true;
+}
+
+void StillLayer::end() {
+  if (wnd_) { DestroyWindow(wnd_); wnd_ = nullptr; }
+  if (sbmp_) { SelectObject(src_, sold_); DeleteObject(sbmp_); sbmp_ = sold_ = nullptr; }
+  if (dbmp_) { SelectObject(dst_, dold_); DeleteObject(dbmp_); dbmp_ = dold_ = nullptr; }
+  if (src_) { DeleteDC(src_); src_ = nullptr; }
+  if (dst_) { DeleteDC(dst_); dst_ = nullptr; }
+  spx_ = dpx_ = nullptr;
+  sw_ = sh_ = dw_ = dh_ = 0;
+  shown_ = false;
 }
 
 // ── the stage cover ─────────────────────────────────────────────────

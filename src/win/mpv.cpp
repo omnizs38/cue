@@ -207,6 +207,19 @@ std::vector<Track> Mpv::parse_tracks(const mpv_node* n) {
     tr.hearing_impaired = node_flag(node_get(t, "hearing-impaired"));
     const auto* metadata=node_get(t,"metadata");
     if(tr.title.empty()) {tr.title=node_str(node_get(metadata,"TITLE"));if(tr.title.empty())tr.title=node_str(node_get(metadata,"title"));}
+    // (1.4.1) a name kept outside the title: an MP4 track's own name ("name", OBS's track names),
+    // else a handler that says something ("Microfone"), never a muxer's stock one ("SoundHandler")
+    if(tr.title.empty()) {
+      tr.name=node_str(node_get(metadata,"name"));
+      if(tr.name.empty())tr.name=node_str(node_get(metadata,"NAME"));
+      if(tr.name.empty()) {
+        std::string h=node_str(node_get(metadata,"handler_name")),l=h;
+        for(auto& c:l)c=(char)std::tolower((unsigned char)c);
+        if(l.find("handler")==std::string::npos&&l.find("core media")==std::string::npos&&l.find("media")==std::string::npos&&l.find("gpac")==std::string::npos&&l.find("l-smash")==std::string::npos)tr.name=h;
+      }
+      // (an encoder's own id, not a name: "adv_record_audio_0")
+      if(tr.name.find('_')!=std::string::npos&&tr.name.find(' ')==std::string::npos)tr.name.clear();
+    }
     if(tr.lang.empty()) {tr.lang=node_str(node_get(metadata,"LANGUAGE"));if(tr.lang.empty())tr.lang=node_str(node_get(metadata,"language"));}
     out.push_back(tr);
   }

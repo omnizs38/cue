@@ -26,6 +26,8 @@ struct PlayInput {
   bool audio_only = false;
   double time = 0, dur = 0, volume = 100;
   double preview_aspect = 0;  // current file's display aspect, known before its first thumbnail
+  double sub_ref_h = 0;  // (1.4.1) the picture height the subtitles were designed at, on this screen (subtitle_typography_scale)
+  bool previews_off = false;  // no pictures to come (the helper resting, or this file failed): the timeline's tip is the time alone
   bool muted = false;
   std::vector<Track> subs, audios;
   std::vector<Track> all_audio;  // (every sound track, also one the engine cannot play: audios lists only those it can)
@@ -60,6 +62,10 @@ struct PlayInput {
   // updates: "" when there is nothing to say; otherwise what the row should read
   std::string update_label;    // "check for updates", "update to 1.2", "downloading 42%"
   bool update_ready = false;   // a newer version is known: the More menu shows it too
+  // (1.4.1) the answer to "check for updates", in that row itself for a moment (Settings over the
+  // home): "you already have the latest version"; `update_reply_ok` gives it the tick
+  std::string update_reply;
+  bool update_reply_ok = false;
   bool loop = false;           // repeat the file forever (music videos, loops)
   bool loop_all = false;       // repeat the queue: after its last item, the first again
   bool shuffle = false;        // music: the list plays in a shuffled order (each song once a round)
@@ -203,12 +209,16 @@ class PlayView {
   void open_settings_over_home(const Rect& anchor, double now);
   void move_over_home(const Rect& anchor);
   bool over_home() const { return anchored_ && panel_ != Panel::None; }
+  Rect over_home_rect() const { return over_home() ? panel_rect() : Rect{}; }  // (where it stands over the home)
   bool over_home_hit(int x, int y) const { return over_home() && panel_rect().contains(x, y); }
   void close_over_home() { if (over_home()) close_panel(); }  // "▸ 12:34" at the top: where a film was taken up again
   // "frame saved ✓ | folder": stays a little longer, and its folder button opens where the frame went
   void set_next_details(const std::string& name);
   void set_next_picture(const std::vector<uint32_t>& pixels,int w,int h);
-  void next_notice(const std::string& label, double now);
+  // what comes next, at the top (a film's last seconds). counting: it starts by itself when the
+  // film ends, and a line along the notice's foot runs out with the film's time left (1.4.1)
+  void next_notice(const std::string& label, double now, bool counting = false);
+  static constexpr double kNextCount = 10;  // the seconds the line counts (the notice shows from there)
   void toast_folder(const std::string& text, double now);
   // the sound changed language: its name turns over letter by letter, like a departures board
   void announce_audio(double now);
@@ -309,6 +319,9 @@ class PlayView {
     return !toast_text_.empty() || last_now_ - flash_t0_ < 0.9;
   }
   double lifted_pos() const;  // sub-pos to apply now (rises above the dock)
+  double placed_pos(double pos) const;
+  double picture_pos(double wpos) const;  // (preview) a window position as the picture's  // (1.4.1) next to the picture when there are black bands
+  double sub_font_px() const;  // (1.4.1) the subtitle's font size on screen, px
   // for previews
   void open_panel_for_preview(int which, double now);
   void set_hover_for_preview(int x, int y, double now) { mouse_move(x, y, now); }
@@ -529,6 +542,7 @@ private:
   int still_x_ = -1, still_y_ = -1;  // where the pointer rested when the dock left (jitter guard)
   bool swallow_up_ = false;        // the press closed a panel: its release does nothing
   int ctx_x_ = 0, ctx_y_ = 0;      // context menu anchor
+  bool measuring_ = false;  // (big_width builds the pages to measure them: the update row as it rests)
   bool anchored_ = false;          // the panel opened from the home (see open_settings_over_home)
   Rect anchor_{};
   Rect closing_rect_;              // a closing panel fades where it was
@@ -740,6 +754,8 @@ private:
   std::string next_name_;
   Canvas next_picture_;
   bool next_toast_ = false;
+  bool next_counting_ = false;   // its line counts down to the next file
+  int next_line_ = -1;           // that line's length as last staged
   bool toast_btn_ = false;       // has the folder button
   bool toast_hot_ = false;       // the cursor is on that button
   double toast_alpha_ = 0;
@@ -918,7 +934,7 @@ private:
   mutable SubStyle lift_style_;
   mutable Rect lift_dock_, lift_panel_;
   mutable int lift_w_=0,lift_h_=0,lift_lines_=0,lift_chars_=0;
-  mutable double lift_scale_=0,lift_value_=0;
+  mutable double lift_scale_=0,lift_value_=0,lift_aspect_=0;
   mutable std::vector<std::string> lift_text_;
 
   int iris_ = 0;  // 0 none, 1 covered (waiting for the picture), 2 opening, 3 closing (going home)

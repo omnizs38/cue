@@ -160,17 +160,21 @@ static void check_welcome(int W, int H, double s) {
     std::string tag = "welcome " + std::to_string(pg + 1);
     expect(inside(L.next, win) && inside(L.back, win), tag + " footer");
     expect(L.back.r() < L.dots.front().x && L.dots.back().r() < L.next.x, tag + " buttons apart " + R(L.back) + " " + R(L.next));
-    str::Id heads[3] = {str::ob_intro, str::ob_ambient_title, str::ob_size_title};
+    str::Id heads[OnboardingView::kPages] = {str::ob_intro, str::ob_ambient_title, str::ob_bg_title, str::ob_size_title};
     expect(text_w(tr(heads[pg]), 2 * ob.s) <= W, tag + " heading");
   }
   auto& L1 = ob.L_[1];
   int lab = std::max(text_w(tr(str::ob_on), ob.s), text_w(tr(str::ob_off), ob.s));
   expect(L1.toggle.r() + (int)(8 * ob.s) + lab <= W, "welcome 2 toggle label");
   expect(L1.toggle.b() <= L1.next.y, "welcome 2 toggle above the footer");
-  auto& L2 = ob.L_[2];
-  for (size_t i = 0; i < L2.segs.size(); ++i) expect(inside(L2.segs[i], win), "welcome 3 size " + std::to_string(i));
+  auto& LB = ob.L_[OnboardingView::kPageBg];
+  expect(LB.segs.size() == 2, "welcome 3 two backgrounds");
+  for (size_t i = 0; i < LB.segs.size(); ++i) expect(inside(LB.segs[i], win) && LB.segs[i].b() <= LB.next.y, "welcome 3 background " + std::to_string(i));
+  expect(text_w(tr(str::more_with_bg), ob.s) <= LB.segs[0].w && text_w(tr(str::more_without_bg), ob.s) <= LB.segs[1].w, "welcome 3 background words");
+  auto& L2 = ob.L_[OnboardingView::kPageSize];
+  for (size_t i = 0; i < L2.segs.size(); ++i) expect(inside(L2.segs[i], win), "welcome 4 size " + std::to_string(i));
   str::Id sizes[kUiSizes] = {str::size_small, str::size_medium, str::size_large, str::size_larger};
-  for (int i = 0; i < kUiSizes; ++i) expect(text_w(tr(sizes[i]), ob.s) <= L2.segs[i].w, "welcome 3 size word");
+  for (int i = 0; i < kUiSizes; ++i) expect(text_w(tr(sizes[i]), ob.s) <= L2.segs[i].w, "welcome 4 size word");
 }
 
 // "saiu do forno": every item whole (none of its words cut after the fourth line), inside the

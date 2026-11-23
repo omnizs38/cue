@@ -39,7 +39,7 @@
 
 ## Get started
 
-Download `Cue-1.4-Setup.exe` from the [latest release](https://github.com/tinypeep/cue/releases/latest) and run it. **Windows x64.** No administrator privileges required.
+Download `Cue-1.4.1-Setup.exe` from the [latest release](https://github.com/tinypeep/cue/releases/latest) and run it. **Windows x64.** No administrator privileges required.
 
 Open a file, drag it onto Cue, or use **Open with** in File Explorer.
 
@@ -76,6 +76,6 @@ The Russian translation was reviewed with help from [omni38](https://github.com/
 
 Cue's code is **GPL-3.0-or-later**. Fonts and third-party components retain their own licenses. See [LICENSE](LICENSE), [copyright](COPYRIGHT.md), and [component licenses](docs/LICENSES.md).
 
-Corresponding playback engine sources are provided as `Cue-1.4-Engine-Source.zip` on the [release page](https://github.com/tinypeep/cue/releases/tag/v1.4).
+Corresponding playback engine sources are provided as `Cue-1.4.1-Engine-Source.zip` on the [release page](https://github.com/tinypeep/cue/releases/tag/v1.4.1).
 
 Forks and modified builds: [NOTICE](NOTICE.md) · [Branding and build identity](docs/BRANDING.md).

@@ -107,6 +107,18 @@ Rect HomeView::list_band() const {
   return x1 > x0 && y1 > y0 ? Rect{x0, y0, x1 - x0, y1 - y0} : Rect{};
 }
 
+Rect HomeView::list_reach() const {
+  Rect band = r_title_;
+  for (const Rect& r : {r_list_, r_dots_, r_cont_label_}) {
+    if (r.w <= 0 || r.h <= 0) continue;
+    const int x0 = std::min(band.x, r.x), y0 = std::min(band.y, r.y);
+    band = {x0, y0, std::max(band.r(), r.r()) - x0, std::max(band.b(), r.b()) - y0};
+  }
+  return band.grow(2 * s);
+}
+
+void HomeView::cover_list(bool on) { list_cover_.target = on ? 1.0 : 0.0; }
+
 void HomeView::swap_animated(double now, Canvas* scratch) {
   swap_t0_ = -10;
   swap_old_ = Canvas{};
@@ -556,7 +568,7 @@ Rect HomeView::face_reach() const {
 uint64_t HomeView::eyes_only_key(double now) const {
   // anything else moving, or drawn from the clock rather than from state: a whole frame
   if (egg_ || !ghosts_.empty() || leave_t0_ > 0 || now - enter_t0_ < 0.45 || thumbs_fading(now) || clear_t0_ > now - 5 ||
-      list_moving(now) || list_in(now) < 1 || iris_opening(now))
+      list_moving(now) || list_in(now) < 1 || iris_opening(now) || list_cover_.v > 0 || list_cover_.target > 0)
     return 0;
   if (survey || survey_vis_.v > 0 || survey_vis_.target > 0) return 0;  // (its scene keeps its own time)
   if (menu_fade_.v != menu_fade_.target || chrome.vis.v != chrome.vis.target) return 0;
@@ -913,6 +925,7 @@ bool HomeView::tick(double now, double dt) {
   if (leave_t0_ > 0 && now - leave_t0_ < leave_dur() + 0.05) moving = true;
   if (now - enter_t0_ < 0.45) moving = true;
   if (thumbs_fading(now) || list_moving(now) || list_in(now) < 1) moving = true;
+  if (list_cover_.step(dt)) moving = true;
   if (!ghosts_.empty()) {
     moving = true;
     const double last_out = clear_t0_ + kClearStagger * (ghosts_.size() - 1) + kClearRow;
@@ -932,7 +945,7 @@ bool HomeView::tick(double now, double dt) {
 
 double HomeView::next_event(double now) const {
   if (egg_ || iris_opening(now) || chrome.vis.v != chrome.vis.target || leave_t0_ > 0 || now - enter_t0_ < 0.45 || menu_fade_.v != menu_fade_.target || menu_fade_.v != (menu_ ? 1.0 : 0.0) || thumbs_fading(now) || !ghosts_.empty() ||
-      list_moving(now) || list_in(now) < 1) return 0;
+      list_moving(now) || list_in(now) < 1 || list_cover_.v != list_cover_.target) return 0;
   double t = face.next_event(now);
   if (!notice.empty()) t = std::min(t, notice_until - now);
   if (survey_shown()) {
@@ -1354,16 +1367,9 @@ void HomeView::render(Canvas& c, double now) {
       c.fill(nx, ly, pw, s, on ? p.fg : p.dim);
     }
   }
-  // at the start, the list (its title and entries) waits for its pictures, then fades in with them
-  if (const double li = list_in(now); li < 1) {
-    Rect band = r_title_;
-    for (const Rect& r : {r_list_, r_dots_, r_cont_label_}) {
-      if (r.w <= 0 || r.h <= 0) continue;
-      const int x0 = std::min(band.x, r.x), y0 = std::min(band.y, r.y);
-      band = {x0, y0, std::max(band.r(), r.r()) - x0, std::max(band.b(), r.b()) - y0};
-    }
-    c.fill(band.grow(2 * s), p.bg, 1 - li);
-  }
+  // at the start, the list (its title and entries) waits for its pictures, then fades in with them;
+  // under the Settings panel it steps out the same way (see cover_list)
+  if (const double li = std::min(list_in(now), 1 - list_cover_.v); li < 1) c.fill(list_reach(), p.bg, 1 - li);
   draw_swap(c, now);  // (the list changing look: the old one leaving, the new one rising in)
   if (menu_fade_.v > 0) {
     // it unfolds from the ···: a short fade and a 3 px drop, and leaves the same way

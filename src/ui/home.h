@@ -126,6 +126,12 @@ struct HomeView {
   // in a short window, it clears "open a file" too)
   Rect settings_anchor() const { Rect r = r_settings_; const int x1 = std::max(r.r(), r_open_.r()); r.x = std::min(r.x, r_open_.x); r.w = x1 - r.x; return r; }
   bool settings_lit = false;  // the panel it opened is showing: the line stays lit
+  // (1.4.1) the Settings panel over the list (a short or narrow window: beside the line, or wide
+  // with its picture beside it): the list steps out while it is there, instead of showing in
+  // pieces round the panel (a title cut under it, the end of a name beside it), and comes back
+  // when the panel leaves it or closes
+  void cover_list(bool on);
+  Rect list_area() const { return list_reach(); }  // the list's titles and entries (the panel's test)
   // opening a video: the home bows out (swallow = a dropped file gets eaten first)
   void leave(double now, bool swallow);
   // already gone: Cue started with a file, so the window's first picture is the film's black,
@@ -149,6 +155,8 @@ struct HomeView {
   void relayout() { layout(); }  // the words changed (another interface language)
 
  private:
+  Fade list_cover_{0, 0, 0.12, 0.16};
+  Rect list_reach() const;  // the list's titles and entries, as the list's fade-in covers them
   // the ··· menu next to Recentes: "idioma ›", "controle remoto" and "limpar recentes"; language opens automatic plus the supported catalogs
   enum : int { kOpen = 100, kDots = 101, kMenuClear = 102, kUpdate = 103, kUpdateSkip = 104, kMenuLang = 105,
                kLangOpt = 106 /* ..114: automatic, then eight languages */, kMenuPad = 115, kMenuRemote = 116, kNews = 117,

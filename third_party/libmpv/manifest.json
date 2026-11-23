@@ -6,7 +6,7 @@
   "license": "LGPL-3.0-or-later for combined distribution; individual notices retained",
   "mpv_revision": "ad5877edabdb05c0c62aad444722938d37666e2d",
   "ffmpeg_revision": "215351c",
-  "source_package": "Cue-1.4-Engine-Source.zip",
+  "source_package": "Cue-1.4.1-Engine-Source.zip",
   "source_components": 16,
   "compiler": "x86_64-w64-mingw32-gcc (GCC) 13-posix",
   "system_dll_imports": [

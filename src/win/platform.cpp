@@ -270,7 +270,7 @@ static const wchar_t* kAudioProg = L"Software\\Classes\\tinyoffice.Cue.audio";
 // chosen there gets the music icon. "Open with" can only offer Cue; Windows keeps a choice made
 // earlier (on an older version) until it is made again.
 static const wchar_t* kCapabilities = L"Software\\tinyoffice\\Cue\\Capabilities";
-static const wchar_t* kMediaTypes = L"video-audio-5";  // bumped when the registration's shape changes
+static const wchar_t* kMediaTypes = L"video-audio-6";  // bumped when the registration's shape changes
 
 bool register_open_with(std::string* err) {
 #if CUE_STORE_BUILD
@@ -302,6 +302,11 @@ bool register_open_with(std::string* err) {
   std::wstring app = L"Software\\Classes\\Applications\\Cue.exe";
   ok = ok && reg_set(HKEY_CURRENT_USER, app + L"\\shell\\open\\command", nullptr, cmd) &&
        reg_set(HKEY_CURRENT_USER, app, L"FriendlyAppName", L"Cue");
+  // (1.4.1) Cue chosen through "Open with → Choose another app → Look for another app on this PC"
+  // is this entry, not one of the two types above: it names Windows' handler too, or the files it
+  // opens lose their pictures in Explorer (a report of 21/11)
+  for (const wchar_t* kind : {L"{e357fccd-a995-4576-b01f-234630154e96}", L"{BB2E617C-0920-11D1-9A0B-00C04FC2D6C1}"})
+    ok = reg_set(HKEY_CURRENT_USER, app + L"\\ShellEx\\" + kind, nullptr, L"{9DBD2C50-62AD-11D0-B806-00C04FD706EC}") && ok;
   // Keep an existing legacy ProgID working if Windows still uses it as a default.
   // Hide its duplicate recommendation and change only our own Player registration.
   const std::wstring legacy = L"Software\\Classes\\tinyoffice.Player.video";
