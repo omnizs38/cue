@@ -49,11 +49,10 @@ DESCRIPTION = "Video and music player"
 # "transparent": Windows then uses the target-size altform-unplated icons (indexed by
 # resources.pri); a solid colour makes some surfaces ("Open with") fall back to a plate.
 TILE_BACKGROUND = "transparent"
-# (1.4.1, 22/11) Explorer asks the file type that opens a file for its thumbnail handler first; the
-# package's two types name Windows' own one, as the GitHub edition's types do (platform.cpp
-# register_open_with), or films and albums opened by Cue lose their pictures on some PCs. Declared
-# as Microsoft's own example does it (uap3:FileTypeAssociation + desktop2:ThumbnailHandler).
-WINDOWS_MEDIA_THUMBNAILS = "9DBD2C50-62AD-11D0-B806-00C04FD706EC"
+# (1.4.1, 23/11) No thumbnail handler on the package's file types: MakeAppx refuses one that is
+# not a COM class the package itself declares (error C00CE1A2, keyref ComServer_SurrogateServer_
+# Class_IdKey), and Windows' own handler is not the package's. A first 1.4.1 named it; the author's
+# MakeAppx refused the manifest. The file types are declared as in 1.4 again.
 MIN_VERSION = "10.0.17763.0"   # Windows 10 1809
 MAX_TESTED = "10.0.26100.0"    # Windows 11 24H2
 LANGUAGES = ["en-us", "pt-br"]  # the Store listings; the interface itself picks among its 8 languages
@@ -217,10 +216,9 @@ def manifest(version, video, audio, port_lo, port_hi, test=False):
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-  xmlns:uap3="http://schemas.microsoft.com/appx/manifest/uap/windows10/3"
   xmlns:desktop2="http://schemas.microsoft.com/appx/manifest/desktop/windows10/2"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap uap3 desktop2 rescap">
+  IgnorableNamespaces="uap desktop2 rescap">
   <Identity Name={quoteattr(ident["name"])} Publisher={quoteattr(ident["publisher"])} Version="{version}" ProcessorArchitecture="x64"/>
   <Properties>
     <DisplayName>{escape(ident["display_name"])}</DisplayName>
@@ -241,24 +239,22 @@ def manifest(version, video, audio, port_lo, port_hi, test=False):
       </uap:VisualElements>
       <Extensions>
         <uap:Extension Category="windows.fileTypeAssociation">
-          <uap3:FileTypeAssociation Name="video">
+          <uap:FileTypeAssociation Name="video">
             <uap:DisplayName>Cue video</uap:DisplayName>
             <uap:Logo>Assets\\FileVideo.png</uap:Logo>
             <uap:SupportedFileTypes>
 {types(video)}
             </uap:SupportedFileTypes>
-            <desktop2:ThumbnailHandler Clsid="{WINDOWS_MEDIA_THUMBNAILS}"/>
-          </uap3:FileTypeAssociation>
+          </uap:FileTypeAssociation>
         </uap:Extension>
         <uap:Extension Category="windows.fileTypeAssociation">
-          <uap3:FileTypeAssociation Name="audio">
+          <uap:FileTypeAssociation Name="audio">
             <uap:DisplayName>Cue audio</uap:DisplayName>
             <uap:Logo>Assets\\FileAudio.png</uap:Logo>
             <uap:SupportedFileTypes>
 {types(audio)}
             </uap:SupportedFileTypes>
-            <desktop2:ThumbnailHandler Clsid="{WINDOWS_MEDIA_THUMBNAILS}"/>
-          </uap3:FileTypeAssociation>
+          </uap:FileTypeAssociation>
         </uap:Extension>
       </Extensions>
     </Application>
