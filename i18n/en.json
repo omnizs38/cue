@@ -9,33 +9,8 @@
   "home.seen": "watched",
   "home.show_pictures": "show pictures",
   "home.recents_empty": "nothing here yet",
-  "home.episodes_n": {
-    "one": "{n} episode",
-    "other": "{n} episodes"
-  },
   "home.left": "{time} left",
-  "home.kind_video": "video",
-  "home.kind_audio": "audio",
-  "home.today": "today",
-  "home.yesterday": "yesterday",
-  "home.days_ago": {
-    "one": "{n} day ago",
-    "other": "{n} days ago"
-  },
-  "home.weeks_ago": {
-    "one": "{n} week ago",
-    "other": "{n} weeks ago"
-  },
-  "home.months_ago": {
-    "one": "{n} month ago",
-    "other": "{n} months ago"
-  },
-  "home.years_ago": {
-    "one": "{n} year ago",
-    "other": "{n} years ago"
-  },
   "home.chapter_of": "chapter {n} of {total}",
-  "home.kind_book": "audiobook",
   "home.minutes": "{m} min",
   "home.hours_minutes": "{h} h {m} min",
   "home.clear_recents": "clear recent",
@@ -317,7 +292,6 @@
   "remote.next_in": "in {time}",
   "remote.timer_stops": "the timer stops here",
   "remote.tap_continue": "tap to keep watching",
-  "remote.ends": "ends {time}",
   "remote.volume": "volume",
   "remote.mode_time": "time",
   "remote.folders": "folders",
@@ -361,12 +335,6 @@
   "news.chapters_line": "marked on the timeline. jump with page up and page down.",
   "news.light_title": "lighter and faster",
   "news.light_line": "opens faster and rests when nothing is happening.",
-  "news.remote_title": "up next",
-  "news.remote_line": "a queue of videos and music, from files or whole folders. open it from the control bar or your phone, drag to reorder and keep watching.",
-  "news.fixes_line": "NVIDIA RTX super resolution, smooth motion on films, settings with examples, songs that open faster and fewer disk writes.",
-  "news.fixes_title": "fixes and improvements",
-  "news.audio_line": "Russian, German and Japanese, on the computer and phone.",
-  "news.audio_title": "three new languages",
   "player.up_next_manual": "Up next",
   "player.skip_recap": "skip recap",
   "player.skip_opening": "skip intro",
@@ -448,14 +416,6 @@
   "keys.pgup": "pgup",
   "keys.pgdn": "pgdn",
   "keys.enter": "enter",
-  "news.mono_title": "black & white",
-  "news.mono_line": "the spectrum and the light in black and white, the cover still in color. choose it in settings (···); color stays the default.",
-  "news.keys_title": "keyboard shortcuts",
-  "news.keys_line": "press ? to see them all. pointing at a button shows its key, too.",
-  "news.mini_title": "mini player",
-  "news.mini_line": "a video or a song in a small window you can put anywhere, pinned above the rest if you like. with music, the cover flips at every track. use the button on the bar, right-click a video, or press ctrl+m.",
-  "news.bar_title": "controls that fit",
-  "news.bar_line": "in any window, even a small or vertical one, the bar keeps what matters and tucks the rest into ···. with music, the cover sits in the middle and the list opens beside it.",
   "music.up_next": "up next · {name}",
   "music.tracks": {
     "one": "{n} track",

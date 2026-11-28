@@ -318,7 +318,7 @@ int main() {
     // the flight in three steps: pixels where it is, the size changed out of sight, then landing
     assert(app.find("if (!start_mini_fx(true)) mini_switch(true);") != std::string::npos);
     assert(app.find("if (!animate || !start_mini_fx(false)) { end_mini_fx(); mini_switch(false); }") != std::string::npos);
-    assert(app.find("    set_cloak(true);\n    mini_fx_.cloaked = true;\n    geom_.on = false;\n    mini_switch(mini_fx_.entering);") != std::string::npos);
+    assert(app.find("    set_cloak(true);\n    geom_.on = false;\n    mini_switch(mini_fx_.entering);") != std::string::npos);
     assert(app.find("SetWindowPos(hwnd_, nullptr, cx - w / 2, cy - h / 2, w, h") != std::string::npos);
     assert(app.find("SetWindowPlacement(hwnd_, &mini_restore_);  // its old place and size") != std::string::npos);
     // ...out of sight (cloaked) while it changes size: the last big frame never shows squeezed

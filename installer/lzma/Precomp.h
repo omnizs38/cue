@@ -120,8 +120,6 @@ Z7_DIAGNOSTIC_IGNORE_END_RESERVED_MACRO_IDENTIFIER
 #endif // _MBCS
 #endif // _WINDOWS_
 
-// #include "7zWindows.h"
-
 #endif // _WIN32
 
 #endif

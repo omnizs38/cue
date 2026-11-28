@@ -48,18 +48,6 @@ uint32_t seed_of(const std::string& s) {
   return v;
 }
 
-uint32_t average(const HomeThumb& t) {
-  if (t.px.empty()) return 0xFF101010u;
-  uint64_t r = 0, g = 0, b = 0;
-  // every fourth pixel is plenty for a tint
-  size_t n = 0;
-  for (size_t i = 0; i < t.px.size(); i += 4, ++n) {
-    r += (t.px[i] >> 16) & 255; g += (t.px[i] >> 8) & 255; b += t.px[i] & 255;
-  }
-  n = std::max<size_t>(1, n);
-  return 0xFF000000u | (uint32_t)(r / n) << 16 | (uint32_t)(g / n) << 8 | (uint32_t)(b / n);
-}
-
 void resample(const uint32_t* src, int sw, int sh, double sx, double sy, double cw, double ch,
               uint32_t* dst, int stride, int w, int h) {
   if (!src || sw <= 0 || sh <= 0 || w <= 0 || h <= 0 || cw <= 0 || ch <= 0) return;

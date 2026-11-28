@@ -35,7 +35,7 @@ struct HomeRow {
   double thumb_at = -100;  // when the picture arrived (it fades in over the stand-in)
 };
 
-enum class HomeAct { None, OpenDialog, OpenFolder, OpenRecent, ClearRecents, Covers, EggSeen, WinMin, WinMax, WinClose, WinPin, Update, SkipUpdate,
+enum class HomeAct { None, OpenDialog, OpenFolder, OpenRecent, ClearRecents, EggSeen, WinMin, WinMax, WinClose, WinPin, Update, SkipUpdate,
                      Language, Remote, News, NewsClose, Survey, SurveyClose, Settings };  // Language: index -1 automatic, else i18n::Lang
 struct HomeAction { HomeAct a = HomeAct::None; int index = -1; };
 
@@ -160,7 +160,7 @@ struct HomeView {
   // the ··· menu next to Recentes: "idioma ›", "controle remoto" and "limpar recentes"; language opens automatic plus the supported catalogs
   enum : int { kOpen = 100, kDots = 101, kMenuClear = 102, kUpdate = 103, kUpdateSkip = 104, kMenuLang = 105,
                kLangOpt = 106 /* ..114: automatic, then eight languages */, kMenuPad = 115, kMenuRemote = 116, kNews = 117,
-               kNewsClose = 118, kMenuFolder=119, kSurveyGo = 120, kSurveyNo = 121, kSurveyPad = 122, kMenuCovers = 123, kSettings = 124, kHitIds = 25 };
+               kNewsClose = 118, kMenuFolder=119, kSurveyGo = 120, kSurveyNo = 121, kSurveyPad = 122, kSettings = 124, kHitIds = 25 };
   int hover_ = -1, focus_ = -1;
   bool kb_ = false, menu_ = false, menu_lang_ = false, drag_ = false;
   std::vector<int> menu_ids_;

@@ -12,7 +12,7 @@ are taken. Hangul is left out (not one of Cue's interface languages; it would do
 
 Run: python3 tools/gen_fallback_glyphs.py   (needs freetype-py and fontTools on the dev machine)
 """
-import os, re, sys
+import os, re
 import freetype
 from fontTools.ttLib import TTFont
 

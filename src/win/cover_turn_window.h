@@ -44,7 +44,6 @@ class CoverTurnWindow {
   bool edge() const;     // the old cover reached the edge: the next song can open
   bool landed() const;   // the next cover is flat
   bool done() const;     // faded out (or ended): abort() just tidies up
-  double angle() const;  // the turn now (radians, about the upright axis)
   // how much of the shadow the window draws now (0..1): the engine draws the rest (cov_hide)
   double shadow() const;
   bool shadow_out() const;  // released, and its shadow gone: the engine can show the cover

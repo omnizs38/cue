@@ -143,7 +143,6 @@ void PlayView::resize(int w, int h, double s) {
   if (first) { style_mix_ = in.controls_free ? 1 : 0; style_motion_.snap(style_mix_); }
   int ow = w_, oh = h_;
   const double old_s = s_;
-  double ox = px_.x, oy = py_.x;
   style_y_ = -1;cc_drag_=false;
   panel_fit_ = 0;  // (decided again for the new size)
   w_ = w; h_ = h; s_ = std::max(1.0, s);
@@ -151,16 +150,9 @@ void PlayView::resize(int w, int h, double s) {
   layout_dock();
   double x, y;
   place_target(x, y);
-  if (glide_ && !first && !dragging_dock_ && !reduce_motion() && ow > 0 && oh > 0) {
-    // fullscreen in/out: the dock starts where it was (relative to the old frame) and travels
-    px_.snap(ox * w / ow);
-    py_.snap(oy * h / oh);
-    px_.target = x;
-    py_.target = y;
-  } else if (!first && w == ow && h == oh) {
-    if (!dragging_dock_) { px_.target = x; py_.target = y; }  // same size (frame refresh): keep any glide going
+  if (!first && w == ow && h == oh) {
+    if (!dragging_dock_) { px_.target = x; py_.target = y; }  // same size (frame refresh)
   } else if (first || !dragging_dock_) { px_.snap(x); py_.snap(y); }
-  if (first || w != ow || h != oh) glide_ = false;
   dock_dirty_ = panel_dirty_ = true;
   // pictures kept between frames that are drawn in the interface's scale: drawn again in the new
   // one at once (the "skip intro" plate kept its old size in fullscreen until the pointer touched it)
@@ -4804,7 +4796,7 @@ void PlayView::tip_size(int& W, int& H) const {
 
 // ── public behaviour ────────────────────────────────────────────────
 void PlayView::begin_viewport_transition(double now, bool instant) {
-  viewport_transition_=true; viewport_vis_.target=0; glide_=false;
+  viewport_transition_=true; viewport_vis_.target=0;
   pending_click_=press_=P_NONE; second_click_=false; last_click_t_=-10;
   close_panel(); pvis_.v=0; tip_on_=false; tipvis_.v=tipvis_.target=0;
   // an open menu leaves with the controls on this very frame, not a frame later over the snap
@@ -6510,7 +6502,7 @@ void PlayView::mouse_up(int x, int y, double now) {
   if(panel_==Panel::Queue) {
     Rect r=panel_rect();queue_event(queue_view_.up(x-r.x,y-r.y),now);panel_dirty_=true;return;
   }
-  if (win_drag_) { win_drag_ = false; act(PA::WinDragEnd); }
+  win_drag_ = false;
   if (press_ == P_SUB || press_ == P_GRIP) press_ = P_NONE;  // a click on the subtitle (or the mini bar's background) never pauses
   if (press_ != P_NONE) {
     // The first click already responded. A double click explicitly restores

@@ -175,7 +175,7 @@ class App {
   // picture's rects on screen. Without a ghost, the plain flight (out of sight while it changes
   // size, then a spring into the corner)
   struct MiniFx {
-    bool on = false, cloaked = false, entering = false, ghost = false; int stage = 0; double t0 = 0, rise = 0.14, dur = 0.45, hold = 0.08; RECT to{}, from{}, gto{};
+    bool on = false, entering = false, ghost = false; int stage = 0; double t0 = 0, rise = 0.14, dur = 0.45, hold = 0.08; RECT to{}, from{}, gto{};
     RECT here{};       // (a song on its way in) where the full player was: the still layer's place at the start
     double cell0 = 0;  // its pixels' size on screen then (the live picture's pixels start from it)
     bool still_tried = false;   // the engine asked for its picture of the window (a frame or two before the switch)
@@ -476,7 +476,6 @@ class App {
   void next_home_shot();
   void on_home_shot(ThumbMsg* m);
   void stop_home_shots();
-  std::string observed_path_;
   bool has_background_box_ = false;
   void save_state();   // debounced: sliders and drags do not write on every step
   void save_now(bool synchronous = false);

@@ -9,33 +9,8 @@
   "home.seen": "visto",
   "home.show_pictures": "mostrar imágenes",
   "home.recents_empty": "aún no hay nada",
-  "home.episodes_n": {
-    "one": "{n} episodio",
-    "other": "{n} episodios"
-  },
   "home.left": "quedan {time}",
-  "home.kind_video": "vídeo",
-  "home.kind_audio": "audio",
-  "home.today": "hoy",
-  "home.yesterday": "ayer",
-  "home.days_ago": {
-    "one": "hace {n} día",
-    "other": "hace {n} días"
-  },
-  "home.weeks_ago": {
-    "one": "hace {n} semana",
-    "other": "hace {n} semanas"
-  },
-  "home.months_ago": {
-    "one": "hace {n} mes",
-    "other": "hace {n} meses"
-  },
-  "home.years_ago": {
-    "one": "hace {n} año",
-    "other": "hace {n} años"
-  },
   "home.chapter_of": "capítulo {n} de {total}",
-  "home.kind_book": "audiolibro",
   "home.minutes": "{m} min",
   "home.hours_minutes": "{h} h {m} min",
   "home.clear_recents": "borrar recientes",
@@ -317,7 +292,6 @@
   "remote.next_in": "en {time}",
   "remote.timer_stops": "el temporizador pausa aquí",
   "remote.tap_continue": "toca para seguir viendo",
-  "remote.ends": "termina {time}",
   "remote.volume": "volumen",
   "remote.mode_time": "tiempo",
   "remote.folders": "carpetas",
@@ -361,12 +335,6 @@
   "news.chapters_line": "marcados en la línea de tiempo. salta con repág y avpág.",
   "news.light_title": "más ligero y más rápido",
   "news.light_line": "abre más rápido y descansa cuando no pasa nada.",
-  "news.remote_title": "a continuación",
-  "news.remote_line": "una cola de videos y música, con archivos o carpetas enteras. ábrela desde la barra de controles o el móvil, arrastra para reordenar y sigue viendo.",
-  "news.fixes_line": "superresolución RTX de NVIDIA, movimiento suave en películas, ajustes con ejemplos, canciones que abren más rápido y menos escrituras en disco.",
-  "news.fixes_title": "correcciones y mejoras",
-  "news.audio_line": "ruso, alemán y japonés, en el ordenador y el móvil.",
-  "news.audio_title": "tres nuevos idiomas",
   "player.up_next_manual": "A continuación",
   "player.skip_recap": "omitir resumen",
   "player.skip_opening": "omitir intro",
@@ -448,14 +416,6 @@
   "keys.pgup": "repág",
   "keys.pgdn": "avpág",
   "keys.enter": "intro",
-  "news.mono_title": "blanco y negro",
-  "news.mono_line": "el espectro y la luz en blanco y negro, con la portada aún en color. elígelo en ajustes (···); el color sigue siendo el predeterminado.",
-  "news.keys_title": "atajos de teclado",
-  "news.keys_line": "pulsa ? para verlos todos. al señalar un botón, también muestra su tecla.",
-  "news.mini_title": "minirreproductor",
-  "news.mini_line": "el video o la canción en una ventana pequeña que va donde quieras, fija encima de las demás si lo prefieres. con música, la portada gira en cada pista. el botón de la barra, clic derecho en el video o ctrl+m.",
-  "news.bar_title": "controles que se adaptan",
-  "news.bar_line": "en cualquier ventana, incluso pequeña o vertical, la barra muestra lo esencial y guarda lo demás en ···. con música, la portada queda en el centro y la lista se abre al lado.",
   "music.up_next": "a continuación · {name}",
   "music.tracks": {
     "one": "{n} pista",

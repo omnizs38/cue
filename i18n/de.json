@@ -8,33 +8,8 @@
   "home.seen": "gesehen",
   "home.show_pictures": "Bilder zeigen",
   "home.recents_empty": "noch nichts hier",
-  "home.episodes_n": {
-    "one": "{n} Folge",
-    "other": "{n} Folgen"
-  },
   "home.left": "noch {time}",
-  "home.kind_video": "Video",
-  "home.kind_audio": "Audio",
-  "home.today": "heute",
-  "home.yesterday": "gestern",
-  "home.days_ago": {
-    "one": "vor {n} Tag",
-    "other": "vor {n} Tagen"
-  },
-  "home.weeks_ago": {
-    "one": "vor {n} Woche",
-    "other": "vor {n} Wochen"
-  },
-  "home.months_ago": {
-    "one": "vor {n} Monat",
-    "other": "vor {n} Monaten"
-  },
-  "home.years_ago": {
-    "one": "vor {n} Jahr",
-    "other": "vor {n} Jahren"
-  },
   "home.chapter_of": "Kapitel {n} von {total}",
-  "home.kind_book": "Hörbuch",
   "home.minutes": "{m} Min.",
   "home.hours_minutes": "{h} Std. {m} Min.",
   "home.clear_recents": "Verlauf leeren",
@@ -316,7 +291,6 @@
   "remote.next_in": "in {time}",
   "remote.timer_stops": "hier endet der Timer",
   "remote.tap_continue": "tippen zum Weiterschauen",
-  "remote.ends": "Ende {time}",
   "remote.volume": "Lautstärke",
   "remote.mode_time": "Zeit",
   "remote.folders": "Ordner",
@@ -360,12 +334,6 @@
   "news.chapters_line": "auf der Zeitleiste markiert. Springen mit Bild↑ und Bild↓.",
   "news.light_title": "leichter und schneller",
   "news.light_line": "öffnet schneller und ruht, wenn nichts passiert.",
-  "news.remote_title": "Als Nächstes",
-  "news.remote_line": "eine Warteschlange für Videos und Musik, aus Dateien oder ganzen Ordnern. über die Steuerleiste oder das Handy öffnen, per Ziehen ordnen und weiterschauen.",
-  "news.fixes_line": "NVIDIA RTX Super Resolution, flüssige Bewegung bei Filmen, Einstellungen mit Beispielen, Musik öffnet schneller und weniger Schreibzugriffe.",
-  "news.fixes_title": "Feinschliff",
-  "news.audio_line": "Russisch, Deutsch und Japanisch, auch auf dem Handy.",
-  "news.audio_title": "drei neue Sprachen",
   "player.up_next_manual": "Als Nächstes",
   "player.skip_recap": "Rückblick überspringen",
   "player.skip_opening": "Intro überspringen",
@@ -447,14 +415,6 @@
   "keys.pgup": "bild↑",
   "keys.pgdn": "bild↓",
   "keys.enter": "eingabe",
-  "news.mono_title": "Schwarzweiß",
-  "news.mono_line": "Spektrum und Licht in Schwarzweiß, das Cover bleibt farbig. Wählbar in den Einstellungen (···); Farbe bleibt der Standard.",
-  "news.keys_title": "Tastenkürzel",
-  "news.keys_line": "Drück ?, um alle zu sehen. Ein Button unter dem Zeiger zeigt auch seine Taste.",
-  "news.mini_title": "Mini-Player",
-  "news.mini_line": "Video oder Musik in einem kleinen Fenster, wo Sie wollen, auf Wunsch über allen anderen angeheftet. Bei Musik dreht sich das Cover bei jedem Titel. die Taste in der Leiste, Rechtsklick aufs Video oder Strg+M.",
-  "news.bar_title": "Steuerung, die sich anpasst",
-  "news.bar_line": "in jedem Fenster, auch klein oder hochkant, zeigt die Leiste das Wichtige, der Rest wartet unter ···. Bei Musik steht das Cover in der Mitte, die Liste öffnet sich daneben.",
   "music.up_next": "als Nächstes · {name}",
   "music.tracks": {
     "one": "{n} Titel",

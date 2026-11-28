@@ -4,7 +4,7 @@
 # (value, chevron, switch...), the vertical centre of words and icons in their row, and the air
 # around the rules and at the panel's top and bottom.  Prints the inconsistencies.
 #   python3 tools/audit_menus.py out [--detail]
-import sys, collections, statistics
+import sys, collections
 
 out = sys.argv[1] if len(sys.argv) > 1 else "out"
 panels = collections.OrderedDict()
@@ -53,16 +53,15 @@ for key, p in panels.items():
         texts = [e for e in r["ink"] if e["kind"] in ("text", "mask")]
         icons = [e for e in r["ink"] if e["kind"] in ICONISH]
         # words centred: the capitals' middle (box top + 2 + 3.5 art px) on the row's middle
-        if k not in ("Hint",) or True:
-            for e in texts:
-                if e["kind"] != "text":
-                    continue
-                cap_mid = e["ay"] + 5.5 * s
-                d = cap_mid - rc
-                if k == "Hint":
-                    continue  # section names sit on their control, by design
-                if abs(d) > 0.5 * s + 0.01:
-                    note("words off centre in their row", key, f"{k} '{e['what'][:24]}' {d:+.1f}px ({d/s:+.2f} art) row h {r['h']}")
+        for e in texts:
+            if e["kind"] != "text":
+                continue
+            cap_mid = e["ay"] + 5.5 * s
+            d = cap_mid - rc
+            if k == "Hint":
+                continue  # section names sit on their control, by design
+            if abs(d) > 0.5 * s + 0.01:
+                note("words off centre in their row", key, f"{k} '{e['what'][:24]}' {d:+.1f}px ({d/s:+.2f} art) row h {r['h']}")
         for e in icons:
             if k in ("Tools", "Segmented", "Chips", "SpeedBar", "Picker", "Stepper", "Links"):
                 continue

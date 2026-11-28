@@ -8,28 +8,8 @@
   "home.seen": "視聴済み",
   "home.show_pictures": "画像を表示",
   "home.recents_empty": "まだありません",
-  "home.episodes_n": {
-    "other": "{n} 話"
-  },
   "home.left": "残り {time}",
-  "home.kind_video": "動画",
-  "home.kind_audio": "音声",
-  "home.today": "今日",
-  "home.yesterday": "昨日",
-  "home.days_ago": {
-    "other": "{n} 日前"
-  },
-  "home.weeks_ago": {
-    "other": "{n} 週間前"
-  },
-  "home.months_ago": {
-    "other": "{n} か月前"
-  },
-  "home.years_ago": {
-    "other": "{n} 年前"
-  },
   "home.chapter_of": "チャプター {n} / {total}",
-  "home.kind_book": "オーディオブック",
   "home.minutes": "{m} 分",
   "home.hours_minutes": "{h} 時間 {m} 分",
   "home.clear_recents": "履歴を消去",
@@ -310,7 +290,6 @@
   "remote.next_in": "あと {time}",
   "remote.timer_stops": "ここでタイマーが止まります",
   "remote.tap_continue": "タップして続ける",
-  "remote.ends": "終了 {time}",
   "remote.volume": "音量",
   "remote.mode_time": "時間",
   "remote.folders": "フォルダー",
@@ -354,12 +333,6 @@
   "news.chapters_line": "タイムラインに表示。pgup と pgdn で移動できます。",
   "news.light_title": "軽く、速く",
   "news.light_line": "すばやく開き、何もしていないときは休みます。",
-  "news.remote_title": "次の再生",
-  "news.remote_line": "動画と音楽のキュー。ファイルやフォルダーごと追加できます。コントロールバーやスマホから開いて、ドラッグで並べ替え。",
-  "news.fixes_line": "NVIDIA RTX ビデオ超解像、映画のなめらかな動き、例つきの設定、音楽の高速な読み込み、ディスク書き込みの削減。",
-  "news.fixes_title": "使い心地の改善",
-  "news.audio_line": "ロシア語、ドイツ語、日本語に対応。リモコンでも。",
-  "news.audio_title": "新たに 3 言語",
   "player.up_next_manual": "次の再生",
   "player.skip_recap": "あらすじをスキップ",
   "player.skip_opening": "オープニングをスキップ",
@@ -441,14 +414,6 @@
   "keys.pgup": "pgup",
   "keys.pgdn": "pgdn",
   "keys.enter": "enter",
-  "news.mono_title": "白黒",
-  "news.mono_line": "スペクトラムと光を白黒に。ジャケットはカラーのままです。設定 (···) で選べます。標準はカラーのままです。",
-  "news.keys_title": "キーボードショートカット",
-  "news.keys_line": "? を押すとすべて表示されます。ボタンを指すと、そのキーも表示されます。",
-  "news.mini_title": "ミニプレーヤー",
-  "news.mini_line": "動画や音楽を小さなウィンドウで好きな場所に。ほかのウィンドウの上に固定もできます。音楽ではトラックごとにジャケットがめくれます。バーのボタン、動画の右クリック、または ctrl+m。",
-  "news.bar_title": "ウィンドウに合わせるコントロール",
-  "news.bar_line": "小さな、または縦長のウィンドウでも、バーには大事なものだけ。残りは ··· に。音楽ではジャケットが中央に、リストはその横に開きます。",
   "music.up_next": "次に再生 · {name}",
   "music.tracks": {
     "other": "{n} 曲"

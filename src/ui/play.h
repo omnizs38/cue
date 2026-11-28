@@ -16,7 +16,6 @@
 #include "queue_view.h"
 #include "chrome.h"
 #include "gfx.h"
-#include "scene_contrast.h"
 #include "blur_cloud.h"
 
 struct PlayInput {
@@ -52,8 +51,6 @@ struct PlayInput {
   double speed = 1.0;
   int ui_scale = 2;         // -1 small, 2 medium (default), 0 large, 1 larger
   bool controls_free = false;
-  SceneGrid scene;
-  uint64_t scene_revision = 0;
   bool ambient = true;
   double ambient_strength = 0.15;  // 0.05..1, starts soft
   Rgb accent{255, 255, 255};  // atmosphere of the film (already smoothed); white when unknown
@@ -121,7 +118,7 @@ enum class PA {
   TogglePause, SeekRel, SeekAbs, SeekAbsExact, Volume, ToggleMute, Fullscreen, SelectSub, SelectAudio, AudioMix,
   AddSubFile, OpenFile, CloseVideo, Style, StyleLive, StyleDefault, SubDelay, SubVisible, Placement, SubLift,
   SubDim,  // v: 0..1, how much of the subtitle shows (a panel over it dims it)
-  WinMin, WinMax, WinClose, WinPin, WinDragBegin, WinDragEnd, Preview, Speed, SaveFrame, UiScale, Ambient, AmbientStrength,
+  WinMin, WinMax, WinClose, WinPin, WinDragBegin, Preview, Speed, SaveFrame, UiScale, Ambient, AmbientStrength,
   OpenFrameFolder, OpenLinkedIn, OpenGitHub, OpenEmail, OpenLicenses, FileInfo, ControlsFree, Update, Loop, SubEdit,
   Language,  // v: -1 automatic, else i18n::Lang
   NextEpisode, PreviousInQueue, CancelNext, QueueAdd, QueueFolder, QueuePlay, QueueRemove, QueueMove, QueueReorder, QueueClear,
@@ -180,7 +177,6 @@ class PlayView {
   void begin_viewport_transition(double now, bool instant = false);
   void end_viewport_transition(double now);
   bool viewport_hidden() const { return viewport_transition_ && viewport_vis_.v <= 0; }
-  void glide_next_resize() { glide_ = true; }  // the next resize animates the dock instead of jumping
   bool tick(double now, double dt);
   std::vector<PlayAction> take_actions() { auto a = std::move(acts_); acts_.clear(); return a; }
 
@@ -428,7 +424,6 @@ class PlayView {
   enum { SF_LOOP, SF_SHUFFLE, SF_CC, SF_MUTE, SF_COUNT };
   std::array<SwitchFx, SF_COUNT> sfx_{};
   bool step_switches(double dt);
-  int switch_of(int id) const { return id == B_LOOP ? SF_LOOP : id == B_SHUFFLE ? SF_SHUFFLE : id == B_CC ? SF_CC : id == B_VOL ? SF_MUTE : -1; }
   bool remaining_ = false;
   // the speed's number rolls when it changes (16/11): the old one leaves up (or down, going
   // slower), the new one comes from the other side; whole pixels of art, 0.18 s
@@ -535,7 +530,6 @@ private:
   double slot_alpha(int id) const;
   bool in_bar(int id) const { return id >= 0 && id < B_COUNT && slots_[id].shown; }
   bool overflowed(int id) const { return (overflow_ >> id) & 1u; }
-  bool glide_ = false;
   bool viewport_transition_ = false;
   Fade viewport_vis_{1,1,.22,.11};  // in: with the rise spring; out: quick, before the zoom gets going
   double tl_near_ = 0;             // 0..1: the cursor approaches the timeline           // narrow window (portrait video): the dock recomposes

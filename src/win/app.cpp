@@ -74,7 +74,7 @@ void frame_saved_sound() {
   PlaySoundA(wav.data(), nullptr, SND_MEMORY | SND_ASYNC | SND_NODEFAULT | SND_NOSTOP);
 }
 enum Obs : uint64_t {
-  O_PAUSE = 1, O_TIME, O_DUR, O_VOL, O_MUTE, O_TRACKS, O_SID, O_AID, O_SUBDELAY, O_SUBVIS, O_IDLE, O_PATH, O_SUBTEXT, O_SPEED,
+  O_PAUSE = 1, O_TIME, O_DUR, O_VOL, O_MUTE, O_TRACKS, O_SID, O_AID, O_SUBDELAY, O_SUBVIS, O_IDLE, O_SUBTEXT, O_SPEED,
   O_VIDEO_PARAMS, O_HWDEC, O_EOF, O_OSDW, O_OSDH, O_CHAPTERS, O_AO, O_AUDIO_DEVICES
 };
 constexpr uint64_t kReplySeek = 100, kReplyOverlay = 1000, kReplyOverlayRemove = 2000;  // +layer (frames saved: 1 << 45 + n)
@@ -819,7 +819,6 @@ bool App::start_engine() {
   mpv_.observe("sub-delay", MPV_FORMAT_DOUBLE, O_SUBDELAY);
   mpv_.observe("sub-visibility", MPV_FORMAT_FLAG, O_SUBVIS);
   mpv_.observe("idle-active", MPV_FORMAT_FLAG, O_IDLE);
-  mpv_.observe("path", MPV_FORMAT_STRING, O_PATH);
   mpv_.observe("sub-text", MPV_FORMAT_STRING, O_SUBTEXT);
   mpv_.observe("speed", MPV_FORMAT_DOUBLE, O_SPEED);
   mpv_.observe("hwdec-current", MPV_FORMAT_STRING, O_HWDEC);
@@ -1195,7 +1194,6 @@ bool App::step_mini_fx(double t) {
       mini_fx_.cell0 = snap_px(0.6, ch_);
       if (ghost_.begin(inst_, hwnd_, from, room ? still_.hwnd() : nullptr)) {
         set_cloak(true);
-        mini_fx_.cloaked = true;
         mini_fx_.ghost = true;
         geom_.on = false;
         mini_switch(mini_fx_.entering);
@@ -1226,7 +1224,6 @@ bool App::step_mini_fx(double t) {
     // out of sight for 80 ms while the window changes size: the engine draws at the new size
     // (two or three frames, even in 4K) before anyone sees it
     set_cloak(true);
-    mini_fx_.cloaked = true;
     geom_.on = false;
     mini_switch(mini_fx_.entering);
     set_snap(0.12, snap_px(0.6, ch_), 0.0);
@@ -1237,7 +1234,6 @@ bool App::step_mini_fx(double t) {
   if (mini_fx_.stage == 1) {
     if (t - mini_fx_.t0 < mini_fx_.hold) return true;
     set_cloak(false);
-    mini_fx_.cloaked = false;
     mini_fx_.stage = 2;
     mini_fx_.t0 = t;
     if (mini_fx_.entering) {  // into the corner, on a spring, only moving (its size is already right)
@@ -1291,7 +1287,6 @@ bool App::step_mini_fx(double t) {
       ghost_.place(mini_fx_.gto);
       end_snap();
       set_cloak(false);  // the window shows where the picture is; the picture goes next frame
-      mini_fx_.cloaked = false;
       mini_fx_.stage = 3;
     }
     return true;
@@ -2142,7 +2137,6 @@ void App::on_property(uint64_t id, const mpv_event_property* p) {
       media_idle_ = flag(false); // decide after the event batch, including END_FILE/EOF
 
       break;
-    case O_PATH: observed_path_ = str(); break;
     case O_EOF: {
       bool e = flag(false);
       if (e && !eof_ && loaded_) {
@@ -4249,7 +4243,6 @@ void App::open(std::string path, std::vector<std::string> subs) {
   song_watch_until_ = play_.in.audio_only ? open_started_ + 6.0 : -1;
   song_slowest_ = 0;
   trace("open requested");
-  observed_path_.clear();
   pending_subs_ = std::move(subs);
   clear_audio_mix();
   mpv_.cmd({"loadfile", path, "replace"});
@@ -5031,7 +5024,6 @@ void App::run_actions() {
       case PA::WinMax: toggle_maximize(); break;
       case PA::WinClose: PostMessageW(hwnd_, WM_CLOSE, 0, 0); break;
       case PA::WinDragBegin: begin_window_drag(); break;
-      case PA::WinDragEnd: break;
       case PA::Preview: if (!preview_.failed) thumb_request(a.v); break;
       case PA::Speed:
         mpv_.set_double_async("speed", a.v);  // pitch stays natural (audio-pitch-correction)
@@ -5932,7 +5924,6 @@ void App::key(const std::string& k, bool shift, bool ctrl) {
     if (a.a == HomeAct::Update) start_update();
     if (a.a == HomeAct::Language) set_language_pref(a.index);
     if (a.a == HomeAct::Remote) open_remote_scene();
-    if (a.a == HomeAct::Covers) set_home_covers(a.index == 1);
     if (a.a == HomeAct::News) show_news(true);
     if (a.a == HomeAct::NewsClose) close_news_line();
     if (a.a == HomeAct::Survey || a.a == HomeAct::SurveyClose) answer_survey(a.a == HomeAct::Survey);
@@ -7139,7 +7130,6 @@ void App::reset_atmosphere(bool keep_music_light) {
   accent_k_target_ = 0;
   play_.in.accent = accent_target_;
   play_.in.accent_k = 0;
-  play_.in.scene = {}; ++play_.in.scene_revision;
   accent_want_ = -1;
   accent_req_t_ = -10;
   accent_media_t_ = -1;
@@ -8656,7 +8646,6 @@ LRESULT App::handle(UINT m, WPARAM w, LPARAM l) {
         else if (a.a == HomeAct::Update) start_update();
         else if (a.a == HomeAct::Language) set_language_pref(a.index);
         else if (a.a == HomeAct::Remote) open_remote_scene();
-        else if (a.a == HomeAct::Covers) set_home_covers(a.index == 1);
         else if (a.a == HomeAct::News) show_news(true);
         else if (a.a == HomeAct::NewsClose) close_news_line();
         else if (a.a == HomeAct::Survey || a.a == HomeAct::SurveyClose) answer_survey(a.a == HomeAct::Survey);

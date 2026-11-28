@@ -9,28 +9,8 @@
   "home.seen": "已看完",
   "home.show_pictures": "显示图片",
   "home.recents_empty": "这里还没有内容",
-  "home.episodes_n": {
-    "other": "{n} 集"
-  },
   "home.left": "剩余 {time}",
-  "home.kind_video": "视频",
-  "home.kind_audio": "音频",
-  "home.today": "今天",
-  "home.yesterday": "昨天",
-  "home.days_ago": {
-    "other": "{n} 天前"
-  },
-  "home.weeks_ago": {
-    "other": "{n} 周前"
-  },
-  "home.months_ago": {
-    "other": "{n} 个月前"
-  },
-  "home.years_ago": {
-    "other": "{n} 年前"
-  },
   "home.chapter_of": "第 {n} 章，共 {total} 章",
-  "home.kind_book": "有声书",
   "home.minutes": "{m} 分钟",
   "home.hours_minutes": "{h} 小时 {m} 分钟",
   "home.clear_recents": "清除最近记录",
@@ -311,7 +291,6 @@
   "remote.next_in": "{time} 后",
   "remote.timer_stops": "定时到此暂停",
   "remote.tap_continue": "点按继续观看",
-  "remote.ends": "{time} 结束",
   "remote.volume": "音量",
   "remote.mode_time": "时间",
   "remote.folders": "文件夹",
@@ -355,12 +334,6 @@
   "news.chapters_line": "在时间轴上标出。用 pgup 和 pgdn 跳转。",
   "news.light_title": "更轻更快",
   "news.light_line": "打开更快，没事的时候就休息。",
-  "news.remote_title": "接下来",
-  "news.remote_line": "视频和音乐的播放队列，可添加文件或整个文件夹。从控制栏或手机打开，拖动调整顺序，继续观看。",
-  "news.fixes_line": "NVIDIA RTX 视频超分辨率、电影平滑运动、带示例的设置、更快打开音乐、更少磁盘写入。",
-  "news.fixes_title": "修复与改进",
-  "news.audio_line": "俄语、德语和日语，电脑和手机均可使用。",
-  "news.audio_title": "新增三种语言",
   "player.up_next_manual": "接下来",
   "player.skip_recap": "跳过回顾",
   "player.skip_opening": "跳过片头",
@@ -442,14 +415,6 @@
   "keys.pgup": "pgup",
   "keys.pgdn": "pgdn",
   "keys.enter": "回车",
-  "news.mono_title": "黑白",
-  "news.mono_line": "频谱和光变成黑白，封面仍保留彩色。可在设置 (···) 中选择；默认仍为彩色。",
-  "news.keys_title": "键盘快捷键",
-  "news.keys_line": "按 ? 查看全部。指向按钮时，也会显示它的按键。",
-  "news.mini_title": "迷你播放器",
-  "news.mini_line": "视频或音乐在小窗口中播放，放在哪里都行，也可以固定在其他窗口之上。播放音乐时，每首歌封面都会翻转。控制栏上的按钮、视频右键点击，或按 ctrl+m。",
-  "news.bar_title": "随窗口调整的控件",
-  "news.bar_line": "无论窗口多小或是竖屏，控制栏都只保留关键按钮，其余在 ··· 中。播放音乐时，封面居中，列表在旁边打开。",
   "music.up_next": "接下来 · {name}",
   "music.tracks": {
     "other": "{n} 首"

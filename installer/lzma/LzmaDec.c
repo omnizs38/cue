@@ -1201,62 +1201,10 @@ SRes LzmaDec_DecodeToDic(CLzmaDec *p, SizeT dicLimit, const Byte *src, SizeT *sr
 
 
 
-SRes LzmaDec_DecodeToBuf(CLzmaDec *p, Byte *dest, SizeT *destLen, const Byte *src, SizeT *srcLen, ELzmaFinishMode finishMode, ELzmaStatus *status)
-{
-  SizeT outSize = *destLen;
-  SizeT inSize = *srcLen;
-  *srcLen = *destLen = 0;
-  for (;;)
-  {
-    SizeT inSizeCur = inSize, outSizeCur, dicPos;
-    ELzmaFinishMode curFinishMode;
-    SRes res;
-    if (p->dicPos == p->dicBufSize)
-      p->dicPos = 0;
-    dicPos = p->dicPos;
-    if (outSize > p->dicBufSize - dicPos)
-    {
-      outSizeCur = p->dicBufSize;
-      curFinishMode = LZMA_FINISH_ANY;
-    }
-    else
-    {
-      outSizeCur = dicPos + outSize;
-      curFinishMode = finishMode;
-    }
-
-    res = LzmaDec_DecodeToDic(p, outSizeCur, src, &inSizeCur, curFinishMode, status);
-    src += inSizeCur;
-    inSize -= inSizeCur;
-    *srcLen += inSizeCur;
-    outSizeCur = p->dicPos - dicPos;
-    memcpy(dest, p->dic + dicPos, outSizeCur);
-    dest += outSizeCur;
-    outSize -= outSizeCur;
-    *destLen += outSizeCur;
-    if (res != 0)
-      return res;
-    if (outSizeCur == 0 || outSize == 0)
-      return SZ_OK;
-  }
-}
-
 void LzmaDec_FreeProbs(CLzmaDec *p, ISzAllocPtr alloc)
 {
   ISzAlloc_Free(alloc, p->probs);
   p->probs = NULL;
-}
-
-static void LzmaDec_FreeDict(CLzmaDec *p, ISzAllocPtr alloc)
-{
-  ISzAlloc_Free(alloc, p->dic);
-  p->dic = NULL;
-}
-
-void LzmaDec_Free(CLzmaDec *p, ISzAllocPtr alloc)
-{
-  LzmaDec_FreeProbs(p, alloc);
-  LzmaDec_FreeDict(p, alloc);
 }
 
 SRes LzmaProps_Decode(CLzmaProps *p, const Byte *data, unsigned size)
@@ -1307,61 +1255,4 @@ SRes LzmaDec_AllocateProbs(CLzmaDec *p, const Byte *props, unsigned propsSize, I
   RINOK(LzmaDec_AllocateProbs2(p, &propNew, alloc))
   p->prop = propNew;
   return SZ_OK;
-}
-
-SRes LzmaDec_Allocate(CLzmaDec *p, const Byte *props, unsigned propsSize, ISzAllocPtr alloc)
-{
-  CLzmaProps propNew;
-  SizeT dicBufSize;
-  RINOK(LzmaProps_Decode(&propNew, props, propsSize))
-  RINOK(LzmaDec_AllocateProbs2(p, &propNew, alloc))
-
-  {
-    UInt32 dictSize = propNew.dicSize;
-    SizeT mask = ((UInt32)1 << 12) - 1;
-         if (dictSize >= ((UInt32)1 << 30)) mask = ((UInt32)1 << 22) - 1;
-    else if (dictSize >= ((UInt32)1 << 22)) mask = ((UInt32)1 << 20) - 1;
-    dicBufSize = ((SizeT)dictSize + mask) & ~mask;
-    if (dicBufSize < dictSize)
-      dicBufSize = dictSize;
-  }
-
-  if (!p->dic || dicBufSize != p->dicBufSize)
-  {
-    LzmaDec_FreeDict(p, alloc);
-    p->dic = (Byte *)ISzAlloc_Alloc(alloc, dicBufSize);
-    if (!p->dic)
-    {
-      LzmaDec_FreeProbs(p, alloc);
-      return SZ_ERROR_MEM;
-    }
-  }
-  p->dicBufSize = dicBufSize;
-  p->prop = propNew;
-  return SZ_OK;
-}
-
-SRes LzmaDecode(Byte *dest, SizeT *destLen, const Byte *src, SizeT *srcLen,
-    const Byte *propData, unsigned propSize, ELzmaFinishMode finishMode,
-    ELzmaStatus *status, ISzAllocPtr alloc)
-{
-  CLzmaDec p;
-  SRes res;
-  SizeT outSize = *destLen, inSize = *srcLen;
-  *destLen = *srcLen = 0;
-  *status = LZMA_STATUS_NOT_SPECIFIED;
-  if (inSize < RC_INIT_SIZE)
-    return SZ_ERROR_INPUT_EOF;
-  LzmaDec_CONSTRUCT(&p)
-  RINOK(LzmaDec_AllocateProbs(&p, propData, propSize, alloc))
-  p.dic = dest;
-  p.dicBufSize = outSize;
-  LzmaDec_Init(&p);
-  *srcLen = inSize;
-  res = LzmaDec_DecodeToDic(&p, outSize, src, srcLen, finishMode, status);
-  *destLen = p.dicPos;
-  if (res == SZ_OK && *status == LZMA_STATUS_NEEDS_MORE_INPUT)
-    res = SZ_ERROR_INPUT_EOF;
-  LzmaDec_FreeProbs(&p, alloc);
-  return res;
 }

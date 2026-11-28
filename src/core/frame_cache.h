@@ -43,7 +43,6 @@ class FrameCache {
   auto begin() { return items_.begin(); }
   auto end() { return items_.end(); }
   auto find(int key) { return items_.find(key); }
-  auto lower_bound(int key) { return items_.lower_bound(key); }
  private:
   Map items_;
   size_t bytes_ = 0, max_bytes_, max_entries_;

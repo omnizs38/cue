@@ -9,33 +9,8 @@
   "home.seen": "visto",
   "home.show_pictures": "mostrar imagens",
   "home.recents_empty": "nada por aqui ainda",
-  "home.episodes_n": {
-    "one": "{n} episódio",
-    "other": "{n} episódios"
-  },
   "home.left": "faltam {time}",
-  "home.kind_video": "vídeo",
-  "home.kind_audio": "áudio",
-  "home.today": "hoje",
-  "home.yesterday": "ontem",
-  "home.days_ago": {
-    "one": "há {n} dia",
-    "other": "há {n} dias"
-  },
-  "home.weeks_ago": {
-    "one": "há {n} semana",
-    "other": "há {n} semanas"
-  },
-  "home.months_ago": {
-    "one": "há {n} mês",
-    "other": "há {n} meses"
-  },
-  "home.years_ago": {
-    "one": "há {n} ano",
-    "other": "há {n} anos"
-  },
   "home.chapter_of": "capítulo {n} de {total}",
-  "home.kind_book": "audiolivro",
   "home.minutes": "{m} min",
   "home.hours_minutes": "{h} h {m} min",
   "home.clear_recents": "limpar recentes",
@@ -317,7 +292,6 @@
   "remote.next_in": "em {time}",
   "remote.timer_stops": "o timer pausa aqui",
   "remote.tap_continue": "toque pra continuar",
-  "remote.ends": "termina {time}",
   "remote.volume": "volume",
   "remote.mode_time": "tempo",
   "remote.folders": "pastas",
@@ -361,12 +335,6 @@
   "news.chapters_line": "marcados na linha do tempo. pule com page up e page down.",
   "news.light_title": "mais leve e mais rápido",
   "news.light_line": "abre mais rápido e descansa quando nada acontece.",
-  "news.remote_title": "a seguir",
-  "news.remote_line": "uma fila de vídeos e músicas, com arquivos ou pastas inteiras. abra pelo botão na barra de controles ou pelo celular, arraste para reordenar e siga assistindo.",
-  "news.fixes_line": "super resolução RTX da NVIDIA, movimento suave nos filmes, configurações com exemplos, músicas abrindo mais rápido e menos escrita no disco.",
-  "news.fixes_title": "correções e melhorias",
-  "news.audio_line": "russo, alemão e japonês, no computador e no celular.",
-  "news.audio_title": "três novos idiomas",
   "player.up_next_manual": "A seguir",
   "player.skip_recap": "pular resumo",
   "player.skip_opening": "pular abertura",
@@ -448,14 +416,6 @@
   "keys.pgup": "pgup",
   "keys.pgdn": "pgdn",
   "keys.enter": "enter",
-  "news.mono_title": "preto e branco",
-  "news.mono_line": "o espectro e a luz em preto e branco, com a capa ainda colorida. escolha nas configurações (···); a cor continua sendo o padrão.",
-  "news.keys_title": "atalhos de teclado",
-  "news.keys_line": "aperte ? para ver todos. ao apontar para um botão, ele mostra a tecla também.",
-  "news.mini_title": "mini player",
-  "news.mini_line": "o vídeo ou a música numa janelinha que fica onde você quiser, fixa por cima das outras se preferir. na música, a capa vira a cada faixa. o botão da barra, o botão direito no vídeo ou ctrl+m.",
-  "news.bar_title": "controles que se adaptam",
-  "news.bar_line": "em qualquer janela, até pequena ou vertical, a barra mostra o essencial e guarda o resto no ···. na música, a capa fica no centro e a lista abre ao lado.",
   "music.up_next": "a seguir · {name}",
   "music.tracks": {
     "one": "{n} faixa",

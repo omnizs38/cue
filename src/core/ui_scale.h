@@ -165,4 +165,3 @@ inline double mini_fit(int cw, int ch, bool song) {
 inline double mini_scale(unsigned dpi, int cw, int ch, int choice, bool song) {
   return std::max(1.0, std::min(ui_base_scale(dpi, choice), mini_fit(cw, ch, song)));
 }
-inline double card_scale(double s, int cw, int ch) { return std::max(1.0, std::min(s, mini_fit(cw, ch, true))); }

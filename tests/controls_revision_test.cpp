@@ -43,7 +43,6 @@ int main(){
     click_hot(PlayView::B_FS);a=p.take_actions();assert(a.size()==1&&a[0].a==PA::Fullscreen);
     click_hot(PlayView::B_MORE);assert(p.panel_open()&&p.take_actions().empty());p.key("esc",false,false,t);
   }
-  assert(bmp("cue:skip-back")&&bmp("cue:skip-forward"));
  }
  puts("Controls: one-row folded bar, compact width, raised position, C opens CC, clock toggles without pause/seek, central feedback and default light passed");
 }

@@ -38,7 +38,6 @@ struct DeviceTier {
   int threads = 8;
 
   bool software() const { return gpu == GpuTier::Software; }
-  bool integrated() const { return gpu == GpuTier::Light; }
   bool weak_cpu() const { return threads <= 8; }
 
   // Music's spectrum picture: 30 fps on a weak CPU or non-dedicated graphics halves the lavfi

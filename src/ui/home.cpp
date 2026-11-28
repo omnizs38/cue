@@ -308,7 +308,6 @@ std::string HomeView::menu_label(int id) const {
   if (id == kMenuLang) return tr(str::more_language);
   if (id == kMenuClear) return tr(str::home_clear_recents);
   if (id == kMenuRemote) return tr(str::remote_title);
-  if (id == kMenuCovers) return tr(str::home_show_pictures);
   if (id == kLangOpt) return tr(str::language_auto);
   if (id > kLangOpt && id <= kLangOpt + i18n::kLangCount) return i18n::native_name((i18n::Lang)(id - kLangOpt - 1));
   return "";
@@ -643,12 +642,11 @@ HomeAction HomeView::mouse_down(int x, int y, double now) {
     default: break;
   }
   int hh = hit(x, y);
-  bool in_menu = hh == kMenuFolder || hh == kMenuCovers || hh == kMenuPad || hh == kMenuClear || hh == kMenuLang || hh == kMenuRemote || (hh >= kLangOpt && hh <= kLangOpt + i18n::kLangCount);
+  bool in_menu = hh == kMenuFolder || hh == kMenuPad || hh == kMenuClear || hh == kMenuLang || hh == kMenuRemote || (hh >= kLangOpt && hh <= kLangOpt + i18n::kLangCount);
   if (menu_ && !in_menu && hh != kDots) { menu_ = false; return {}; }
   if (hh == kMenuPad) return {};
   if(hh==kMenuFolder) {menu_=false;return {HomeAct::OpenFolder,-1};}
   if (hh == kMenuClear) { menu_ = false; return {HomeAct::ClearRecents, -1}; }
-  if (hh == kMenuCovers) { menu_ = false; return {HomeAct::Covers, covers ? 0 : 1}; }
   if (hh == kMenuRemote) { menu_ = false; return {HomeAct::Remote, -1}; }
   if (hh == kMenuLang) { open_menu(true); return {}; }
   if (hh >= kLangOpt && hh <= kLangOpt + i18n::kLangCount) return {HomeAct::Language, hh - kLangOpt - 1};
@@ -708,7 +706,6 @@ HomeAction HomeView::key(const std::string& k, bool shift, double now) {
     if (focus_ == kDots) { if (menu_) menu_ = false; else open_menu(false); }
     else if(focus_==kMenuFolder) {menu_=false;focus_=-1;return {HomeAct::OpenFolder,-1};}
     else if (focus_ == kMenuClear) { menu_ = false; focus_ = -1; return {HomeAct::ClearRecents, -1}; }
-    else if (focus_ == kMenuCovers) { menu_ = false; focus_ = -1; return {HomeAct::Covers, covers ? 0 : 1}; }
     else if (focus_ == kMenuRemote) { menu_ = false; focus_ = -1; return {HomeAct::Remote, -1}; }
     else if (focus_ == kMenuLang) open_menu(true);
     else if (focus_ >= kLangOpt && focus_ <= kLangOpt + i18n::kLangCount) return {HomeAct::Language, focus_ - kLangOpt - 1};
@@ -1383,7 +1380,7 @@ void HomeView::render(Canvas& c, double now) {
       double ha = menu_ ? hov(id) : 0.0;
       if (ha > 0) c.cornered(ir, s, p.hover, ha * k);
       if (id == kMenuClear && i > 0) c.fill(ir.x + 4 * s, ir.y - (kMenuRule - kMenuRule / 2) * s, ir.w - 8 * s, s, p.edge, k);  // (the player's hairline)
-      bool chosen = (id >= kLangOpt && id - kLangOpt - 1 == language) || (id == kMenuCovers && covers);
+      bool chosen = id >= kLangOpt && id - kLangOpt - 1 == language;
       if (chosen) c.bitmap(bmp("check"), ir.x + 5 * s, ir.y + (ir.h - 5 * s) / 2 / s * s, s, p.fg, k);
       const char* ic = id == kMenuFolder ? "cue:open-file" : id == kMenuLang ? "globe" : id == kMenuRemote ? "phone" : id == kMenuClear ? "cross" : nullptr;
       if (ic) action_icon(c, ic, {ir.x + 3 * s, ir.y, 12 * s, ir.h}, s, mix(p.dim, p.fg, ha), k);

@@ -31,9 +31,6 @@ uint32_t stand_in_accent(const std::string& seed);
 // art grid of `s` (px per art px), seeded by `seed` (the path).
 void make_stand_in(HomeKind kind, bool audio, const std::string& seed, int w, int h, double s, int cut, Canvas& out);
 
-// The average colour of a picture (for a cover's tint), 0xFFRRGGBB.
-uint32_t average(const HomeThumb& t);
-
 // Resamples src (sw x sh, 0xFFRRGGBB) into a w x h region of dst (row stride `stride` pixels):
 // a box average where it shrinks, bilinear where it grows. (sx, sy, cw, ch): the part of the
 // source used (a crop), in source px.

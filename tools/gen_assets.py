@@ -39,7 +39,18 @@ for k, v in PLAYER_ICONS.items():
     assert k not in icons, k
     w = len(v[0]); assert all(len(r) == w for r in v), k
     icons[k] = v
-sprites = data["sprites"]
+# Embed only assets Cue actually looks up; the Omni source bundle is much larger.
+unused_icons = {
+    "arrow", "clip-full", "retry", "convert", "copy", "pin", "dash", "open-s", "retry-s", "cross-s",
+    "chevron-up", "chev-right", "chev-down", "q-best", "q-small", "q-ask", "keycap", "stack",
+    "k-group", "k-image", "k-file", "e-lock", "e-link", "e-find", "e-net", "e-globe", "e-wait", "e-disk", "e-bang",
+}
+unused_sprites = {
+    "eye-big", "eye-chev-l", "eye-chev-r", "eye-det-l", "eye-det-r", "mouth-smile", "mouth-big-smile",
+    "mouth-chomp-open", "mouth-chomp-shut", "mouth-o", "mouth-wavy", "mouth-frown", "mouth-side", "note", "zed", "cup",
+}
+icons = {k: v for k, v in icons.items() if k not in unused_icons}
+sprites = {k: v for k, v in data["sprites"].items() if k not in unused_sprites}
 glyphs = data["glyphs"]
 
 def cstr(s):

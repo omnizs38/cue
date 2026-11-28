@@ -23,7 +23,6 @@ class Overlay {
   void close(double now);
   void follow(HWND owner, double s);
   bool visible() const { return wnd_ && IsWindowVisible(wnd_); }
-  SceneView* view() const { return view_; }
   double now() const;
 
  private:

@@ -63,6 +63,3 @@ std::string lan_address();
 std::string new_pairing_code();
 
 std::vector<uint32_t> file_thumbnail_pixels(const std::string& path, bool square = false);  // square: music covers
-// What Explorer shows for a file (its thumbnail only, never an icon), as BGRA pixels about W x H
-// or bigger. COM must be initialised on the calling thread. False when Windows has none.
-bool shell_thumbnail(const std::string& path, int W, int H, std::vector<uint32_t>& px, int& w, int& h);

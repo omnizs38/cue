@@ -9,33 +9,8 @@
   "home.seen": "vu",
   "home.show_pictures": "afficher les images",
   "home.recents_empty": "rien pour l'instant",
-  "home.episodes_n": {
-    "one": "{n} épisode",
-    "other": "{n} épisodes"
-  },
   "home.left": "encore {time}",
-  "home.kind_video": "vidéo",
-  "home.kind_audio": "audio",
-  "home.today": "aujourd’hui",
-  "home.yesterday": "hier",
-  "home.days_ago": {
-    "one": "il y a {n} jour",
-    "other": "il y a {n} jours"
-  },
-  "home.weeks_ago": {
-    "one": "il y a {n} semaine",
-    "other": "il y a {n} semaines"
-  },
-  "home.months_ago": {
-    "one": "il y a {n} mois",
-    "other": "il y a {n} mois"
-  },
-  "home.years_ago": {
-    "one": "il y a {n} an",
-    "other": "il y a {n} ans"
-  },
   "home.chapter_of": "chapitre {n} sur {total}",
-  "home.kind_book": "livre audio",
   "home.minutes": "{m} min",
   "home.hours_minutes": "{h} h {m} min",
   "home.clear_recents": "effacer les récents",
@@ -317,7 +292,6 @@
   "remote.next_in": "dans {time}",
   "remote.timer_stops": "la minuterie s’arrête ici",
   "remote.tap_continue": "touchez pour continuer",
-  "remote.ends": "fin à {time}",
   "remote.volume": "volume",
   "remote.mode_time": "temps",
   "remote.folders": "dossiers",
@@ -361,12 +335,6 @@
   "news.chapters_line": "marqués sur la barre de temps. passez de l'un à l'autre avec pg.préc et pg.suiv.",
   "news.light_title": "plus léger et plus rapide",
   "news.light_line": "s'ouvre plus vite et se repose quand rien ne se passe.",
-  "news.remote_title": "à suivre",
-  "news.remote_line": "une file de vidéos et de musique, avec des fichiers ou des dossiers entiers. ouvrez-la depuis la barre de commandes ou le téléphone, glissez pour réordonner et continuez.",
-  "news.fixes_line": "super-résolution RTX de NVIDIA, mouvement fluide pour les films, réglages avec exemples, morceaux plus rapides à ouvrir et moins d'écritures disque.",
-  "news.fixes_title": "corrections et améliorations",
-  "news.audio_line": "russe, allemand et japonais, sur ordinateur et téléphone.",
-  "news.audio_title": "trois nouvelles langues",
   "player.up_next_manual": "À suivre",
   "player.skip_recap": "passer le récap",
   "player.skip_opening": "passer l’intro",
@@ -448,14 +416,6 @@
   "keys.pgup": "pg.préc",
   "keys.pgdn": "pg.suiv",
   "keys.enter": "entrée",
-  "news.mono_title": "noir et blanc",
-  "news.mono_line": "le spectre et la lumière en noir et blanc, la pochette toujours en couleur. à choisir dans les réglages (···) ; la couleur reste par défaut.",
-  "news.keys_title": "raccourcis clavier",
-  "news.keys_line": "appuyez sur ? pour tous les voir. un bouton survolé montre aussi sa touche.",
-  "news.mini_title": "mini-lecteur",
-  "news.mini_line": "la vidéo ou la musique dans une petite fenêtre que vous placez où vous voulez, épinglée au-dessus des autres si vous le souhaitez. en musique, la pochette se retourne à chaque morceau. le bouton de la barre, clic droit sur la vidéo ou ctrl+m.",
-  "news.bar_title": "des commandes qui s'adaptent",
-  "news.bar_line": "dans toute fenêtre, même petite ou verticale, la barre garde l'essentiel et range le reste dans ···. en musique, la pochette est au centre et la liste s'ouvre à côté.",
   "music.up_next": "à suivre · {name}",
   "music.tracks": {
     "one": "{n} titre",

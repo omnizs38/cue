@@ -38,7 +38,7 @@ struct CoverTurnWindow::State {
   std::shared_ptr<const CoverArt> to;  // (mu)
   std::atomic<bool> go{false}, finish{false}, quit{false}, release{false};
   std::atomic<bool> edge{false}, landed{false}, done{false}, shadow_out{false};
-  std::atomic<double> angle{0}, rx{0}, ry{0}, k{0}, shadow{0};
+  std::atomic<double> rx{0}, ry{0}, k{0}, shadow{0};
   double t0 = 0;
   ~State() {
     if (dc) { if (old) SelectObject(dc, old); DeleteDC(dc); }
@@ -148,7 +148,6 @@ bool CoverTurnWindow::shadow_out() const { return st_ && st_->shadow_out.load();
 bool CoverTurnWindow::edge() const { return st_ && st_->edge.load(); }
 bool CoverTurnWindow::landed() const { return st_ && st_->landed.load(); }
 bool CoverTurnWindow::done() const { return !st_ || st_->done.load(); }
-double CoverTurnWindow::angle() const { return st_ ? st_->angle.load() : 0.0; }
 
 void CoverTurnWindow::abort() {
   if (!st_) return;
@@ -202,9 +201,8 @@ DWORD WINAPI CoverTurnWindow::main(void* p) {
     if (stage == kFading) {
       const double k = (t - t_fade) / kFade;
       alpha = (int)std::lround(255 * std::clamp(1 - k, 0.0, 1.0));
-      if (k >= 1) { st->angle = 0; st->done = true; break; }
+      if (k >= 1) { st->done = true; break; }
     }
-    st->angle = a;
     // the shadow: in over the engine's as the turn starts, out again once released
     double sh = std::clamp((t - st->t0) / kShadowCross, 0.0, 1.0);
     if (st->release.load()) {

@@ -301,10 +301,6 @@ struct Client {
 };
 }  // namespace
 
-bool shell_thumbnail(const std::string& path, int W, int H, std::vector<uint32_t>& px, int& w, int& h) {
-  return shell_pixels(path, W, H, px, w, h);
-}
-
 struct RemoteServer::Impl {
   HWND hwnd = nullptr;
   UINT msg = 0;
